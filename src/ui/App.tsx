@@ -11,7 +11,10 @@ import { Markdown } from './Markdown.js';
 import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
-import type { Session } from '../app/bootstrap.js';
+import { ProviderSwitchError, type Session } from '../app/bootstrap.js';
+import { SessionStore } from '../session/store.js';
+import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
+import { RewindPicker } from './RewindPicker.js';
 import type { TodoItem } from '../tools/index.js';
 import {
   STATUS_SEGMENTS,
@@ -49,6 +52,7 @@ function buildCommands() {
     { name: 'clear', description: t('cmd.clear') },
     { name: 'mcp', description: t('cmd.mcp') },
     { name: 'cost', description: t('cmd.cost') },
+    { name: 'resume', description: t('cmd.resume') },
     { name: 'exit', description: t('cmd.exit') },
   ];
 }
@@ -72,7 +76,7 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 };
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider']);
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume']);
 
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   mode: 'statusopt.mode',
@@ -102,6 +106,23 @@ const RESERVED_ROWS = 13;
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
 
+/**
+ * 恢复会话时的初始时间线:一条 divider + 完整回放。空会话返回空数组,
+ * Header 照常显示(items 非空即隐藏 Header)。
+ */
+function buildResumeItems(session: Session): TimelineItem[] {
+  const messages = session.store.messages;
+  if (messages.length === 0) return [];
+  const replayed: NewTimelineItem[] = [
+    {
+      kind: 'divider',
+      label: t('divider.resumed', { id: session.store.id.slice(0, 8), n: messages.length }),
+    },
+    ...replayTimeline(messages),
+  ];
+  return replayed.map((item) => ({ ...item, key: nextKey() }) as TimelineItem);
+}
+
 interface Props {
   session: Session;
 }
@@ -110,7 +131,8 @@ export function App({ session }: Props): React.ReactElement {
   const { exit } = useApp();
   const { stdout, write: writeStdout } = useStdout();
 
-  const [items, setItems] = useState<TimelineItem[]>([]);
+  // 惰性初始化:`kdg -r` 恢复的会话在首帧就带着回放的历史时间线。
+  const [items, setItems] = useState<TimelineItem[]>(() => buildResumeItems(session));
   /**
    * 每次清空时间线时递增,作为 <Static> 的 key 强制重挂载。
    *
@@ -128,7 +150,10 @@ export function App({ session }: Props): React.ReactElement {
   // 工作状态:undefined 表示空闲(状态行隐藏)。since 在整轮工作中保持
   // 不变,阶段切换只更新文字和颜色,已用时连续累计。
   const [work, setWork] = useState<WorkState | undefined>(undefined);
-  const [todos, setTodos] = useState<TodoItem[]>([]);
+  // 从 store 取初值:恢复会话时 restoreState 在 bootstrap 阶段就填好了
+  // todos,那时还没有订阅者,只靠 subscribe 的话要等模型下次调 todo 工具
+  // 才显示。
+  const [todos, setTodos] = useState<TodoItem[]>(() => session.todos.get());
   const [usage, setUsage] = useState({ used: 0, window: session.provider.contextWindow, total: 0 });
   const [providerLabel, setProviderLabel] = useState(session.provider.label);
   const [model, setModel] = useState(session.provider.model);
@@ -137,6 +162,13 @@ export function App({ session }: Props): React.ReactElement {
   const [ctrlCArmed, setCtrlCArmed] = useState(false);
   const [locale, setLocaleState] = useState(getLocale());
   const [statusSegments, setStatusSegments] = useState<StatusSegment[]>(session.config.statusBar);
+  // esc-esc 回退:第一次 esc 预备(footer 提示),第二次打开回退选择器。
+  const [escArmed, setEscArmed] = useState(false);
+  const [rewind, setRewind] = useState<RewindEntry[] | undefined>(undefined);
+  // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
+  // 用户的新草稿。
+  const [prefill, setPrefill] = useState<{ text: string } | undefined>(undefined);
+  const clearPrefill = useCallback(() => setPrefill(undefined), []);
 
   // 待处理的权限 resolver 放在 ref 里:resolve 它绝不能依赖于
   // 某次重新渲染是否已经发生。
@@ -156,6 +188,7 @@ export function App({ session }: Props): React.ReactElement {
   const toolInputs = useRef(new Map<string, unknown>());
 
   const ctrlCTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  const escTimer = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const push = useCallback((item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
@@ -353,7 +386,67 @@ export function App({ session }: Props): React.ReactElement {
 
   useEffect(() => () => {
     if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
+    if (escTimer.current) clearTimeout(escTimer.current);
   }, []);
+
+  // 清屏 + 换 <Static> 身份 + 重放:/resume 与 esc-esc 回退共用。
+  // 不清屏直接换内容的话,ink 攒下的 fullStaticOutput 会把旧时间线重播回来
+  // (见 staticEpoch 的注释)。
+  const resetTimeline = useCallback(
+    (nextItems: TimelineItem[]) => {
+      writeStdout('\x1b[2J\x1b[3J\x1b[H');
+      setItems(nextItems);
+      setStaticEpoch((epoch) => epoch + 1);
+    },
+    [writeStdout],
+  );
+
+  /** esc 的总入口:运行中 → 中断;空闲二连 esc → 回退选择器。 */
+  const handleEscape = useCallback(() => {
+    if (session.agent.isRunning) {
+      session.agent.abort();
+      return;
+    }
+    // 压缩期间历史随时会被替换,回退下标不可靠,不开选择器。
+    if (session.agent.isCompacting) return;
+    if (!escArmed) {
+      setEscArmed(true);
+      if (escTimer.current) clearTimeout(escTimer.current);
+      escTimer.current = setTimeout(() => setEscArmed(false), 2000);
+      return;
+    }
+    if (escTimer.current) clearTimeout(escTimer.current);
+    setEscArmed(false);
+    const entries = collectRewindEntries(session.agent.history);
+    if (entries.length === 0) {
+      push({ kind: 'notice', level: 'warn', message: t('notice.rewindNothing') });
+      return;
+    }
+    setRewind(entries);
+  }, [session, escArmed, push]);
+
+  const handleRewindPick = useCallback(
+    (entry: RewindEntry) => {
+      setRewind(undefined);
+      // 截断到目标消息之前;setHistory 会递增 historyGeneration,顺带作废
+      // 任何在途压缩的结果。store.save 的引用前缀比较失败 → 自动落 snapshot。
+      session.agent.setHistory(session.agent.history.slice(0, entry.index));
+      void session.store.save(session.agent.history).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.sessionSaveFailed', { message: err.message }) });
+      });
+      const replayed = replayTimeline(session.agent.history).map(
+        (item) => ({ ...item, key: nextKey() }) as TimelineItem,
+      );
+      resetTimeline(replayed);
+      // 上下文用量归零:历史刚变短,旧数字会一直挂到下一轮 step-end。
+      // 累计消耗保留——那些 token 确实花掉了。
+      setUsage((prev) => ({ ...prev, used: 0 }));
+      push({ kind: 'notice', level: 'info', message: t('notice.rewound', { n: entry.ordinal }) });
+      // 原消息放回输入框,编辑后重发即分叉出新的走向。
+      setPrefill({ text: entry.text });
+    },
+    [session, push, resetTimeline],
+  );
 
 
   const runCommand = useCallback(
@@ -625,12 +718,52 @@ export function App({ session }: Props): React.ReactElement {
           });
           break;
 
+        case 'resume': {
+          // 无参提交(如本工作区没有其他会话,选择器空表单直接回车)。
+          if (!arg) {
+            push({ kind: 'notice', level: 'info', message: t('cli.noSessions') });
+            break;
+          }
+          let providerWarn: string | undefined;
+          try {
+            await session.resumeSession(arg);
+          } catch (err) {
+            if (err instanceof ProviderSwitchError) {
+              // 历史已恢复,只是没切到会话记录的 provider/model。
+              providerWarn = err.message;
+            } else {
+              push({
+                kind: 'notice',
+                level: 'warn',
+                message: t('notice.resumeFailed', { message: (err as Error).message }),
+              });
+              break;
+            }
+          }
+          resetTimeline(buildResumeItems(session));
+          // 同步 UI 状态:mode/provider/model 可能都被恢复改写;上下文用量
+          // 归零,下一轮 step-end 会带回真实值。todos 由订阅自动更新。
+          setMode(session.config.permissionMode);
+          setProviderLabel(session.provider.label);
+          setModel(session.provider.model);
+          setThink(session.provider.reasoningEffort);
+          setUsage({ used: 0, window: session.provider.contextWindow, total: 0 });
+          if (providerWarn) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.resumeProviderFailed', { message: providerWarn }),
+            });
+          }
+          break;
+        }
+
         default:
           push({ kind: 'notice', level: 'warn', message: t('notice.unknownCommand', { name: name ?? '' }) });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, mode, think, usage, statusSegments, push, exit, writeStdout],
+    [session, mode, think, usage, statusSegments, push, exit, writeStdout, resetTimeline],
   );
 
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
@@ -687,6 +820,17 @@ export function App({ session }: Props): React.ReactElement {
       model: async (): Promise<CommandOption[]> => {
         const models = await listModels(session.provider);
         return models.map((m) => ({ value: m.id, current: m.id === model }));
+      },
+      resume: async (): Promise<CommandOption[]> => {
+        const metas = await SessionStore.list(session.root);
+        return metas
+          .filter((m) => m.id !== session.store.id)
+          .map((m) => ({
+            value: m.id.slice(0, 8),
+            label:
+              `${m.updatedAt.slice(0, 16).replace('T', ' ')} · ` +
+              `${t('cli.msgs', { n: m.messageCount })}${m.title ? ` · ${m.title}` : ''}`,
+          }));
       },
     };
     return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
@@ -754,6 +898,12 @@ export function App({ session }: Props): React.ReactElement {
 
         {permission ? (
           <PermissionPrompt request={permission} onDecide={onDecide} />
+        ) : rewind ? (
+          <RewindPicker
+            entries={rewind}
+            onPick={handleRewindPick}
+            onCancel={() => setRewind(undefined)}
+          />
         ) : (
           <Box flexDirection="column" marginTop={1}>
             <Input
@@ -761,9 +911,9 @@ export function App({ session }: Props): React.ReactElement {
               disabled={false}
               placeholder={running || work ? t('input.steer') : t('input.placeholder')}
               commands={commands}
-              onEscape={() => {
-                if (session.agent.isRunning) session.agent.abort();
-              }}
+              onEscape={handleEscape}
+              prefill={prefill}
+              onPrefillConsumed={clearPrefill}
             />
             <Footer
               contextUsed={usage.used}
@@ -774,7 +924,13 @@ export function App({ session }: Props): React.ReactElement {
               mode={mode}
               think={think}
               segments={statusSegments}
-              notice={ctrlCArmed ? t('status.ctrlcAgain') : undefined}
+              notice={
+                ctrlCArmed
+                  ? t('status.ctrlcAgain')
+                  : escArmed
+                    ? t('status.escAgainRewind')
+                    : undefined
+              }
             />
           </Box>
         )}

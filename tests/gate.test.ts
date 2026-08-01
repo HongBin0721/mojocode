@@ -88,6 +88,63 @@ describe('PermissionGate', () => {
   });
 });
 
+describe('会话规则导出/导入(跨恢复还原)', () => {
+  it('export/import 往返后规则依旧生效,且导入去重', async () => {
+    const { gate, ask } = makeGate('ask', { type: 'allow-always', rule: 'Bash(npm install:*)' });
+    await gate.checkBash('npm install lodash', '.');
+    expect(ask).toHaveBeenCalledOnce();
+
+    const exported = gate.exportSessionRules();
+    expect(exported.allowBash).toEqual(['Bash(npm install:*)']);
+    // 返回副本:改动导出结果不应影响 gate 内部状态。
+    exported.allowBash.push('Bash(rm:*)');
+    expect(gate.exportSessionRules().allowBash).toEqual(['Bash(npm install:*)']);
+
+    // 恢复到一个新 gate:导入后同类命令不再询问。
+    const restored = makeGate('ask');
+    restored.gate.setSessionRules({ allowBash: ['Bash(npm install:*)'], allowWrite: ['src/**'] });
+    restored.gate.setSessionRules({ allowBash: ['Bash(npm install:*)'], allowWrite: ['src/**'] }); // 去重
+    await restored.gate.checkBash('npm install react', '.');
+    await restored.gate.checkWrite('src/a.ts');
+    expect(restored.ask).not.toHaveBeenCalled();
+    expect(restored.gate.exportSessionRules()).toEqual({
+      allowBash: ['Bash(npm install:*)'],
+      allowWrite: ['src/**'],
+    });
+  });
+
+  it('setSessionRules 是替换而非追加:切会话不会把上一段的授权带过去', async () => {
+    const { gate, ask } = makeGate('ask', { type: 'allow-always', rule: 'Bash(npm install:*)' });
+    await gate.checkBash('npm install lodash', '.');
+    expect(gate.exportSessionRules().allowBash).toEqual(['Bash(npm install:*)']);
+
+    // /resume 切到另一个会话:它自己的规则完全取代前一段的。
+    gate.setSessionRules({ allowBash: ['Bash(git:*)'], allowWrite: [] });
+    expect(gate.exportSessionRules()).toEqual({ allowBash: ['Bash(git:*)'], allowWrite: [] });
+
+    // 上一段批准过的命令必须重新询问,否则授权跨会话泄漏。
+    ask.mockClear();
+    await gate.checkBash('npm install react', '.');
+    expect(ask).toHaveBeenCalledOnce();
+  });
+
+  it('remember 触发 onRulesChanged,导入不触发', async () => {
+    const onRulesChanged = vi.fn();
+    const gate = new PermissionGate({
+      root: '/tmp/does-not-matter',
+      mode: 'ask',
+      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+      ask: async () => ({ type: 'allow-always', rule: 'src/**' }),
+      bus: new EventBus(),
+      onRulesChanged,
+    });
+    gate.setSessionRules({ allowBash: ['Bash(git:*)'], allowWrite: [] });
+    expect(onRulesChanged).not.toHaveBeenCalled();
+    await gate.checkWrite('src/a.ts');
+    expect(onRulesChanged).toHaveBeenCalledOnce();
+  });
+});
+
 describe('并行工具调用的授权排队', () => {
   /** 手动控制每次询问何时决定,模拟用户逐个操作确认框。 */
   function makeQueuedGate() {

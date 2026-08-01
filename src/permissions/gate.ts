@@ -26,6 +26,8 @@ export interface GateOptions {
   rules: PermissionRules;
   ask: PermissionAsker;
   bus: EventBus;
+  /** 会话级规则新增时的回调——bootstrap 借此把规则持久化进会话文件。 */
+  onRulesChanged?: () => void;
 }
 
 /**
@@ -210,6 +212,30 @@ export class PermissionGate {
       if (!this.sessionAllowWrite.includes(rule)) this.sessionAllowWrite.push(rule);
     } else if (!this.sessionAllowBash.includes(rule)) {
       this.sessionAllowBash.push(rule);
+    }
+    this.options.onRulesChanged?.();
+  }
+
+  /** 导出会话级规则(副本),供写入会话文件后跨恢复还原。 */
+  exportSessionRules(): { allowBash: string[]; allowWrite: string[] } {
+    return { allowBash: [...this.sessionAllowBash], allowWrite: [...this.sessionAllowWrite] };
+  }
+
+  /**
+   * 恢复会话时用该会话记住的规则*替换*当前会话规则,不触发 onRulesChanged。
+   *
+   * 必须是替换而非追加:`/resume` 切到别的会话时,上一段对话里"本会话始终
+   * 允许"的授权不能跟着漂过去——否则下一次 saveState 还会把两者的并集写进
+   * 新会话文件,泄漏就永久留存了。
+   */
+  setSessionRules(rules: { allowBash: string[]; allowWrite: string[] }): void {
+    this.sessionAllowBash.length = 0;
+    this.sessionAllowWrite.length = 0;
+    for (const rule of rules.allowBash) {
+      if (!this.sessionAllowBash.includes(rule)) this.sessionAllowBash.push(rule);
+    }
+    for (const rule of rules.allowWrite) {
+      if (!this.sessionAllowWrite.includes(rule)) this.sessionAllowWrite.push(rule);
     }
   }
 

@@ -28,7 +28,7 @@ Core principle: **the agent core never imports React.** `src/core/events.ts` def
 
 Wiring happens in `src/app/bootstrap.ts`: it builds the `Session` object (agent + bus + gate + tools + MCP connections + session store) that both frontends consume. `src/cli.tsx` is the commander entry point (subcommands: `auth`, `models`, `providers`, `sessions`, `config`).
 
-Data flow for one turn: `Agent.run()` (`src/agent/loop.ts`, wraps AI SDK `streamText` with `stepCountIs`) → tools call `PermissionGate` inside their `execute()` (deliberately *not* AI SDK `toolApproval`, which would suspend the stream) → gate consults mode/rules or emits `permission-request` and awaits the asker → events stream to the renderer → `onHistoryChange` persists full history to an append-only JSONL in `~/.kdg/sessions/` via `SessionStore`.
+Data flow for one turn: `Agent.run()` (`src/agent/loop.ts`, wraps AI SDK `streamText` with `stepCountIs`) → tools call `PermissionGate` inside their `execute()` (deliberately *not* AI SDK `toolApproval`, which would suspend the stream) → gate consults mode/rules or emits `permission-request` and awaits the asker → events stream to the renderer → `onHistoryChange` persists history to an append-only JSONL in `~/.kdg/sessions/` via `SessionStore` (incremental `append` records when the array is a pure extension of what was last saved — reference-prefix compare — otherwise a full `snapshot`; a `<id>.meta.json` sidecar makes `list()` O(1) per session; session-level state — todos, session allow rules, permission mode — rides along as `state` records).
 
 Module map:
 

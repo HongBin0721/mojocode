@@ -10,7 +10,9 @@ import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvide
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from './config/providers.js';
 import type { PartialConfig, PermissionMode } from './config/schema.js';
 import { listModels } from './model/registry.js';
-import { SessionStore } from './session/store.js';
+import { AmbiguousSessionError, SessionNotFoundError, SessionStore } from './session/store.js';
+import { SessionPicker } from './ui/SessionPicker.js';
+import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
 
@@ -24,6 +26,15 @@ interface GlobalFlags {
   maxContext?: string;
   maxSteps?: string;
   noMcp?: boolean;
+}
+
+/** 根命令特有的 flags(`-p`、会话恢复相关)。 */
+interface MainFlags extends GlobalFlags {
+  print?: string;
+  json?: boolean;
+  resume?: string | boolean;
+  continue?: boolean;
+  forkSession?: boolean;
 }
 
 function modeFromFlags(flags: GlobalFlags): PermissionMode | undefined {
@@ -62,8 +73,10 @@ program
   .option('--max-steps <n>', t('cli.opt.maxSteps'))
   .option('--no-mcp', t('cli.opt.noMcp'))
   .option('-r, --resume [sessionId]', t('cli.opt.resume'))
+  .option('-c, --continue', t('cli.opt.continue'))
+  .option('--fork-session', t('cli.opt.forkSession'))
   .action(async (opts) => {
-    await runMain(opts as GlobalFlags & { print?: string; json?: boolean; resume?: string | boolean });
+    await runMain(opts as MainFlags);
   });
 
 program
@@ -173,26 +186,91 @@ async function applyConfigLocale(root: string): Promise<void> {
   }
 }
 
-async function runMain(
-  flags: GlobalFlags & { print?: string; json?: boolean; resume?: string | boolean },
-): Promise<void> {
+/**
+ * 解析要恢复的会话。语义对齐 Claude Code:
+ * - `-r <id前缀>`:唯一前缀匹配,未命中/歧义直接报错退出(不静默开新会话)。
+ * - `-r`(无参,TTY):交互式选择器;esc/无会话 → 新会话。
+ * - `-r`(无参,headless/非 TTY):退化为"最新"。
+ * - `-c`:本工作区最新会话;没有 → 提示后开新会话。
+ *
+ * 返回 undefined 表示不恢复;显式失败直接抛错(由调用方 fail)。
+ */
+async function resolveResume(flags: MainFlags, root: string): Promise<SessionStore | undefined> {
+  if (typeof flags.resume === 'string') {
+    // 限定本工作区:恢复别处的会话会让它的 meta.root 继续指向旧项目,
+    // 之后两边的 `kdg sessions` 都列不到它(用 -C 切到那个目录即可)。
+    const id = await SessionStore.resolveId(flags.resume, { root });
+    return SessionStore.open(id);
+  }
+
+  const interactive = process.stdin.isTTY && typeof flags.print !== 'string';
+  if (flags.resume === true && interactive) {
+    const metas = await SessionStore.list(root);
+    if (metas.length === 0) {
+      process.stderr.write(`${t('cli.noResume')}\n`);
+      return undefined;
+    }
+    let picked: string | undefined;
+    const instance = render(
+      <SessionPicker
+        sessions={metas}
+        onSelect={(id) => {
+          picked = id;
+        }}
+      />,
+      { exitOnCtrlC: true },
+    );
+    await instance.waitUntilExit();
+    return picked ? SessionStore.open(picked) : undefined;
+  }
+
+  if (flags.resume === true || flags.continue) {
+    const latest = await SessionStore.latest(root);
+    if (!latest) process.stderr.write(`${t('cli.noResume')}\n`);
+    return latest;
+  }
+
+  return undefined;
+}
+
+async function runMain(flags: MainFlags): Promise<void> {
   const root = flags.cwd ? (await import('node:path')).resolve(flags.cwd) : process.cwd();
+  await applyConfigLocale(root); // 选择器与报错也要本地化,尽早生效
+
+  // 恢复要在 loadConfig 之前解析:会话 meta/state 会并入配置层
+  //(优先级:CLI flags > 会话身份 > env/配置文件)。
+  let resume: SessionStore | undefined;
+  try {
+    resume = await resolveResume(flags, root);
+  } catch (error) {
+    if (error instanceof AmbiguousSessionError) {
+      return fail(new Error(t('cli.sessionAmbiguous', { id: error.query, list: error.matches.join(', ') })));
+    }
+    if (error instanceof SessionNotFoundError) {
+      return fail(new Error(t('cli.sessionNotFound', { id: error.query })));
+    }
+    return fail(error);
+  }
+
+  const overrides: PartialConfig = {
+    ...(resume ? resumeOverrides(resume.meta, resume.state, { ...flags, mode: modeFromFlags(flags) }) : {}),
+    ...overridesFromFlags(flags),
+  };
 
   let loaded;
   try {
-    loaded = await loadConfig({ root, overrides: overridesFromFlags(flags) });
+    loaded = await loadConfig({ root, overrides });
   } catch (error) {
     // 交互式会话且到处都找不到 key:提供一次配置向导,然后重试。
     // headless(-p)和非 TTY 运行则直接快速失败。
     const interactive = process.stdin.isTTY && typeof flags.print !== 'string';
     if (!(error instanceof MissingKeyError) || !interactive) return fail(error);
 
-    await applyConfigLocale(root);
     process.stderr.write(`${t('auth.noKeyLaunch')}\n`);
     const wizard = render(<AuthWizard />);
     await wizard.waitUntilExit();
     try {
-      loaded = await loadConfig({ root, overrides: overridesFromFlags(flags) });
+      loaded = await loadConfig({ root, overrides });
     } catch (retryError) {
       return fail(retryError);
     }
@@ -202,17 +280,6 @@ async function runMain(
     setLocale(detectLocale(loaded.config.language));
   }
 
-  let resume: SessionStore | undefined;
-  if (flags.resume) {
-    resume =
-      typeof flags.resume === 'string'
-        ? await SessionStore.open(flags.resume).catch(() => undefined)
-        : await SessionStore.latest(root);
-    if (!resume) {
-      process.stderr.write(`${t('cli.noResume')}\n`);
-    }
-  }
-
   const headless = typeof flags.print === 'string';
 
   const session = await bootstrap({
@@ -220,6 +287,7 @@ async function runMain(
     loaded,
     ask: headlessAsker(loaded.config.permissionMode),
     resume,
+    fork: flags.forkSession === true,
     skipMcp: flags.noMcp === true,
     onMcpStatus: (status) => {
       if (!status.connected && !headless) {
@@ -227,6 +295,12 @@ async function runMain(
       }
     },
   });
+
+  // 启动清理:超过保留期未活动的会话文件后台删除,失败不打扰。
+  void SessionStore.cleanup({
+    days: loaded.config.cleanupPeriodDays,
+    keepIds: resume ? [resume.id, session.store.id] : [session.store.id],
+  }).catch(() => {});
 
   if (headless) {
     renderHeadless(session, {

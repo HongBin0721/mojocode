@@ -88,6 +88,8 @@ export const configSchema = z.object({
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
   /** 状态栏显示的信息段,可用 /statusbar 调整。 */
   statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),
+  /** 会话文件保留天数,启动时清理超期未活动的会话。 */
+  cleanupPeriodDays: z.number().int().positive().default(30),
 });
 
 export type Config = z.infer<typeof configSchema>;

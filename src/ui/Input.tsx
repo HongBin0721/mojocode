@@ -39,6 +39,18 @@ interface Props {
    * 按键,否则"esc 收起菜单"会顺带触发外层的中断。
    */
   onEscape?: () => void;
+  /**
+   * 外部预填输入框(esc-esc 回退后把原消息放回来编辑)。每次预填传入新的
+   * 对象,写入后必须由 `onPrefillConsumed` 清掉。
+   */
+  prefill?: { text: string };
+  /**
+   * 预填已写入输入框,调用方应把 prefill 置空。
+   *
+   * 去重不能只靠组件内的 ref:权限确认框出现时 Input 会整个卸载,重新挂载
+   * 后 ref 归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
+   */
+  onPrefillConsumed?: () => void;
 }
 
 interface SelectorState {
@@ -73,6 +85,8 @@ export function Input({
   placeholder,
   commands,
   onEscape,
+  prefill,
+  onPrefillConsumed,
 }: Props): React.ReactElement {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -83,6 +97,15 @@ export function Input({
   const [selector, setSelector] = useState<SelectorState | undefined>(undefined);
   // 递增代号,防止上一次异步加载的选项覆盖已关闭/重开的选择器。
   const selectorGen = useRef(0);
+
+  // 外部预填:写入后立刻通知调用方清空,消费权只有一次。
+  useEffect(() => {
+    if (!prefill) return;
+    setValue(prefill.text);
+    setCursor(prefill.text.length);
+    setHistoryIndex(undefined);
+    onPrefillConsumed?.();
+  }, [prefill, onPrefillConsumed]);
 
   // 输入变化时重置菜单选中项,并让被 esc 收起的菜单重新出现。
   useEffect(() => {

@@ -33,6 +33,19 @@ export function wrapGuidance(text: string): string {
   );
 }
 
+/**
+ * `wrapGuidance` 的逆操作:从持久历史里的包装消息中还原用户原文。
+ * 回放会话时用它把引导消息以原文呈现在时间线上;不是包装消息返回 undefined。
+ */
+export function unwrapGuidance(text: string): string | undefined {
+  const prefix = 'The user sent the following message while you were working:\n\n';
+  const suffixStart = '\n\nIt was sent mid-turn';
+  if (!text.startsWith(prefix)) return undefined;
+  const end = text.lastIndexOf(suffixStart);
+  if (end < prefix.length) return undefined;
+  return text.slice(prefix.length, end);
+}
+
 const guidanceMessage = (text: string): ModelMessage => ({
   role: 'user',
   content: wrapGuidance(text),
@@ -79,8 +92,22 @@ export class Agent {
     return this.messages;
   }
 
-  setHistory(messages: ModelMessage[]): void {
+  /**
+   * 换掉整段历史。
+   *
+   * lastInputTokens 与 historyNeedsCompact 总是作废:它们描述的是被换掉的
+   * 那段历史的大小。留着会两头出错——偏小(恢复长会话)让 maybeCompact 误判
+   * "不用压缩",第一轮就撑爆窗口;偏大(回退截断)则会拿一段刚刚变短的历史
+   * 去跑一次真实的摘要调用,把用户刚回退到的对话又揉成摘要。
+   *
+   * 累计用量只在换成*另一个会话*时清零(`resetSpend`):同会话内的截断
+   * (esc-esc 回退)不清,那些 token 确实花掉了。
+   */
+  setHistory(messages: ModelMessage[], options?: { resetSpend?: boolean }): void {
     this.messages = messages;
+    this.lastInputTokens = undefined;
+    this.historyNeedsCompact = false;
+    if (options?.resetSpend) this.cumulativeTokens = 0;
     this.historyGeneration++;
   }
 
