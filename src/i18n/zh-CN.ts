@@ -1,7 +1,7 @@
 import type { en } from './en.js';
 
 export const zhCN: Record<keyof typeof en, string> = {
-  'header.hints': '/help 查看命令 · esc 中断 · 连按两次 ctrl+c 退出',
+  'header.hints': '/ 查看命令 · shift+enter 换行 · esc 中断 · 连按两次 ctrl+c 退出',
 
   'status.ready': '就绪',
   'status.thinking': '思考中',
@@ -18,6 +18,19 @@ export const zhCN: Record<keyof typeof en, string> = {
 
   'input.placeholder': '输入任务，/ 查看命令',
   'input.working': '执行中… esc 可中断',
+  'input.menuHint': '↑/↓ 选择 · 回车执行 · tab 补全 · esc 收起',
+  'input.newlineHint': 'shift+enter（或 ctrl+j / 行尾 `\\` + 回车）换行 · 回车发送',
+
+  'selector.loading': '加载选项中…',
+  'selector.current': '当前',
+  'selector.hint': '↑/↓ 选择 · 回车确认 · esc 返回',
+  'selector.moreAbove': '… 上方还有 {n} 项',
+  'selector.moreBelow': '… 下方还有 {n} 项',
+
+  'modeopt.readonly': '拒绝所有写入和会改变状态的命令',
+  'modeopt.ask': '写入和 shell 命令都先确认',
+  'modeopt.acceptEdits': '自动批准文件编辑，shell 命令仍需确认',
+  'modeopt.yolo': '自动批准一切 — 谨慎使用',
 
   'perm.title': '需要授权',
   'perm.allowOnce': '允许一次',

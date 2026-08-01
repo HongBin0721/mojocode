@@ -247,7 +247,9 @@ async function runMain(
     return;
   }
 
-  const instance = render(<App session={session} />);
+  // 关掉 ink 默认的"ctrl+c 立即退出":它会在 useInput 之前吞掉按键,
+  // 让 App 里"连按两次 ctrl+c 退出"的逻辑永远收不到输入。
+  const instance = render(<App session={session} />, { exitOnCtrlC: false });
   await instance.waitUntilExit();
   await session.dispose();
 }

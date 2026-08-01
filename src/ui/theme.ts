@@ -21,6 +21,7 @@ export const glyphs = {
   done: '✓',
   failed: '✗',
   prompt: '›',
+  pointer: '❯',
 } as const;
 
 export function formatTokens(n: number): string {

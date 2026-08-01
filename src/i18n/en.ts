@@ -7,7 +7,7 @@
  * 降低工具调用的表现。
  */
 export const en = {
-  'header.hints': '/help for commands · esc to interrupt · ctrl+c twice to exit',
+  'header.hints': '/ for commands · shift+enter for newline · esc to interrupt · ctrl+c twice to exit',
 
   'status.ready': 'ready',
   'status.thinking': 'thinking',
@@ -24,6 +24,19 @@ export const en = {
 
   'input.placeholder': 'ask anything, / for commands',
   'input.working': 'working… esc to interrupt',
+  'input.menuHint': '↑/↓ select · enter run · tab complete · esc dismiss',
+  'input.newlineHint': 'shift+enter (or ctrl+j / `\\` + enter) for newline · enter to send',
+
+  'selector.loading': 'loading options…',
+  'selector.current': 'current',
+  'selector.hint': '↑/↓ select · enter confirm · esc back',
+  'selector.moreAbove': '… {n} more above',
+  'selector.moreBelow': '… {n} more below',
+
+  'modeopt.readonly': 'refuse all writes and state-changing commands',
+  'modeopt.ask': 'confirm before writes and shell commands',
+  'modeopt.acceptEdits': 'auto-approve file edits, still prompt for shell commands',
+  'modeopt.yolo': 'auto-approve everything — use with care',
 
   'perm.title': 'Permission needed',
   'perm.allowOnce': 'allow once',

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Static, Text, useApp, useInput } from 'ink';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
-import { Input } from './Input.js';
+import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { theme, glyphs, formatToolInput } from './theme.js';
@@ -10,10 +10,10 @@ import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
 import type { Session } from '../app/bootstrap.js';
 import type { TodoItem } from '../tools/index.js';
-import { permissionModeSchema } from '../config/schema.js';
-import { BUILTIN_PROVIDER_IDS } from '../config/providers.js';
+import { permissionModeSchema, type PermissionMode } from '../config/schema.js';
+import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
 import { listModels } from '../model/registry.js';
-import { getLocale, isLocale, setLocale, t } from '../i18n/index.js';
+import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
 function buildCommands() {
@@ -30,6 +30,19 @@ function buildCommands() {
     { name: 'exit', description: t('cmd.exit') },
   ];
 }
+
+const MODE_DESCRIPTIONS: Record<PermissionMode, MessageKey> = {
+  readonly: 'modeopt.readonly',
+  ask: 'modeopt.ask',
+  acceptEdits: 'modeopt.acceptEdits',
+  yolo: 'modeopt.yolo',
+};
+
+/** 语言名用各自的母语写法展示,不做翻译。 */
+const LOCALE_LABELS: Record<Locale, string> = {
+  en: 'English',
+  'zh-CN': '简体中文',
+};
 
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
@@ -199,17 +212,22 @@ export function App({ session }: Props): React.ReactElement {
     resolve?.(decision);
   }, []);
 
+  // ctrl+c 无论何时都要能退出(包括权限确认框打开时),所以单独一个
+  // 始终激活的处理器。依赖 cli.tsx 里 exitOnCtrlC: false——否则 ink 会在
+  // useInput 之前吞掉这个按键,这里永远收不到。
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      if (ctrlCArmed) {
+        exit();
+      } else {
+        setCtrlCArmed(true);
+        setTimeout(() => setCtrlCArmed(false), 2000);
+      }
+    }
+  });
+
   useInput(
     (input, key) => {
-      if (key.ctrl && input === 'c') {
-        if (ctrlCArmed) {
-          exit();
-        } else {
-          setCtrlCArmed(true);
-          setTimeout(() => setCtrlCArmed(false), 2000);
-        }
-        return;
-      }
       if (key.escape && running) {
         session.agent.abort();
       }
@@ -388,7 +406,31 @@ export function App({ session }: Props): React.ReactElement {
     [session, mode, usage, push, exit],
   );
 
-  const commands = useMemo(() => buildCommands(), [locale]);
+  // 枚举参数的取值来源:在命令菜单上回车会进入二级选择器。
+  const commands = useMemo<SlashCommand[]>(() => {
+    const optionSources: Record<string, SlashCommand['options']> = {
+      mode: () =>
+        permissionModeSchema.options.map((m) => ({
+          value: m,
+          label: t(MODE_DESCRIPTIONS[m]),
+          current: m === mode,
+        })),
+      lang: () =>
+        LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l], current: l === locale })),
+      provider: () =>
+        BUILTIN_PROVIDER_IDS.map((id) => ({
+          value: id,
+          label: PROVIDER_PRESETS[id].label,
+          current: id === session.provider.id,
+        })),
+      model: async (): Promise<CommandOption[]> => {
+        const models = await listModels(session.provider);
+        return models.map((m) => ({ value: m.id, current: m.id === model }));
+      },
+    };
+    return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locale, mode, model, providerLabel, session]);
 
   const mcpSummary = useMemo(() => {
     if (session.mcpStatuses.length === 0) return undefined;
