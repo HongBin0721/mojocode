@@ -1,0 +1,122 @@
+/**
+ * English catalog — the source of truth. Every locale must provide exactly
+ * these keys (enforced by the type of the other catalogs and a parity test).
+ *
+ * Only user-facing UI text lives here. Anything fed back to the model (tool
+ * errors, permission-denial reasons) stays English in the code: it is part of
+ * the prompt, and mixing languages there degrades tool-use behaviour.
+ */
+export const en = {
+  'header.hints': '/help for commands · esc to interrupt · ctrl+c twice to exit',
+
+  'status.ready': 'ready',
+  'status.thinking': 'thinking',
+  'status.responding': 'responding',
+  'status.runningTool': 'running {tool}',
+  'status.waiting': 'waiting for you',
+  'status.compacting': 'compacting',
+  'status.listingModels': 'listing models',
+  'status.ctrlcAgain': 'press ctrl+c again to exit',
+
+  'footer.tasks': 'tasks',
+  'footer.total': 'total {n} tok',
+
+  'input.placeholder': 'ask anything, / for commands',
+  'input.working': 'working… esc to interrupt',
+
+  'perm.title': 'Permission needed',
+  'perm.allowOnce': 'allow once',
+  'perm.deny': 'deny',
+  'perm.alwaysSession': 'always this session',
+  'perm.alwaysPersist': 'always, save to .kdg/config.json',
+
+  'ui.moreLines': '… {n} more lines',
+  'ui.moreDiffLines': '… {n} more diff lines',
+
+  'cmd.help': 'Show these commands',
+  'cmd.model': 'Switch model — /model <id>, or bare to list',
+  'cmd.provider': 'Switch provider — /provider <kimi|deepseek|glm|…>',
+  'cmd.mode': 'Set permission mode — /mode <readonly|ask|acceptEdits|yolo>',
+  'cmd.lang': 'Switch language — /lang <en|zh-CN>',
+  'cmd.compact': 'Summarise the conversation to free up context',
+  'cmd.clear': 'Start a fresh conversation',
+  'cmd.mcp': 'Show MCP server status',
+  'cmd.cost': 'Show token usage for this session',
+  'cmd.exit': 'Quit',
+
+  'notice.unknownCommand': 'Unknown command /{name}. Try /help.',
+  'notice.modeSet': 'Permission mode is now {mode}.',
+  'notice.modeUsage': 'Usage: /mode <readonly|ask|acceptEdits|yolo> (currently {mode})',
+  'notice.langSet': 'Language is now {lang}.',
+  'notice.langUsage': 'Usage: /lang <en|zh-CN> (currently {lang})',
+  'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
+  'notice.compactFailed': 'Compaction failed: {message}',
+  'notice.interrupted': 'Interrupted.',
+  'notice.providers': 'Providers: {list} (currently {current})',
+  'notice.modelsOn': 'Models on {label}:',
+  'divider.switched': 'switched to {label} · {model}',
+  'divider.modelNow': 'model is now {model}',
+  'notice.mcpNone': 'No MCP servers configured. Add them under "mcpServers" in .kdg/config.json.',
+  'notice.mcpTools': '{n} tools',
+  'notice.costSession': 'Session total: {total} tokens',
+  'notice.costContext': 'Last request context: {used} / {window}',
+  'notice.costTranscript': 'Transcript: {path}',
+  'notice.contextNearFull': 'Context is nearly full — compacting the conversation.',
+  'notice.outputLimit': 'The model hit its output limit mid-answer. Ask it to continue.',
+  'notice.sessionSaveFailed': 'Could not save session: {message}',
+  'notice.ruleSaveFailed': 'Could not save the rule to .kdg/config.json: {message}',
+
+  'error.auth': '{label} rejected the API key (401). Check the key for provider "{id}".',
+  'error.modelNotFound':
+    '{label} does not know the model "{model}" (404). Run `kdg models --provider {id}` to see what your key can use.',
+  'error.notFound':
+    '{label} returned 404 for {baseURL}. Check the baseURL — GLM in particular must not have an extra /v1 appended.',
+  'error.rateLimit': '{label} rate-limited the request (429). Wait a moment and retry.',
+
+  'cli.appDesc': 'A terminal coding agent powered by Kimi / DeepSeek / GLM',
+  'cli.opt.print': 'run one prompt non-interactively and exit',
+  'cli.opt.json': 'with --print, emit newline-delimited JSON events on stderr',
+  'cli.opt.provider': 'provider to use ({list})',
+  'cli.opt.model': 'model id, overriding the provider default',
+  'cli.opt.cwd': 'workspace root (defaults to the current directory)',
+  'cli.opt.readonly': 'refuse all writes and state-changing commands',
+  'cli.opt.acceptEdits': 'auto-approve file edits, still prompt for shell commands',
+  'cli.opt.yolo': 'auto-approve everything — use with care',
+  'cli.opt.maxContext': 'override the context window, e.g. to test compaction',
+  'cli.opt.maxSteps': 'maximum agent steps per turn',
+  'cli.opt.noMcp': 'skip connecting to MCP servers',
+  'cli.opt.resume': 'resume the latest session, or a specific one',
+  'cli.cmd.models': 'List the models the configured key can access',
+  'cli.cmd.providers': 'List the built-in provider presets and whether a key is present',
+  'cli.cmd.sessions': 'List saved sessions for this workspace',
+  'cli.opt.sessionsAll': 'include sessions from other workspaces',
+  'cli.cmd.config': 'Show the effective configuration and where it came from',
+  'cli.keyNotSet': ' (not set)',
+  'cli.noResume': 'No session to resume — starting a new one.',
+  'cli.needsTty': 'kdg needs an interactive terminal. Use `kdg -p "your prompt"` for scripted runs.',
+  'cli.noSessions': 'No sessions yet.',
+  'cli.mcpFailed': 'MCP server "{name}" failed: {error}',
+
+  'auth.title': 'API key setup',
+  'auth.selectProvider': '↑/↓ select · enter confirm · esc quit',
+  'auth.configured': 'configured',
+  'auth.enterKey': 'Paste the API key for {label}',
+  'auth.enterKeyHint': 'enter confirm · esc back',
+  'auth.getKeyAt': 'Get a key at: {url}',
+  'auth.validating': 'Validating against {baseURL} …',
+  'auth.validationFailed': 'Validation failed: {message}',
+  'auth.retryHint': 'enter re-enter the key · s save anyway · esc back',
+  'auth.saved': 'Saved to {path} — {n} models available.',
+  'auth.savedUnverified': 'Saved to {path} (not verified).',
+  'auth.plaintextWarn': 'Note: the key is stored in plain text in {path}. Prefer env vars on shared machines.',
+  'auth.setDefault': 'Make {id} the default provider? (y/n)',
+  'auth.another': 'Configure another provider? (y/n)',
+  'auth.done': 'Setup finished. Run `kdg` to start.',
+  'auth.needsTty': 'kdg auth needs an interactive terminal. Set the key via environment variables instead.',
+  'auth.noKeyLaunch': 'No API key configured — starting the setup wizard.',
+  'cli.cmd.auth': 'Interactively configure provider API keys',
+
+  'headless.interrupted': 'interrupted',
+  'headless.compacted': 'compacted {n} messages',
+  'headless.turnEnd': '{tokens} tokens · {reason}',
+} as const;

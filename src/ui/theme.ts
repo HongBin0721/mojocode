@@ -1,0 +1,58 @@
+export const theme = {
+  accent: 'cyan',
+  user: 'green',
+  assistant: 'white',
+  dim: 'gray',
+  tool: 'blue',
+  error: 'red',
+  warn: 'yellow',
+  success: 'green',
+  added: 'green',
+  removed: 'red',
+} as const;
+
+export const glyphs = {
+  bullet: '●',
+  branch: '⎿',
+  pending: '○',
+  running: '◐',
+  done: '✓',
+  failed: '✗',
+  prompt: '›',
+} as const;
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/** Compact one-liner for a tool's arguments, shown next to the tool name. */
+export function formatToolInput(toolName: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  switch (toolName) {
+    case 'read':
+      return String(i.path ?? '');
+    case 'write':
+    case 'edit':
+      return String(i.path ?? '');
+    case 'glob':
+      return String(i.pattern ?? '');
+    case 'grep':
+      return `${String(i.pattern ?? '')}${i.include ? ` in ${String(i.include)}` : ''}`;
+    case 'bash':
+      return String(i.command ?? '');
+    case 'todo':
+      return `${Array.isArray(i.todos) ? i.todos.length : 0} tasks`;
+    default: {
+      const text = JSON.stringify(i);
+      return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+    }
+  }
+}

@@ -1,0 +1,47 @@
+import React from 'react';
+import { Box, Text } from 'ink';
+import { theme } from './theme.js';
+import { APP_NAME } from '../config/paths.js';
+import { t } from '../i18n/index.js';
+
+interface Props {
+  providerLabel: string;
+  model: string;
+  root: string;
+  mode: string;
+  mcpSummary?: string;
+}
+
+export function Header({ providerLabel, model, root, mode, mcpSummary }: Props): React.ReactElement {
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
+      <Box>
+        <Text bold color={theme.accent}>
+          {APP_NAME}
+        </Text>
+        <Text color={theme.dim}> · </Text>
+        <Text>{providerLabel}</Text>
+        <Text color={theme.dim}> · </Text>
+        <Text color={theme.accent}>{model}</Text>
+        {mode !== 'ask' ? (
+          <>
+            <Text color={theme.dim}> · </Text>
+            <Text color={mode === 'yolo' ? theme.warn : theme.dim}>{mode}</Text>
+          </>
+        ) : null}
+      </Box>
+      <Box>
+        <Text color={theme.dim}>{shorten(root)}</Text>
+        {mcpSummary ? <Text color={theme.dim}> · mcp: {mcpSummary}</Text> : null}
+      </Box>
+      <Box marginTop={1}>
+        <Text color={theme.dim}>{t('header.hints')}</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function shorten(root: string): string {
+  const home = process.env.HOME;
+  return home && root.startsWith(home) ? `~${root.slice(home.length)}` : root;
+}

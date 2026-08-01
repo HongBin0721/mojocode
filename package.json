@@ -1,0 +1,43 @@
+{
+  "name": "kdg",
+  "version": "0.1.0",
+  "description": "A terminal coding agent powered by Kimi / DeepSeek / GLM",
+  "type": "module",
+  "bin": {
+    "kdg": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ai-sdk/deepseek": "^3.0.19",
+    "@ai-sdk/openai-compatible": "^3.0.20",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ai": "^7.0.47",
+    "commander": "^15.0.0",
+    "diff": "^9.0.0",
+    "execa": "^10.0.1",
+    "fast-glob": "^3.3.3",
+    "ink": "^7.1.1",
+    "react": "^19.2.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}
