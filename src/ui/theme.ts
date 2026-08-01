@@ -11,6 +11,8 @@ export const theme = {
   success: 'green',
   added: 'green',
   removed: 'red',
+  /** markdown 中的行内代码与代码块。 */
+  code: 'cyan',
 } as const;
 
 export const glyphs = {

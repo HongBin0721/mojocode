@@ -1,17 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Static, Text, useApp, useInput } from 'ink';
+import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { theme, glyphs, formatToolInput } from './theme.js';
+import { Markdown } from './Markdown.js';
+import { tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
 import type { Session } from '../app/bootstrap.js';
 import type { TodoItem } from '../tools/index.js';
-import { permissionModeSchema, type PermissionMode } from '../config/schema.js';
+import {
+  STATUS_SEGMENTS,
+  permissionModeSchema,
+  type PermissionMode,
+  type StatusSegment,
+} from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
+import { saveLanguage, saveModelChoice, saveProviderChoice, saveStatusBar } from '../config/save.js';
 import { listModels } from '../model/registry.js';
 import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 
@@ -23,6 +31,7 @@ function buildCommands() {
     { name: 'provider', description: t('cmd.provider') },
     { name: 'mode', description: t('cmd.mode') },
     { name: 'lang', description: t('cmd.lang') },
+    { name: 'statusbar', description: t('cmd.statusbar'), multi: true },
     { name: 'compact', description: t('cmd.compact') },
     { name: 'clear', description: t('cmd.clear') },
     { name: 'mcp', description: t('cmd.mcp') },
@@ -38,11 +47,28 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, MessageKey> = {
   yolo: 'modeopt.yolo',
 };
 
+const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
+  model: 'statusopt.model',
+  context: 'statusopt.context',
+  total: 'statusopt.total',
+  todos: 'statusopt.todos',
+};
+
 /** 语言名用各自的母语写法展示,不做翻译。 */
 const LOCALE_LABELS: Record<Locale, string> = {
   en: 'English',
   'zh-CN': '简体中文',
 };
+
+/**
+ * 流式预览占用的终端行数上限。动态区域(预览 + 输入框 + 状态栏)的总高度
+ * 一旦超过终端窗口高度,Ink 就擦不掉上一帧,每次重绘都会往回滚区漏一份
+ * 旧帧。完整文本在 text-end 时会进入 <Static> 时间线,预览截断不丢内容。
+ */
+const STREAM_PREVIEW_ROWS = 5;
+const REASONING_PREVIEW_ROWS = 3;
+/** 留给输入框、状态栏、进行中的工具行和各处 marginTop 的余量。 */
+const RESERVED_ROWS = 12;
 
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
@@ -53,6 +79,7 @@ interface Props {
 
 export function App({ session }: Props): React.ReactElement {
   const { exit } = useApp();
+  const { stdout } = useStdout();
 
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [activeText, setActiveText] = useState('');
@@ -68,6 +95,7 @@ export function App({ session }: Props): React.ReactElement {
   const [mode, setMode] = useState(session.config.permissionMode);
   const [ctrlCArmed, setCtrlCArmed] = useState(false);
   const [locale, setLocaleState] = useState(getLocale());
+  const [statusSegments, setStatusSegments] = useState<StatusSegment[]>(session.config.statusBar);
 
   // 待处理的权限 resolver 放在 ref 里:resolve 它绝不能依赖于
   // 某次重新渲染是否已经发生。
@@ -75,6 +103,8 @@ export function App({ session }: Props): React.ReactElement {
 
   // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = useRef(new Map<string, unknown>());
+
+  const ctrlCTimer = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const push = useCallback((item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
@@ -218,13 +248,20 @@ export function App({ session }: Props): React.ReactElement {
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       if (ctrlCArmed) {
+        // 必须清掉待触发的定时器:cli.tsx 只设置 process.exitCode 而不调用
+        // process.exit(),挂着的定时器会让事件循环多活 2 秒才退出。
+        if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
         exit();
       } else {
         setCtrlCArmed(true);
-        setTimeout(() => setCtrlCArmed(false), 2000);
+        ctrlCTimer.current = setTimeout(() => setCtrlCArmed(false), 2000);
       }
     }
   });
+
+  useEffect(() => () => {
+    if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
+  }, []);
 
   useInput(
     (input, key) => {
@@ -233,19 +270,6 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     { isActive: permission === undefined },
-  );
-
-  const handleSubmit = useCallback(
-    (text: string) => {
-      if (text.startsWith('/')) {
-        void runCommand(text);
-        return;
-      }
-      setRunning(true);
-      void session.agent.run(text).finally(() => setRunning(false));
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session],
   );
 
   const runCommand = useCallback(
@@ -314,6 +338,44 @@ export function App({ session }: Props): React.ReactElement {
           setLocaleState(arg);
           setStatus(t('status.ready'));
           push({ kind: 'notice', level: 'info', message: t('notice.langSet', { lang: arg }) });
+          await saveLanguage(arg).catch((err: Error) => {
+            push({ kind: 'notice', level: 'warn', message: t('notice.langSaveFailed', { message: err.message }) });
+          });
+          break;
+        }
+
+        case 'statusbar': {
+          const currentList = statusSegments.join(' ') || 'none';
+          if (!arg) {
+            push({
+              kind: 'notice',
+              level: 'info',
+              message: t('notice.statusbarUsage', { list: currentList }),
+            });
+            break;
+          }
+          const parts = arg === 'none' ? [] : arg.split(/\s+/);
+          const invalid = parts.filter((p) => !(STATUS_SEGMENTS as readonly string[]).includes(p));
+          if (invalid.length > 0) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.statusbarUsage', { list: currentList }),
+            });
+            break;
+          }
+          // 按固定顺序规范化,同时去重。
+          const next = STATUS_SEGMENTS.filter((s) => parts.includes(s));
+          setStatusSegments(next);
+          session.config.statusBar = next;
+          push({
+            kind: 'notice',
+            level: 'info',
+            message: t('notice.statusbarSet', { list: next.join(' ') || 'none' }),
+          });
+          await saveStatusBar(next).catch((err: Error) => {
+            push({ kind: 'notice', level: 'warn', message: t('notice.statusbarSaveFailed', { message: err.message }) });
+          });
           break;
         }
 
@@ -335,6 +397,9 @@ export function App({ session }: Props): React.ReactElement {
             setModel(next.model);
             setUsage((prev) => ({ ...prev, window: next.contextWindow }));
             push({ kind: 'divider', label: t('divider.switched', { label: next.label, model: next.model }) });
+            await saveProviderChoice(next.id).catch((err: Error) => {
+              push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
+            });
           } catch (err) {
             push({ kind: 'error', message: (err as Error).message });
           }
@@ -364,6 +429,9 @@ export function App({ session }: Props): React.ReactElement {
             setModel(next.model);
             setUsage((prev) => ({ ...prev, window: next.contextWindow }));
             push({ kind: 'divider', label: t('divider.modelNow', { model: next.model }) });
+            await saveModelChoice(next.id, next.model).catch((err: Error) => {
+              push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
+            });
           } catch (err) {
             push({ kind: 'error', message: (err as Error).message });
           }
@@ -403,7 +471,21 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, mode, usage, push, exit],
+    [session, mode, usage, statusSegments, push, exit],
+  );
+
+  // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
+  // 的 runCommand,上面那串依赖形同虚设,命令永远读到启动时的状态快照。
+  const handleSubmit = useCallback(
+    (text: string) => {
+      if (text.startsWith('/')) {
+        void runCommand(text);
+        return;
+      }
+      setRunning(true);
+      void session.agent.run(text).finally(() => setRunning(false));
+    },
+    [session, runCommand],
   );
 
   // 枚举参数的取值来源:在命令菜单上回车会进入二级选择器。
@@ -417,6 +499,12 @@ export function App({ session }: Props): React.ReactElement {
         })),
       lang: () =>
         LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l], current: l === locale })),
+      statusbar: () =>
+        STATUS_SEGMENTS.map((s) => ({
+          value: s,
+          label: t(SEGMENT_DESCRIPTIONS[s]),
+          current: statusSegments.includes(s),
+        })),
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
           value: id,
@@ -430,13 +518,19 @@ export function App({ session }: Props): React.ReactElement {
     };
     return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, mode, model, providerLabel, session]);
+  }, [locale, mode, model, providerLabel, statusSegments, session]);
 
   const mcpSummary = useMemo(() => {
     if (session.mcpStatuses.length === 0) return undefined;
     const ok = session.mcpStatuses.filter((s) => s.connected).length;
     return `${ok}/${session.mcpStatuses.length}`;
   }, [session.mcpStatuses]);
+
+  // 预览高度按实际终端尺寸收敛,窄/矮窗口下也不会撑爆动态区域。
+  const columns = stdout?.columns ?? 80;
+  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS);
+  const textRows = Math.min(STREAM_PREVIEW_ROWS, budget);
+  const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, budget);
 
   return (
     <Box flexDirection="column">
@@ -457,14 +551,18 @@ export function App({ session }: Props): React.ReactElement {
         {activeReasoning.trim() ? (
           <Box marginTop={1}>
             <Text color={theme.dim} italic>
-              {lastLines(activeReasoning, 3)}
+              {tailWithinRows(activeReasoning, reasoningRows, columns)}
             </Text>
           </Box>
         ) : null}
 
         {activeText.trim() ? (
           <Box marginTop={1}>
-            <Text>{activeText}</Text>
+            <Text color={theme.assistant}>{glyphs.bullet} </Text>
+            <Box flexDirection="column" flexGrow={1}>
+              {/* 前缀 ● 占两列,预览宽度相应收窄。 */}
+              <Markdown text={tailWithinRows(activeText, textRows, columns - 2)} />
+            </Box>
           </Box>
         ) : null}
 
@@ -492,6 +590,8 @@ export function App({ session }: Props): React.ReactElement {
               cumulativeTokens={usage.total}
               todos={todos}
               status={ctrlCArmed ? t('status.ctrlcAgain') : status}
+              model={model}
+              segments={statusSegments}
             />
           </Box>
         )}
@@ -500,7 +600,3 @@ export function App({ session }: Props): React.ReactElement {
   );
 }
 
-function lastLines(text: string, count: number): string {
-  const lines = text.trimEnd().split('\n');
-  return lines.slice(-count).join('\n');
-}

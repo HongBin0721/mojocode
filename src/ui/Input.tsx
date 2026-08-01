@@ -20,6 +20,11 @@ export interface SlashCommand {
    * 而不是直接执行;异步形式用于要请求线上数据的命令(如 /model)。
    */
   options?: () => CommandOption[] | Promise<CommandOption[]>;
+  /**
+   * 多选模式:空格切换选中,回车把所有选中值(按选项顺序)作为参数提交;
+   * 全部取消时提交 `none`。`current` 标记初始选中集合。
+   */
+  multi?: boolean;
 }
 
 interface Props {
@@ -35,6 +40,8 @@ interface SelectorState {
   options: CommandOption[];
   cursor: number;
   loading: boolean;
+  /** 多选模式下当前选中的值集合。 */
+  selected: Set<string>;
 }
 
 /** 二级选择器一屏最多显示的选项数,超出部分滚动。 */
@@ -82,6 +89,20 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
     : [];
   const menuCursor = matches.length > 0 ? Math.min(menuIndex, matches.length - 1) : 0;
 
+  /**
+   * 菜单上回车/tab 作用的命令。精确匹配优先于光标位置:`model` 排在 `mode`
+   * 之前,输完整的 `/mode` 时光标默认停在 `model` 上,直接取光标项会执行错
+   * 命令。用户主动移动过光标(menuIndex 非 0)时以光标为准。
+   */
+  function menuTarget(): SlashCommand | undefined {
+    if (matches.length === 0) return undefined;
+    if (menuIndex === 0) {
+      const exact = matches.find((c) => c.name === value.slice(1).toLowerCase());
+      if (exact) return exact;
+    }
+    return matches[menuCursor];
+  }
+
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -94,7 +115,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
 
   function openSelector(command: SlashCommand) {
     const gen = ++selectorGen.current;
-    setSelector({ command, options: [], cursor: 0, loading: true });
+    setSelector({ command, options: [], cursor: 0, loading: true, selected: new Set() });
     void Promise.resolve(command.options!()).then(
       (options) => {
         if (selectorGen.current !== gen) return;
@@ -104,7 +125,14 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
           return;
         }
         const current = options.findIndex((o) => o.current);
-        setSelector({ command, options, cursor: Math.max(0, current), loading: false });
+        const selected = new Set(options.filter((o) => o.current).map((o) => o.value));
+        setSelector({
+          command,
+          options,
+          cursor: command.multi ? 0 : Math.max(0, current),
+          loading: false,
+          selected,
+        });
       },
       () => {
         if (selectorGen.current !== gen) return;
@@ -136,7 +164,30 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
           setSelector((s) => s && { ...s, cursor: (s.cursor + 1) % s.options.length });
           return;
         }
+        // 多选:空格切换光标处选项的选中状态。
+        if (selector.command.multi && input === ' ' && !key.return) {
+          setSelector((s) => {
+            if (!s) return s;
+            const option = s.options[s.cursor];
+            if (!option) return s;
+            const selected = new Set(s.selected);
+            if (selected.has(option.value)) selected.delete(option.value);
+            else selected.add(option.value);
+            return { ...s, selected };
+          });
+          return;
+        }
         if (key.return) {
+          if (selector.command.multi) {
+            // 按选项顺序提交选中值,保证参数顺序稳定;空选提交 none。
+            const values = selector.options
+              .filter((o) => selector.selected.has(o.value))
+              .map((o) => o.value);
+            selectorGen.current++;
+            setSelector(undefined);
+            submit(`/${selector.command.name} ${values.length > 0 ? values.join(' ') : 'none'}`);
+            return;
+          }
           const option = selector.options[selector.cursor];
           if (option) {
             selectorGen.current++;
@@ -162,7 +213,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
       if (key.return) {
         // 命令菜单打开时,回车作用于菜单里选中的命令。
         if (matches.length > 0) {
-          const command = matches[menuCursor]!;
+          const command = menuTarget()!;
           if (command.options) {
             openSelector(command);
           } else {
@@ -180,7 +231,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
       }
 
       if (key.tab && matches.length > 0) {
-        const completed = `/${matches[menuCursor]!.name} `;
+        const completed = `/${menuTarget()!.name} `;
         setValue(completed);
         setCursor(completed.length);
         return;
@@ -296,7 +347,8 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
 
   // ── 二级选择器视图 ──
   if (selector) {
-    const { options, cursor: selCursor, loading } = selector;
+    const { options, cursor: selCursor, loading, selected } = selector;
+    const multi = selector.command.multi === true;
     const windowStart = Math.max(
       0,
       Math.min(selCursor - Math.floor(SELECTOR_WINDOW / 2), options.length - SELECTOR_WINDOW),
@@ -323,8 +375,13 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
                 return (
                   <Text key={option.value} color={active ? theme.accent : undefined}>
                     {active ? `${glyphs.pointer} ` : '  '}
+                    {multi ? (
+                      <Text color={selected.has(option.value) ? theme.success : theme.dim}>
+                        {selected.has(option.value) ? glyphs.bullet : glyphs.pending}{' '}
+                      </Text>
+                    ) : null}
                     {option.value}
-                    {option.current ? (
+                    {!multi && option.current ? (
                       <Text color={theme.success}>
                         {' '}
                         {glyphs.done} {t('selector.current')}
@@ -343,7 +400,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
           )}
         </Box>
         <Box paddingLeft={2}>
-          <Text color={theme.dim}>{t('selector.hint')}</Text>
+          <Text color={theme.dim}>{t(multi ? 'selector.multiHint' : 'selector.hint')}</Text>
         </Box>
       </Box>
     );

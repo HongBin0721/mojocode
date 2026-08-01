@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { Diff } from './Diff.js';
+import { Markdown } from './Markdown.js';
 import { theme, glyphs, formatDuration, formatToolInput } from './theme.js';
 import type { TimelineItem } from './types.js';
 import { t } from '../i18n/index.js';
@@ -12,17 +13,21 @@ import { t } from '../i18n/index.js';
 export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
     case 'user':
+      // 用户消息加粗高亮,靠绿色提示符与字重和模型输出区分。
       return (
         <Box marginTop={1}>
           <Text color={theme.user}>{glyphs.prompt} </Text>
-          <Text>{item.text}</Text>
+          <Text bold>{item.text}</Text>
         </Box>
       );
 
     case 'assistant':
       return (
-        <Box marginTop={1} flexDirection="column">
-          <Text>{item.text}</Text>
+        <Box marginTop={1}>
+          <Text color={theme.assistant}>{glyphs.bullet} </Text>
+          <Box flexDirection="column" flexGrow={1}>
+            <Markdown text={item.text} />
+          </Box>
         </Box>
       );
 

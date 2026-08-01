@@ -3,6 +3,11 @@ import { z } from 'zod';
 export const permissionModeSchema = z.enum(['readonly', 'ask', 'acceptEdits', 'yolo']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
+/** 状态栏可选的信息段。状态文字本身始终显示,不在此列。 */
+export const statusSegmentSchema = z.enum(['model', 'context', 'total', 'todos']);
+export type StatusSegment = z.infer<typeof statusSegmentSchema>;
+export const STATUS_SEGMENTS = statusSegmentSchema.options;
+
 /** 用户声明的 provider 条目。内置 id 只需填写要覆盖的字段。 */
 export const providerConfigSchema = z.object({
   baseURL: z.url().optional(),
@@ -72,6 +77,8 @@ export const configSchema = z.object({
   systemPromptAppend: z.string().optional(),
   /** UI 语言。`auto` 跟随 KDG_LANG / LANG。 */
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
+  /** 状态栏显示的信息段,可用 /statusbar 调整。 */
+  statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),
 });
 
 export type Config = z.infer<typeof configSchema>;

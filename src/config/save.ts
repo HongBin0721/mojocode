@@ -40,6 +40,49 @@ export async function setDefaultProvider(providerId: string, file?: string): Pro
   }, file);
 }
 
+/**
+ * 持久化 `/provider` 的切换:写顶层 `provider`,并移除顶层 `model` 覆盖——
+ * 它属于旧 provider,保留会让新 provider 下次启动时拿到错误的模型 id
+ * (与 bootstrap 中切换 provider 时丢弃内存覆盖的行为一致)。
+ */
+export async function saveProviderChoice(providerId: string, file?: string): Promise<string> {
+  return updateGlobalConfig((config) => {
+    config.provider = providerId;
+    delete config.model;
+  }, file);
+}
+
+/** 持久化 `/model` 的选择:写入当前 provider 的 `model`,顶层覆盖同样移除。 */
+export async function saveModelChoice(
+  providerId: string,
+  model: string,
+  file?: string,
+): Promise<string> {
+  return updateGlobalConfig((config) => {
+    const providers =
+      typeof config.providers === 'object' && config.providers !== null
+        ? (config.providers as Record<string, Record<string, unknown>>)
+        : {};
+    providers[providerId] = { ...(providers[providerId] ?? {}), model };
+    config.providers = providers;
+    delete config.model;
+  }, file);
+}
+
+/** 保存 `/statusbar` 选择的状态栏信息段。 */
+export async function saveStatusBar(segments: string[], file?: string): Promise<string> {
+  return updateGlobalConfig((config) => {
+    config.statusBar = segments;
+  }, file);
+}
+
+/** 保存顶层 `language`,让 `/lang` 的选择在下次启动时生效。 */
+export async function saveLanguage(language: string, file?: string): Promise<string> {
+  return updateGlobalConfig((config) => {
+    config.language = language;
+  }, file);
+}
+
 /** 保存 `providers.<id>.apiKey`,保留文件中的其他内容。 */
 export async function saveApiKey(
   providerId: string,
