@@ -16,12 +16,22 @@ import type { TodoItem } from '../tools/index.js';
 import {
   STATUS_SEGMENTS,
   permissionModeSchema,
+  reasoningEffortSchema,
   type PermissionMode,
+  type ReasoningEffort,
   type StatusSegment,
 } from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
-import { saveLanguage, saveModelChoice, saveProviderChoice, saveStatusBar } from '../config/save.js';
+import {
+  saveLanguage,
+  saveMode,
+  saveModelChoice,
+  saveProviderChoice,
+  saveReasoningEffort,
+  saveStatusBar,
+} from '../config/save.js';
 import { listModels } from '../model/registry.js';
+import { supportedEfforts } from '../model/reasoning.js';
 import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
@@ -31,9 +41,11 @@ function buildCommands() {
     { name: 'model', description: t('cmd.model') },
     { name: 'provider', description: t('cmd.provider') },
     { name: 'mode', description: t('cmd.mode') },
+    { name: 'think', description: t('cmd.think') },
     { name: 'lang', description: t('cmd.lang') },
     { name: 'statusbar', description: t('cmd.statusbar'), multi: true },
     { name: 'compact', description: t('cmd.compact') },
+    { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
     { name: 'mcp', description: t('cmd.mcp') },
     { name: 'cost', description: t('cmd.cost') },
@@ -48,11 +60,24 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, MessageKey> = {
   yolo: 'modeopt.yolo',
 };
 
+/** 思考档位的选择器说明。/think 不进 BUSY_BLOCKED_COMMANDS:改档位对进行中
+ * 的流无破坏,下一次请求才生效。 */
+const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
+  auto: 'thinkopt.auto',
+  off: 'thinkopt.off',
+  low: 'thinkopt.low',
+  medium: 'thinkopt.medium',
+  high: 'thinkopt.high',
+  max: 'thinkopt.max',
+};
+
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['clear', 'compact', 'model', 'provider']);
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider']);
 
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
+  mode: 'statusopt.mode',
   model: 'statusopt.model',
+  think: 'statusopt.think',
   context: 'statusopt.context',
   total: 'statusopt.total',
   todos: 'statusopt.todos',
@@ -83,9 +108,18 @@ interface Props {
 
 export function App({ session }: Props): React.ReactElement {
   const { exit } = useApp();
-  const { stdout } = useStdout();
+  const { stdout, write: writeStdout } = useStdout();
 
   const [items, setItems] = useState<TimelineItem[]>([]);
+  /**
+   * 每次清空时间线时递增,作为 <Static> 的 key 强制重挂载。
+   *
+   * Ink 自己攒了一份 fullStaticOutput,只在 <Static> 节点身份变化时才重置,
+   * 并会在任何撑出视口的帧、以及终端恢复时原样重播它。只把 items 置空不换
+   * 节点身份,于是 /clear 之后随便来一帧高内容(大 diff 的授权框、窄窗口下
+   * 的长预览)就会把清掉的整份记录重新打回屏幕。
+   */
+  const [staticEpoch, setStaticEpoch] = useState(0);
   const [activeText, setActiveText] = useState('');
   const [activeReasoning, setActiveReasoning] = useState('');
   const [activeTools, setActiveTools] = useState<ActiveToolCall[]>([]);
@@ -99,6 +133,7 @@ export function App({ session }: Props): React.ReactElement {
   const [providerLabel, setProviderLabel] = useState(session.provider.label);
   const [model, setModel] = useState(session.provider.model);
   const [mode, setMode] = useState(session.config.permissionMode);
+  const [think, setThink] = useState<ReasoningEffort>(session.provider.reasoningEffort);
   const [ctrlCArmed, setCtrlCArmed] = useState(false);
   const [locale, setLocaleState] = useState(getLocale());
   const [statusSegments, setStatusSegments] = useState<StatusSegment[]>(session.config.statusBar);
@@ -327,7 +362,11 @@ export function App({ session }: Props): React.ReactElement {
       const arg = rest.join(' ');
 
       // 这些命令会改写正在被进行中的流读写的历史/模型,运行中禁止。
-      if (name && BUSY_BLOCKED_COMMANDS.has(name) && session.agent.isRunning) {
+      // 压缩没有 controller,isRunning 期间为 false——不把它算进来的话,
+      // /compact 等待摘要返回时还能执行 /clear,压缩随后会把已丢弃的对话
+      // 写回内存,并存进那个全新的会话文件。
+      const busy = session.agent.isRunning || session.agent.isCompacting;
+      if (name && BUSY_BLOCKED_COMMANDS.has(name) && busy) {
         push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
         return;
       }
@@ -348,11 +387,35 @@ export function App({ session }: Props): React.ReactElement {
           exit();
           break;
 
-        case 'clear':
-          session.agent.clear();
+        // 与 Claude Code 一致:两者都丢弃当前对话、换新的会话文件;
+        // /clear 额外清掉终端屏幕与回滚缓冲,/new 保留已滚出的历史。
+        case 'new':
+        case 'clear': {
+          try {
+            await session.newSession();
+          } catch (err) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.newSessionFailed', { message: (err as Error).message }),
+            });
+            break;
+          }
+          if (name === 'clear') {
+            // 必须走 ink 的 writeToStdout(useStdout().write)而不是直接写
+            // process.stdout:它会先擦掉当前帧并重置 ink 的"上一帧"缓存,
+            // 写入清屏序列(2J 清屏、3J 清回滚缓冲、H 归位)后再重画帧。
+            // 直接写 stdout 的话 ink 不知道屏幕被清了——若下一帧输出内容
+            // 恰好没变(如时间线本就为空),ink 会跳过重绘,屏幕停在全空。
+            writeStdout('\x1b[2J\x1b[3J\x1b[H');
+          }
+          // 清空时间线让 Header 重新出现,和启动时的界面一致。
           setItems([]);
-          setUsage((prev) => ({ ...prev, used: 0 }));
+          // 同时换掉 <Static> 的身份,让 ink 丢掉已累积的静态输出。
+          setStaticEpoch((epoch) => epoch + 1);
+          setUsage((prev) => ({ ...prev, used: 0, total: 0 }));
           break;
+        }
 
         case 'compact':
           setWork({ phase: 'compacting', since: Date.now() });
@@ -377,6 +440,46 @@ export function App({ session }: Props): React.ReactElement {
           session.setMode(parsed.data);
           setMode(parsed.data);
           push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: parsed.data }) });
+          // 落盘范围是本工作区的 .kdg/config.json;yolo 不保存,提示它只管这一次。
+          const saved = await saveMode(session.root, parsed.data).catch((err: Error) => {
+            push({ kind: 'notice', level: 'warn', message: t('notice.modeSaveFailed', { message: err.message }) });
+            return undefined;
+          });
+          if (parsed.data === 'yolo') {
+            push({ kind: 'notice', level: 'warn', message: t('notice.modeSessionOnly') });
+          } else if (saved) {
+            push({ kind: 'notice', level: 'info', message: t('notice.modeSavedTo', { path: saved }) });
+          }
+          break;
+        }
+
+        case 'think': {
+          // 档位与当前 provider/model 绑定:只接受它能完整表达的值,
+          // 不支持的档位直接拒绝并列出可用项。
+          const valid = supportedEfforts(session.provider);
+          const parsed = reasoningEffortSchema.safeParse(arg);
+          if (!parsed.success || !valid.includes(parsed.data)) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.thinkUsage', { list: valid.join('|'), level: think }),
+            });
+            break;
+          }
+          const level = parsed.data;
+          // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让
+          // 下一次 streamText 生效;同时写回内存配置,使 /model、/provider
+          // 重新 resolve 时不丢失本次选择。
+          session.provider.reasoningEffort = level;
+          session.config.providers[session.provider.id] = {
+            ...(session.config.providers[session.provider.id] ?? {}),
+            reasoningEffort: level,
+          };
+          setThink(level);
+          push({ kind: 'notice', level: 'info', message: t('notice.thinkSet', { level }) });
+          await saveReasoningEffort(session.provider.id, level).catch((err: Error) => {
+            push({ kind: 'notice', level: 'warn', message: t('notice.thinkSaveFailed', { message: err.message }) });
+          });
           break;
         }
 
@@ -449,6 +552,7 @@ export function App({ session }: Props): React.ReactElement {
             const next = session.switch({ provider: arg });
             setProviderLabel(next.label);
             setModel(next.model);
+            setThink(next.reasoningEffort);
             setUsage((prev) => ({ ...prev, window: next.contextWindow }));
             push({ kind: 'divider', label: t('divider.switched', { label: next.label, model: next.model }) });
             await saveProviderChoice(next.id).catch((err: Error) => {
@@ -481,6 +585,7 @@ export function App({ session }: Props): React.ReactElement {
           try {
             const next = session.switch({ model: arg });
             setModel(next.model);
+            setThink(next.reasoningEffort);
             setUsage((prev) => ({ ...prev, window: next.contextWindow }));
             push({ kind: 'divider', label: t('divider.modelNow', { model: next.model }) });
             await saveModelChoice(next.id, next.model).catch((err: Error) => {
@@ -525,7 +630,7 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, mode, usage, statusSegments, push, exit],
+    [session, mode, think, usage, statusSegments, push, exit, writeStdout],
   );
 
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
@@ -559,6 +664,12 @@ export function App({ session }: Props): React.ReactElement {
           label: t(MODE_DESCRIPTIONS[m]),
           current: m === mode,
         })),
+      think: () =>
+        supportedEfforts(session.provider).map((l) => ({
+          value: l,
+          label: t(THINK_DESCRIPTIONS[l]),
+          current: l === think,
+        })),
       lang: () =>
         LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l], current: l === locale })),
       statusbar: () =>
@@ -580,7 +691,7 @@ export function App({ session }: Props): React.ReactElement {
     };
     return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, mode, model, providerLabel, statusSegments, session]);
+  }, [locale, mode, think, model, providerLabel, statusSegments, session]);
 
   const mcpSummary = useMemo(() => {
     if (session.mcpStatuses.length === 0) return undefined;
@@ -597,7 +708,9 @@ export function App({ session }: Props): React.ReactElement {
   return (
     <Box flexDirection="column">
       {/* 已完成的条目只渲染一次,留在终端回滚缓冲区中。 */}
-      <Static items={items}>{(item) => <TimelineEntry key={item.key} item={item} />}</Static>
+      <Static key={staticEpoch} items={items}>
+        {(item) => <TimelineEntry key={item.key} item={item} />}
+      </Static>
 
       <Box flexDirection="column" marginTop={1}>
         {items.length === 0 ? (
@@ -658,6 +771,8 @@ export function App({ session }: Props): React.ReactElement {
               cumulativeTokens={usage.total}
               todos={todos}
               model={model}
+              mode={mode}
+              think={think}
               segments={statusSegments}
               notice={ctrlCArmed ? t('status.ctrlcAgain') : undefined}
             />

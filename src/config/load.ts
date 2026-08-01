@@ -5,6 +5,7 @@ import {
   type Config,
   type PartialConfig,
   type ProviderConfig,
+  type ReasoningEffort,
 } from './schema.js';
 import { globalConfigPath, projectConfigPath } from './paths.js';
 import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider } from './providers.js';
@@ -103,6 +104,7 @@ export interface ResolvedProvider {
   headers: Record<string, string>;
   contextWindow: number;
   parallelToolCalls: boolean;
+  reasoningEffort: ReasoningEffort;
   sdk: 'deepseek' | 'openai-compatible';
 }
 
@@ -162,6 +164,7 @@ export function resolveProvider(
     headers: override.headers ?? {},
     contextWindow,
     parallelToolCalls: override.parallelToolCalls ?? preset?.parallelToolCalls ?? true,
+    reasoningEffort: override.reasoningEffort ?? config.reasoningEffort,
     sdk: preset && 'sdk' in preset && preset.sdk === 'deepseek' ? 'deepseek' : 'openai-compatible',
   };
 }

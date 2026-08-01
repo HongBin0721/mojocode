@@ -88,6 +88,35 @@ describe('PermissionPrompt 选项列表', () => {
     unmount();
   });
 
+  it('换成选项更少的请求时光标复位,不会读到越界选项而崩溃', async () => {
+    const decisions: PermissionDecision[] = [];
+    const onDecide = (decision: PermissionDecision) => decisions.push(decision);
+    const { stdin, rerender, unmount } = render(
+      <PermissionPrompt request={request} onDecide={onDecide} />,
+    );
+    await tick();
+    // 移到第 4 项"拒绝"——只有带建议规则的请求才有 4 个选项。
+    for (let i = 0; i < 3; i++) {
+      stdin.write(DOWN);
+      await tick();
+    }
+
+    // 换成没有建议规则的请求:选项只剩 2 个,残留的光标已经越界。
+    rerender(
+      <PermissionPrompt
+        request={{ ...request, id: 'req-2', suggestedRule: undefined }}
+        onDecide={onDecide}
+      />,
+    );
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    // 复位到第 1 项;修复前这里会读到 undefined 并让整个 TUI 崩掉。
+    expect(decisions).toEqual([{ type: 'allow' }]);
+    unmount();
+  });
+
   it('渲染带编号的选项与提示', async () => {
     const { lastFrame, unmount } = setup();
     await tick();

@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { PermissionAsker, PermissionRequest, EventBus } from '../core/events.js';
+import type {
+  PermissionAsker,
+  PermissionDecision,
+  PermissionRequest,
+  EventBus,
+} from '../core/events.js';
 import type { PermissionMode, PermissionRules } from '../config/schema.js';
 import { projectConfigPath, projectDir } from '../config/paths.js';
 import { judgeCommand, ruleToPrefix } from './bash-rules.js';
@@ -33,6 +38,10 @@ export interface GateOptions {
 export class PermissionGate {
   private readonly sessionAllowBash: string[] = [];
   private readonly sessionAllowWrite: string[] = [];
+  /** 授权询问的排队链,保证一次只有一个确认框在等用户。见 askSerialized。 */
+  private askChain: Promise<void> = Promise.resolve();
+  /** 本轮是否已中断。中断后还排在队里的询问一律自动拒绝,见 cancelPending。 */
+  private pendingCancelled = false;
 
   constructor(private readonly options: GateOptions) {}
 
@@ -50,6 +59,16 @@ export class PermissionGate {
    */
   setAsker(ask: PermissionAsker): void {
     this.options.ask = ask;
+  }
+
+  /** 轮被中断:丢弃排队中的授权询问(它们会以拒绝收场),不再打扰用户。 */
+  cancelPending(): void {
+    this.pendingCancelled = true;
+  }
+
+  /** 新一轮开始,重新接受排队询问。 */
+  resumePending(): void {
+    this.pendingCancelled = false;
   }
 
   /**
@@ -133,8 +152,7 @@ export class PermissionGate {
   }
 
   private async request(req: PermissionRequest): Promise<void> {
-    this.options.bus.emit({ type: 'permission-request', request: req });
-    const decision = await this.options.ask(req);
+    const decision = await this.askSerialized(req);
     this.options.bus.emit({ type: 'permission-resolved', id: req.id, decision });
 
     if (decision.type === 'deny') {
@@ -157,6 +175,34 @@ export class PermissionGate {
         });
       }
     }
+  }
+
+  /**
+   * 让授权询问排队,一次只呈现一个。
+   *
+   * 并行工具调用会同时申请授权,而界面一次只放得下一个确认框:后到的请求
+   * 会顶掉前一个,先到的那个 promise 就永远悬着——对应的工具卡死,整轮要
+   * 等用户按 esc 才结束;确认框里的光标还可能停在新请求根本不存在的选项
+   * 上,回车即崩溃。`permission-request` 事件同样要等轮到自己时才发出,
+   * 否则 UI 仍会被后来的请求提前覆盖。
+   */
+  private askSerialized(req: PermissionRequest): Promise<PermissionDecision> {
+    const decision = this.askChain.then((): PermissionDecision | Promise<PermissionDecision> => {
+      // 轮已经中断,队列里剩下的请求不该再弹给用户:那一轮已经死了,用户
+      // 却要挨个消确认框才能拿回输入框;更要紧的是此时批准仍会真的执行——
+      // write/edit 不接 abortSignal,点了"允许"就直接写盘。
+      if (this.pendingCancelled) {
+        return { type: 'deny', reason: 'the turn was interrupted before it could be approved' };
+      }
+      this.options.bus.emit({ type: 'permission-request', request: req });
+      return this.options.ask(req);
+    });
+    // 链条只用来排队,不传播失败——一次拒绝或异常不该毒化后续所有请求。
+    this.askChain = decision.then(
+      () => undefined,
+      () => undefined,
+    );
+    return decision;
   }
 
   private remember(risk: PermissionRequest['risk'], rule: string): void {

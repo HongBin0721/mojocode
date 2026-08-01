@@ -37,9 +37,11 @@ export function shouldCompact(
 /**
  * 用摘要替换历史中较早的部分,最近的几轮对话原样保留。
  *
- * 切分点会向后对齐到下一条用户消息,确保永远不会把 assistant 的工具调用
- * 和它的工具结果拆开——provider 会拒绝找不到对应调用的工具结果,而这种
- * 失败模式调试起来非常费解。
+ * 切分点向后跳过工具结果:工具结果必须和产生它的 assistant 调用留在同一
+ * 侧,否则 provider 会拒绝找不到对应调用的工具结果,而这种失败模式调试起
+ * 来非常费解。assistant 与 user 都是安全的切点——只认 user 会让轮内压缩
+ * 完全失效:长工具循环的尾部全是 assistant/tool,根本没有更晚的用户消息,
+ * 于是最该压缩的场景反而永远返回 0。
  */
 export async function compactMessages(
   messages: ModelMessage[],
@@ -51,7 +53,7 @@ export async function compactMessages(
   }
 
   let cut = Math.max(1, messages.length - keepRecent);
-  while (cut < messages.length && messages[cut]?.role !== 'user') cut++;
+  while (cut < messages.length && messages[cut]?.role === 'tool') cut++;
   if (cut >= messages.length) {
     return { messages, removedMessages: 0, summaryChars: 0 };
   }

@@ -23,6 +23,8 @@ export interface Session {
   todos: TodoStore;
   mcpStatuses: McpStatus[];
   store: SessionStore;
+  /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
+  newSession: () => Promise<SessionStore>;
   /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
   switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
   setMode: (mode: PermissionMode) => void;
@@ -56,6 +58,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     bus,
   });
 
+  // 中断后仍排在队列里的授权询问要一并作废——并行工具调用会让多个请求
+  // 依次排队,否则用户得为一个已经死掉的轮次挨个消确认框。
+  bus.on((event) => {
+    if (event.type === 'aborted') gate.cancelPending();
+    else if (event.type === 'turn-start') gate.resumePending();
+  });
+
   const toolContext = {
     root,
     gate,
@@ -76,7 +85,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     ...bridgeMcpTools(mcp.connections, gate),
   };
 
-  const store =
+  // 可变:newSession 会把它换成新的 store,onHistoryChange 始终写当前这个。
+  let store =
     options.resume ?? (await SessionStore.create({ root, provider: provider.id, model: provider.model }));
 
   const agent = new Agent({
@@ -107,7 +117,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     gate,
     todos,
     mcpStatuses: mcp.statuses,
-    store,
+    get store() {
+      return store;
+    },
+    newSession: async () => {
+      store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
+      agent.clear();
+      todos.set([]);
+      return store;
+    },
     switch: ({ provider: providerId, model }) => {
       const next = resolveProvider({
         ...config,

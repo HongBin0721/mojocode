@@ -52,8 +52,8 @@ interface SelectorState {
 
 /** 二级选择器一屏最多显示的选项数,超出部分滚动。 */
 const SELECTOR_WINDOW = 8;
-/** 命令菜单最多显示的候选数。 */
-const MENU_LIMIT = 8;
+/** 命令菜单一屏最多显示的候选数,超出部分滚动(与二级选择器一致)。 */
+const MENU_WINDOW = 8;
 
 /**
  * 带历史记录、多行编辑和斜杠命令菜单的输入框。
@@ -97,9 +97,14 @@ export function Input({
     !value.includes(' ') &&
     !value.includes('\n');
   const matches = showMenu
-    ? commands.filter((c) => c.name.startsWith(value.slice(1).toLowerCase())).slice(0, MENU_LIMIT)
+    ? commands.filter((c) => c.name.startsWith(value.slice(1).toLowerCase()))
     : [];
   const menuCursor = matches.length > 0 ? Math.min(menuIndex, matches.length - 1) : 0;
+  // 光标居中的滚动窗口:候选多于一屏时跟随光标滚动,而不是截断列表。
+  const menuWindowStart = Math.max(
+    0,
+    Math.min(menuCursor - Math.floor(MENU_WINDOW / 2), matches.length - MENU_WINDOW),
+  );
 
   /**
    * 菜单上回车/tab 作用的命令。精确匹配优先于光标位置:`model` 排在 `mode`
@@ -456,14 +461,25 @@ export function Input({
       </Box>
       {matches.length > 0 ? (
         <Box flexDirection="column" paddingLeft={2}>
-          {matches.map((c, index) => (
-            <Text key={c.name} color={index === menuCursor ? theme.accent : undefined}>
-              {index === menuCursor ? `${glyphs.pointer} ` : '  '}
-              <Text color={theme.accent}>/{c.name}</Text>
-              {c.options ? <Text color={theme.dim}> ▸</Text> : null}
-              <Text color={theme.dim}> — {c.description}</Text>
+          {menuWindowStart > 0 ? (
+            <Text color={theme.dim}>{t('selector.moreAbove', { n: menuWindowStart })}</Text>
+          ) : null}
+          {matches.slice(menuWindowStart, menuWindowStart + MENU_WINDOW).map((c, i) => {
+            const index = menuWindowStart + i;
+            return (
+              <Text key={c.name} color={index === menuCursor ? theme.accent : undefined}>
+                {index === menuCursor ? `${glyphs.pointer} ` : '  '}
+                <Text color={theme.accent}>/{c.name}</Text>
+                {c.options ? <Text color={theme.dim}> ▸</Text> : null}
+                <Text color={theme.dim}> — {c.description}</Text>
+              </Text>
+            );
+          })}
+          {menuWindowStart + MENU_WINDOW < matches.length ? (
+            <Text color={theme.dim}>
+              {t('selector.moreBelow', { n: matches.length - menuWindowStart - MENU_WINDOW })}
             </Text>
-          ))}
+          ) : null}
           <Text color={theme.dim}>{t('input.menuHint')}</Text>
         </Box>
       ) : null}

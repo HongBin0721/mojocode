@@ -11,6 +11,10 @@ interface Props {
   cumulativeTokens: number;
   todos: TodoItem[];
   model: string;
+  /** 当前权限模式,启用 mode 段时显示在最前。 */
+  mode: string;
+  /** 当前思考强度,auto(默认)时不占位。 */
+  think: string;
   /** 显示哪些信息段,由 /statusbar 配置。 */
   segments: StatusSegment[];
   /** 临时提醒(如"再按一次 ctrl+c 退出"),有值时以醒目颜色展示。 */
@@ -27,6 +31,8 @@ export function Footer({
   cumulativeTokens,
   todos,
   model,
+  mode,
+  think,
   segments,
   notice,
 }: Props): React.ReactElement | null {
@@ -36,10 +42,26 @@ export function Footer({
   const done = todos.filter((t) => t.status === 'completed').length;
 
   const parts: React.ReactElement[] = [];
+  if (show.has('mode')) {
+    // 与 Header 一致:yolo 用警示色,其余用弱化色。
+    parts.push(
+      <Text key="mode" color={mode === 'yolo' ? theme.warn : theme.dim}>
+        {mode}
+      </Text>,
+    );
+  }
   if (show.has('model')) {
     parts.push(
       <Text key="model" color={theme.dim}>
         {model}
+      </Text>,
+    );
+  }
+  // auto 是默认状态,显示出来只是噪音——仿 todos 的"非空才显示"。
+  if (show.has('think') && think !== 'auto') {
+    parts.push(
+      <Text key="think" color={theme.dim}>
+        {t('footer.think', { level: think })}
       </Text>,
     );
   }

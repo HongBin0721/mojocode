@@ -88,4 +88,31 @@ describe('configSchema', () => {
   it('rejects an invalid permission mode', () => {
     expect(() => makeConfig({ permissionMode: 'whatever' })).toThrow();
   });
+
+  it('rejects an invalid reasoning effort', () => {
+    expect(() => makeConfig({ reasoningEffort: 'ultra' })).toThrow();
+    expect(() => makeConfig({ providers: { glm: { reasoningEffort: 'ultra' } } })).toThrow();
+  });
+});
+
+describe('思考强度解析', () => {
+  it('defaults to auto', () => {
+    expect(makeConfig().reasoningEffort).toBe('auto');
+    const provider = resolveProvider(makeConfig({ provider: 'glm' }), { ZHIPU_API_KEY: 'k' });
+    expect(provider.reasoningEffort).toBe('auto');
+  });
+
+  it('provider override wins over the top-level default', () => {
+    const config = makeConfig({
+      provider: 'glm',
+      reasoningEffort: 'low',
+      providers: { glm: { reasoningEffort: 'high' } },
+    });
+    expect(resolveProvider(config, { ZHIPU_API_KEY: 'k' }).reasoningEffort).toBe('high');
+  });
+
+  it('falls back to the top-level value when the provider has no override', () => {
+    const config = makeConfig({ provider: 'glm', reasoningEffort: 'low' });
+    expect(resolveProvider(config, { ZHIPU_API_KEY: 'k' }).reasoningEffort).toBe('low');
+  });
 });

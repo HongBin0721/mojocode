@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { Diff } from './Diff.js';
 import { theme, glyphs } from './theme.js';
@@ -44,6 +44,15 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
     { label: t('perm.deny'), decision: { type: 'deny' }, danger: true },
   ];
 
+  // 换成另一个请求时组件并不卸载(只有 permission 变 undefined 才卸载),
+  // cursor 会跨请求残留下来。
+  useEffect(() => setCursor(0), [request.id]);
+
+  // 复位要等这一帧渲染完才生效,所以读取一律走钳制后的下标:上一个请求有
+  // 4 个选项、光标停在第 4 项,下一个请求只有 2 个选项时,回车会读到
+  // undefined 并让整个 TUI 崩掉。
+  const selected = Math.min(cursor, options.length - 1);
+
   useInput((input, key) => {
     if (key.upArrow) {
       setCursor((c) => (c + options.length - 1) % options.length);
@@ -54,7 +63,7 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
       return;
     }
     if (key.return) {
-      onDecide(options[cursor]!.decision);
+      onDecide(options[selected]!.decision);
       return;
     }
     if (key.escape) {
@@ -102,7 +111,7 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
 
       <Box marginTop={1} flexDirection="column">
         {options.map((option, index) => {
-          const active = index === cursor;
+          const active = index === selected;
           const color = option.danger ? theme.error : active ? theme.accent : undefined;
           return (
             <Text key={option.label} color={active ? color ?? theme.accent : undefined}>

@@ -25,6 +25,9 @@ export function createModel(provider: ResolvedProvider): LanguageModel {
     apiKey: provider.apiKey,
     baseURL: provider.baseURL,
     headers: provider.headers,
+    // 不开这个开关,流式响应就没有 usage 块,每步 token 数全是 undefined,
+    // 状态栏的上下文/累计计数会一直停在 0(DeepSeek 专用包是默认开启的)。
+    includeUsage: true,
   });
   return compatible(provider.model);
 }

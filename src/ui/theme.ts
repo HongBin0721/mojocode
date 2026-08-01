@@ -3,6 +3,8 @@ import { t } from '../i18n/index.js';
 export const theme = {
   accent: 'cyan',
   user: 'green',
+  /** 用户消息正文的高亮背景;blackBright 在深浅色终端下都保持可读的对比度。 */
+  userBg: 'blackBright',
   assistant: 'white',
   dim: 'gray',
   tool: 'blue',

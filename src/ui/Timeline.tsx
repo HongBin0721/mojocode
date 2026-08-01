@@ -13,11 +13,13 @@ import { t } from '../i18n/index.js';
 export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
     case 'user':
-      // 用户消息加粗高亮,靠绿色提示符与字重和模型输出区分。
+      // 用户消息带背景高亮:绿色提示符 + 反衬底色,回滚历史里一眼能定位。
       return (
         <Box marginTop={1}>
           <Text color={theme.user}>{glyphs.prompt} </Text>
-          <Text bold>{item.text}</Text>
+          <Text bold backgroundColor={theme.userBg} color="white">
+            {item.text}
+          </Text>
         </Box>
       );
 

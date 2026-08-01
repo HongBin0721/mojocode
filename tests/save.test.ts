@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { saveApiKey, setDefaultProvider } from '../src/config/save.js';
+import { saveApiKey, saveMode, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
 
 let dir: string;
 let file: string;
@@ -63,6 +63,64 @@ describe('saveApiKey', () => {
   it('can set the default provider in the same call', async () => {
     await saveApiKey('deepseek', 'd1', { file, setDefault: true });
     expect((await readConfig()).provider).toBe('deepseek');
+  });
+});
+
+describe('saveReasoningEffort', () => {
+  it('writes providers.<id>.reasoningEffort and keeps sibling fields', async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        reasoningEffort: 'low',
+        providers: { glm: { apiKey: 'g1', model: 'glm-5' } },
+      }),
+    );
+
+    await saveReasoningEffort('glm', 'high', file);
+
+    expect(await readConfig()).toEqual({
+      reasoningEffort: 'low',
+      providers: { glm: { apiKey: 'g1', model: 'glm-5', reasoningEffort: 'high' } },
+    });
+  });
+
+  it('creates the providers entry when missing', async () => {
+    await saveReasoningEffort('kimi', 'max', file);
+    expect(await readConfig()).toEqual({ providers: { kimi: { reasoningEffort: 'max' } } });
+  });
+});
+
+describe('saveMode', () => {
+  it('写项目配置而不是全局配置,放宽不会泄漏到其他工作区', async () => {
+    const saved = await saveMode(dir, 'acceptEdits', file);
+
+    expect(saved).toBe(file);
+    expect(await readConfig()).toEqual({ permissionMode: 'acceptEdits' });
+  });
+
+  it('默认落在 <root>/.kdg/config.json', async () => {
+    const saved = await saveMode(dir, 'readonly');
+
+    expect(saved).toBe(path.join(dir, '.kdg', 'config.json'));
+    expect(JSON.parse(await fs.readFile(saved!, 'utf8'))).toEqual({ permissionMode: 'readonly' });
+  });
+
+  it('yolo 永不落盘,连文件都不创建', async () => {
+    expect(await saveMode(dir, 'yolo', file)).toBeUndefined();
+    await expect(fs.access(file)).rejects.toThrow();
+  });
+
+  it('保留项目配置里已有的权限规则', async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ permissions: { allowBash: ['git status'] } }));
+
+    await saveMode(dir, 'acceptEdits', file);
+
+    expect(await readConfig()).toEqual({
+      permissions: { allowBash: ['git status'] },
+      permissionMode: 'acceptEdits',
+    });
   });
 });
 

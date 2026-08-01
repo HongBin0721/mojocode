@@ -17,7 +17,7 @@ vi.mock('../src/agent/compact.js', () => ({
   shouldCompact: mockShouldCompact,
 }));
 
-import { Agent } from '../src/agent/loop.js';
+import { Agent, wrapGuidance } from '../src/agent/loop.js';
 
 /** 每次 streamText 调用时的消息快照(this.messages 是活引用,必须复制)。 */
 const sent: string[][] = [];
@@ -39,7 +39,7 @@ function installDefaultStream() {
   });
 }
 
-function makeAgent() {
+function makeAgent(providerOverrides: Record<string, unknown> = {}) {
   const bus = new EventBus();
   const events: string[] = [];
   bus.on((e) => events.push(e.type));
@@ -52,6 +52,8 @@ function makeAgent() {
       baseURL: 'http://localhost',
       contextWindow: 100_000,
       parallelToolCalls: true,
+      reasoningEffort: 'auto',
+      ...providerOverrides,
     } as never,
     config: { maxSteps: 24, temperature: 0, compactThreshold: 0.8 } as never,
     systemPrompt: 'sys',
@@ -80,11 +82,12 @@ describe('引导消息注入', () => {
     await agent.run('你好');
 
     expect(sent).toHaveLength(2);
-    expect(sent[1]).toContain('末步后的引导');
+    // 引导以 Claude Code 风格的包装喂给模型:原文 + 说明这是运行中插入的消息。
+    expect(sent[1]).toContain(wrapGuidance('末步后的引导'));
     expect(agent.history.map((m) => m.content)).toEqual([
       '你好',
       '回复1',
-      '末步后的引导',
+      wrapGuidance('末步后的引导'),
       '回复2',
     ]);
   });
@@ -111,7 +114,7 @@ describe('引导消息注入', () => {
     agentRef = agent;
     await agent.run('你好');
 
-    const injected = prepared[0]!.messages!.filter((m) => m.content === '中途引导');
+    const injected = prepared[0]!.messages!.filter((m) => m.content === wrapGuidance('中途引导'));
     expect(injected).toHaveLength(1);
     // 第二步的输入已带着引导,不应再改写消息(返回 {})。
     expect(prepared[1]!.messages).toBeUndefined();
@@ -137,7 +140,7 @@ describe('引导消息注入', () => {
     await agent.run('你好');
 
     expect(events).toContain('aborted');
-    expect(agent.history.map((m) => m.content)).toContain('要记住的引导');
+    expect(agent.history.map((m) => m.content)).toContain(wrapGuidance('要记住的引导'));
   });
 });
 
@@ -161,7 +164,29 @@ describe('并发防护', () => {
 
     expect(events.filter((e) => e === 'turn-start')).toHaveLength(1);
     expect(sent).toHaveLength(2);
-    expect(sent[1]).toContain('B');
+    // 运行中的第二次 run 降级为注入,同样带引导包装。
+    expect(sent[1]).toContain(wrapGuidance('B'));
+  });
+
+  it('压缩失败不会吞掉用户随后提交的消息', async () => {
+    installDefaultStream();
+    let rejectCompact!: (err: Error) => void;
+    mockCompactMessages.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectCompact = reject;
+        }),
+    );
+    const { agent } = makeAgent();
+    const compacting = agent.compact().catch(() => undefined); // /compact 的调用方自行呈现错误
+    const running = agent.run('压缩失败期间提交的消息');
+    rejectCompact(new Error('network blip'));
+    await Promise.all([compacting, running]);
+
+    // 修复前:压缩的 rejection 会在 push 用户消息之前抛出,消息只留在时间线上,
+    // 既没进历史也没发给模型,用户却以为已经送达。
+    expect(agent.history.map((m) => m.content)).toContain('压缩失败期间提交的消息');
+    expect(sent.flat()).toContain('压缩失败期间提交的消息');
   });
 
   it('压缩进行中提交的消息不会被压缩结果覆盖', async () => {
@@ -186,6 +211,177 @@ describe('并发防护', () => {
     const contents = agent.history.map((m) => m.content);
     expect(contents[0]).toBe('摘要');
     expect(contents).toContain('压缩期间的消息');
+  });
+});
+
+describe('providerOptions 组装', () => {
+  it('auto 且允许并行工具时不传 providerOptions,保持现状', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    await agent.run('你好');
+
+    expect(mockStreamText.mock.calls[0]![0]).not.toHaveProperty('providerOptions');
+  });
+
+  it('parallel_tool_calls 与思考参数合并进同一个 provider 键,不互相覆盖', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({ id: 'glm', parallelToolCalls: false, reasoningEffort: 'off' });
+    await agent.run('你好');
+
+    expect(mockStreamText.mock.calls[0]![0].providerOptions).toEqual({
+      glm: { parallel_tool_calls: false, thinking: { type: 'disabled' } },
+    });
+  });
+
+  it('deepseek 的思考参数落在固定的 "deepseek" 键下', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({ id: 'deepseek', sdk: 'deepseek', reasoningEffort: 'high' });
+    await agent.run('你好');
+
+    expect(mockStreamText.mock.calls[0]![0].providerOptions).toEqual({
+      deepseek: { thinking: { type: 'enabled' }, reasoningEffort: 'high' },
+    });
+  });
+
+  it('运行中修改 provider.reasoningEffort 对下一轮立即生效', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({ id: 'kimi', model: 'kimi-k3' });
+    await agent.run('第一轮');
+    expect(mockStreamText.mock.calls[0]![0]).not.toHaveProperty('providerOptions');
+
+    // /think 的手法:直接改共享的 ResolvedProvider 对象。
+    (agent as unknown as { options: { provider: { reasoningEffort: string } } }).options.provider.reasoningEffort =
+      'max';
+    await agent.run('第二轮');
+    expect(mockStreamText.mock.calls[1]![0].providerOptions).toEqual({
+      kimi: { reasoningEffort: 'max' },
+    });
+  });
+});
+
+describe('轮末事件', () => {
+  it('引导续跑不会多发一次 turn-end(状态行不会中途消失)', async () => {
+    installDefaultStream();
+    const { agent, events } = makeAgent();
+    // 末步之后注入引导 → run() 会再起一个流续跑同一轮。
+    onStream = (call) => {
+      if (call === 1) agent.inject('末步后的引导');
+    };
+    await agent.run('你好');
+
+    expect(sent).toHaveLength(2); // 确实跑了两个流
+    expect(events.filter((e) => e === 'turn-end')).toHaveLength(1);
+    // turn-end 必须是整轮的最后一个事件,不能夹在两个流中间。
+    expect(events[events.length - 1]).toBe('turn-end');
+  });
+
+  it('中断的轮不发 turn-end,由 aborted 收尾', async () => {
+    // 真实的中断会让 SDK 直接拆掉流,拿不到 finish。
+    let agentRef!: Agent;
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        agentRef.abort();
+        throw new Error('stream torn down');
+        yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    const { agent, events } = makeAgent();
+    agentRef = agent;
+    await agent.run('你好');
+
+    expect(events).toContain('aborted');
+    expect(events.filter((e) => e === 'turn-end')).toHaveLength(0);
+  });
+});
+
+describe('会话清空', () => {
+  it('clear() 重置累计用量,新会话不背旧账', async () => {
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'finish-step', usage: { inputTokens: 1000, outputTokens: 500 } };
+        yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    const { agent, bus } = makeAgent();
+    const totals: number[] = [];
+    bus.on((e) => {
+      if (e.type === 'step-end') totals.push(e.usage.cumulativeTotalTokens);
+    });
+
+    await agent.run('第一轮');
+    expect(totals.at(-1)).toBe(1500);
+
+    agent.clear();
+    await agent.run('清空之后');
+    // 修复前这里会是 3000——footer 与 /cost 把旧会话的用量算进新会话。
+    expect(totals.at(-1)).toBe(1500);
+  });
+
+  it('压缩期间被清空时,压缩结果不会让旧对话复活', async () => {
+    installDefaultStream();
+    let releaseCompact!: (result: unknown) => void;
+    mockCompactMessages.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseCompact = resolve;
+        }),
+    );
+    const { agent } = makeAgent();
+    await agent.run('压缩前的对话');
+
+    const compacting = agent.compact();
+    agent.clear(); // /clear 在摘要返回之前发生
+    releaseCompact({
+      messages: [{ role: 'user', content: '旧对话的摘要' }],
+      removedMessages: 5,
+      summaryChars: 6,
+    });
+    await compacting;
+
+    // 被丢弃的对话不得写回内存(否则还会被存进那个全新的会话文件)。
+    expect(agent.history).toEqual([]);
+  });
+});
+
+describe('上下文告警', () => {
+  it('一轮内最多提示一次,不随步骤数刷屏', async () => {
+    // 压缩压不动(removedMessages: 0)时 shouldCompact 会持续为真,
+    // 每个步骤边界都会重新判断——这正是刷屏的触发条件。
+    mockShouldCompact.mockReturnValue(true);
+    mockCompactMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: '原样' }],
+      removedMessages: 0,
+      summaryChars: 0,
+    });
+    mockStreamText.mockImplementation(
+      (opts: { prepareStep: (i: { messages: unknown[] }) => Promise<unknown> }) => ({
+        fullStream: (async function* () {
+          for (let i = 0; i < 5; i++) {
+            await opts.prepareStep({ messages: [{ role: 'user', content: '很长的历史' }] });
+          }
+          yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+        })(),
+        responseMessages: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      }),
+    );
+
+    const { agent, bus } = makeAgent();
+    const notices: string[] = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push(e.message);
+    });
+
+    await agent.run('第一轮');
+    expect(notices).toHaveLength(1);
+
+    // 闩锁按轮重置:下一轮仍然会提示一次。
+    await agent.run('第二轮');
+    expect(notices).toHaveLength(2);
   });
 });
 

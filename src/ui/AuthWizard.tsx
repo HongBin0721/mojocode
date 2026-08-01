@@ -55,6 +55,7 @@ export function AuthWizard(): React.ReactElement {
           headers: {},
           contextWindow: preset.defaultContextWindow,
           parallelToolCalls: true,
+          reasoningEffort: 'auto',
           sdk: 'openai-compatible',
         });
         if (cancelled) return;

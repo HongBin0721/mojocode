@@ -3,10 +3,15 @@ import { z } from 'zod';
 export const permissionModeSchema = z.enum(['readonly', 'ask', 'acceptEdits', 'yolo']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
-/** 状态栏可选的信息段。状态文字本身始终显示,不在此列。 */
-export const statusSegmentSchema = z.enum(['model', 'context', 'total', 'todos']);
+/** 状态栏可选的信息段。状态文字本身始终显示,不在此列。枚举顺序即展示顺序,mode 固定排第一。 */
+export const statusSegmentSchema = z.enum(['mode', 'model', 'think', 'context', 'total', 'todos']);
 export type StatusSegment = z.infer<typeof statusSegmentSchema>;
 export const STATUS_SEGMENTS = statusSegmentSchema.options;
+
+/** 模型思考强度档位。auto = 不传任何参数、交给服务端默认;off = 显式关闭思考。 */
+export const reasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']);
+export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
+export const REASONING_EFFORTS = reasoningEffortSchema.options;
 
 /** 用户声明的 provider 条目。内置 id 只需填写要覆盖的字段。 */
 export const providerConfigSchema = z.object({
@@ -18,6 +23,8 @@ export const providerConfigSchema = z.object({
   headers: z.record(z.string(), z.string()).optional(),
   contextWindow: z.number().int().positive().optional(),
   parallelToolCalls: z.boolean().optional(),
+  /** 该 provider 专属的思考强度,覆盖顶层 `reasoningEffort`。 */
+  reasoningEffort: reasoningEffortSchema.optional(),
   label: z.string().optional(),
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
@@ -69,6 +76,8 @@ export const configSchema = z.object({
   /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
   maxSteps: z.number().int().positive().default(50),
   temperature: z.number().min(0).max(2).optional(),
+  /** 思考强度的全局默认值,可被 providers.<id>.reasoningEffort 覆盖,用 /think 调整。 */
+  reasoningEffort: reasoningEffortSchema.default('auto'),
   /** 输入 token 超过上下文窗口的这一比例时压缩历史。 */
   compactThreshold: z.number().min(0.1).max(0.95).default(0.8),
   /** 强制指定上下文窗口,覆盖 provider 预设。测试压缩逻辑时很有用。 */
