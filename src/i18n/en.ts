@@ -9,7 +9,6 @@
 export const en = {
   'header.hints': '/ for commands · shift+enter for newline · esc to interrupt · ctrl+c twice to exit',
 
-  'status.ready': 'ready',
   'status.thinking': 'thinking',
   'status.responding': 'responding',
   'status.runningTool': 'running {tool}',
@@ -17,13 +16,14 @@ export const en = {
   'status.compacting': 'compacting',
   'status.listingModels': 'listing models',
   'status.ctrlcAgain': 'press ctrl+c again to exit',
+  'status.meta': '({s}s · esc to interrupt)',
 
   'footer.tasks': 'tasks',
   'footer.ctx': 'ctx',
   'footer.total': 'total {n} tok',
 
   'input.placeholder': 'ask anything, / for commands',
-  'input.working': 'working… esc to interrupt',
+  'input.steer': 'working… type to steer, enter to send, esc to interrupt',
   'input.menuHint': '↑/↓ select · enter run · tab complete · esc dismiss',
   'input.newlineHint': 'shift+enter (or ctrl+j / `\\` + enter) for newline · enter to send',
 
@@ -40,10 +40,11 @@ export const en = {
   'modeopt.yolo': 'auto-approve everything — use with care',
 
   'perm.title': 'Permission needed',
-  'perm.allowOnce': 'allow once',
-  'perm.deny': 'deny',
-  'perm.alwaysSession': 'always this session',
-  'perm.alwaysPersist': 'always, save to .kdg/config.json',
+  'perm.allowOnce': 'Allow once',
+  'perm.deny': 'Deny',
+  'perm.alwaysSession': 'Allow for this session',
+  'perm.alwaysPersist': 'Always allow, save to .kdg/config.json',
+  'perm.hint': '↑/↓ select · enter confirm · 1-4 jump · esc deny',
   'perm.writeTitle': 'Write {path}',
   'perm.runTitle': 'Run `{command}`',
   'perm.mcpTitle': 'Call MCP tool {name}',
@@ -97,6 +98,8 @@ export const en = {
   'notice.statusbarUsage': 'Usage: /statusbar <model|context|total|todos|none> (currently: {list})',
   'notice.statusbarSet': 'Status bar now shows: {list}.',
   'notice.statusbarSaveFailed': 'Could not save status bar preference: {message}',
+  'notice.guidanceQueued': 'Guidance will be delivered at the next step.',
+  'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
   'notice.compactFailed': 'Compaction failed: {message}',
   'notice.interrupted': 'Interrupted.',

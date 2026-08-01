@@ -33,6 +33,12 @@ interface Props {
   placeholder: string;
   /** 自动补全菜单中展示的斜杠命令。 */
   commands: SlashCommand[];
+  /**
+   * 选择器和命令菜单都没打开时按下 esc 的回调(App 用它中断运行中的任
+   * 务)。esc 的分发必须收在这一个组件里:两个并存的 useInput 会同时收到
+   * 按键,否则"esc 收起菜单"会顺带触发外层的中断。
+   */
+  onEscape?: () => void;
 }
 
 interface SelectorState {
@@ -61,7 +67,13 @@ const MENU_LIMIT = 8;
  * (任何终端都可用的兜底)。传统终端把 shift+enter 和 enter 发成同一个
  * 字节,无法区分,所以需要这些替代按键。
  */
-export function Input({ onSubmit, disabled, placeholder, commands }: Props): React.ReactElement {
+export function Input({
+  onSubmit,
+  disabled,
+  placeholder,
+  commands,
+  onEscape,
+}: Props): React.ReactElement {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const [history, setHistory] = useState<string[]>([]);
@@ -237,8 +249,12 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
         return;
       }
 
-      if (key.escape && matches.length > 0) {
-        setMenuDismissed(true);
+      if (key.escape) {
+        if (matches.length > 0) {
+          setMenuDismissed(true);
+        } else {
+          onEscape?.();
+        }
         return;
       }
 

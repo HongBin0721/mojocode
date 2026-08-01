@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { Diff } from './Diff.js';
-import { theme } from './theme.js';
+import { theme, glyphs } from './theme.js';
 import type { PermissionDecision, PermissionRequest } from '../core/events.js';
 import { t } from '../i18n/index.js';
 
@@ -10,18 +10,69 @@ interface Props {
   onDecide: (decision: PermissionDecision) => void;
 }
 
+interface Option {
+  label: string;
+  /** 选项后面淡色展示的补充说明(建议的规则等)。 */
+  note?: string;
+  decision: PermissionDecision;
+  danger?: boolean;
+}
+
+/**
+ * 授权确认:上下键 + 回车的选项列表(主流 CLI 的交互习惯),数字键直达,
+ * esc 拒绝。y/n 作为老习惯的快捷键保留。
+ */
 export function PermissionPrompt({ request, onDecide }: Props): React.ReactElement {
+  const [cursor, setCursor] = useState(0);
+
+  const options: Option[] = [
+    { label: t('perm.allowOnce'), decision: { type: 'allow' } },
+    ...(request.suggestedRule
+      ? ([
+          {
+            label: t('perm.alwaysSession'),
+            note: request.suggestedRule,
+            decision: { type: 'allow-always', rule: request.suggestedRule },
+          },
+          {
+            label: t('perm.alwaysPersist'),
+            note: request.suggestedRule,
+            decision: { type: 'allow-persist', rule: request.suggestedRule },
+          },
+        ] satisfies Option[])
+      : []),
+    { label: t('perm.deny'), decision: { type: 'deny' }, danger: true },
+  ];
+
   useInput((input, key) => {
-    const ch = input.toLowerCase();
-    if (ch === 'y' || key.return) {
-      onDecide({ type: 'allow' });
-    } else if (ch === 'n' || key.escape) {
-      onDecide({ type: 'deny' });
-    } else if (input === 'a' && request.suggestedRule) {
-      onDecide({ type: 'allow-always', rule: request.suggestedRule });
-    } else if (input === 'A' && request.suggestedRule) {
-      onDecide({ type: 'allow-persist', rule: request.suggestedRule });
+    if (key.upArrow) {
+      setCursor((c) => (c + options.length - 1) % options.length);
+      return;
     }
+    if (key.downArrow) {
+      setCursor((c) => (c + 1) % options.length);
+      return;
+    }
+    if (key.return) {
+      onDecide(options[cursor]!.decision);
+      return;
+    }
+    if (key.escape) {
+      onDecide({ type: 'deny' });
+      return;
+    }
+    // 数字键直达对应选项。必须限定单字符:粘贴会作为一整个 input 到达,
+    // parseInt 只取首位数字,"3 files changed…" 会被当成按下 3 而误选。
+    if (/^[1-9]$/.test(input)) {
+      const digit = Number(input);
+      if (digit <= options.length) {
+        onDecide(options[digit - 1]!.decision);
+        return;
+      }
+    }
+    // 老习惯的快捷键。
+    if (input.toLowerCase() === 'y') onDecide({ type: 'allow' });
+    else if (input.toLowerCase() === 'n') onDecide({ type: 'deny' });
   });
 
   const isDiff = request.detail?.includes('@@') ?? false;
@@ -50,19 +101,23 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
       ) : null}
 
       <Box marginTop={1} flexDirection="column">
-        <Text>
-          <Text color={theme.success}>y</Text>
-          <Text color={theme.dim}> {t('perm.allowOnce')} · </Text>
-          <Text color={theme.error}>n</Text>
-          <Text color={theme.dim}> {t('perm.deny')}</Text>
-        </Text>
-        {request.suggestedRule ? (
-          <Text color={theme.dim}>
-            <Text color={theme.accent}>a</Text> {t('perm.alwaysSession')} ·{' '}
-            <Text color={theme.accent}>A</Text> {t('perm.alwaysPersist')}{' '}
-            <Text color={theme.dim}>({request.suggestedRule})</Text>
-          </Text>
-        ) : null}
+        {options.map((option, index) => {
+          const active = index === cursor;
+          const color = option.danger ? theme.error : active ? theme.accent : undefined;
+          return (
+            <Text key={option.label} color={active ? color ?? theme.accent : undefined}>
+              {active ? `${glyphs.pointer} ` : '  '}
+              <Text color={theme.dim}>{index + 1}.</Text>{' '}
+              <Text color={color} bold={active}>
+                {option.label}
+              </Text>
+              {option.note ? <Text color={theme.dim}> ({option.note})</Text> : null}
+            </Text>
+          );
+        })}
+        <Box marginTop={1}>
+          <Text color={theme.dim}>{t('perm.hint')}</Text>
+        </Box>
       </Box>
     </Box>
   );

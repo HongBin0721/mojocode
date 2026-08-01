@@ -63,7 +63,7 @@ describe('t', () => {
   it('switches catalogs with setLocale', () => {
     setLocale('zh-CN');
     expect(getLocale()).toBe('zh-CN');
-    expect(t('status.ready')).toBe('就绪');
+    expect(t('status.thinking')).toBe('思考中');
     expect(t('notice.modeSet', { mode: 'yolo' })).toBe('权限模式已设为 yolo。');
   });
 });

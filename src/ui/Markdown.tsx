@@ -21,7 +21,7 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
     if (inCode) {
       out.push(
         <Text key={i} color={theme.code}>
-          {`  ${line}` || ' '}
+          {`  ${line}`}
         </Text>,
       );
       return;

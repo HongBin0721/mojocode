@@ -1,6 +1,12 @@
 export type TimelineItem =
   | { key: string; kind: 'user'; text: string }
-  | { key: string; kind: 'assistant'; text: string }
+  | {
+      key: string;
+      kind: 'assistant';
+      text: string;
+      /** 同一条流式回复的后续片段(段落增量提交):渲染时不再带 ● 前缀。 */
+      continuation?: boolean;
+    }
   | { key: string; kind: 'reasoning'; text: string }
   | {
       key: string;

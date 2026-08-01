@@ -3,11 +3,12 @@ import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
+import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import { theme, glyphs, formatToolInput } from './theme.js';
 import { Markdown } from './Markdown.js';
-import { tailWithinRows } from './preview.js';
+import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
 import type { Session } from '../app/bootstrap.js';
@@ -47,6 +48,9 @@ const MODE_DESCRIPTIONS: Record<PermissionMode, MessageKey> = {
   yolo: 'modeopt.yolo',
 };
 
+/** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
+const BUSY_BLOCKED_COMMANDS = new Set(['clear', 'compact', 'model', 'provider']);
+
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   model: 'statusopt.model',
   context: 'statusopt.context',
@@ -67,8 +71,8 @@ const LOCALE_LABELS: Record<Locale, string> = {
  */
 const STREAM_PREVIEW_ROWS = 5;
 const REASONING_PREVIEW_ROWS = 3;
-/** 留给输入框、状态栏、进行中的工具行和各处 marginTop 的余量。 */
-const RESERVED_ROWS = 12;
+/** 留给状态行、输入框、信息栏、进行中的工具行和各处 marginTop 的余量。 */
+const RESERVED_ROWS = 13;
 
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
@@ -87,7 +91,9 @@ export function App({ session }: Props): React.ReactElement {
   const [activeTools, setActiveTools] = useState<ActiveToolCall[]>([]);
   const [permission, setPermission] = useState<PermissionRequest | undefined>();
   const [running, setRunning] = useState(false);
-  const [status, setStatus] = useState(() => t('status.ready'));
+  // 工作状态:undefined 表示空闲(状态行隐藏)。since 在整轮工作中保持
+  // 不变,阶段切换只更新文字和颜色,已用时连续累计。
+  const [work, setWork] = useState<WorkState | undefined>(undefined);
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [usage, setUsage] = useState({ used: 0, window: session.provider.contextWindow, total: 0 });
   const [providerLabel, setProviderLabel] = useState(session.provider.label);
@@ -101,6 +107,16 @@ export function App({ session }: Props): React.ReactElement {
   // 某次重新渲染是否已经发生。
   const resolvePermission = useRef<((decision: PermissionDecision) => void) | undefined>(undefined);
 
+  // 流式累积的权威副本。事件处理器要在 setState 之外读写当前值
+  // (在 updater 里调用 push 属于嵌套 setState,updater 可能被重复执行),
+  // 中断/出错时也要靠它把残留内容定稿。
+  const activeTextRef = useRef('');
+  const activeReasoningRef = useRef('');
+
+  // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段渲染时
+  // 不再带 ● 前缀,只缩进对齐。
+  const textCommitted = useRef(false);
+
   // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = useRef(new Map<string, unknown>());
 
@@ -110,35 +126,71 @@ export function App({ session }: Props): React.ReactElement {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
   }, []);
 
+  // 阶段切换保留 since(已用时连续);空闲时进入新阶段则从现在起计时。
+  const beginWork = useCallback((phase: WorkPhase, detail?: string) => {
+    setWork((prev) => ({ phase, detail, since: prev?.since ?? Date.now() }));
+  }, []);
+  const endWork = useCallback(() => setWork(undefined), []);
+
   // 把 agent 的事件总线接入 React 状态。
   useEffect(() => {
+    const flushText = () => {
+      const text = activeTextRef.current;
+      activeTextRef.current = '';
+      setActiveText('');
+      if (text.trim())
+        push({ kind: 'assistant', text: text.trimEnd(), continuation: textCommitted.current });
+      textCommitted.current = false;
+    };
+    const flushReasoning = () => {
+      const text = activeReasoningRef.current;
+      activeReasoningRef.current = '';
+      setActiveReasoning('');
+      if (text.trim()) push({ kind: 'reasoning', text: text.trim() });
+    };
+    // 中断(Esc)和流级异常不会给进行中的文本块补发 text-end/reasoning-end
+    // (SDK 直接关闭流),已生成的部分回答必须在这里定稿,否则它永远进不了
+    // 时间线,还会残留在累积区、被拼进下一轮的回答。进行中的工具行同样
+    // 等不到 tool-end,一并清掉——结果若之后仍到达,tool-end 照常落时间线。
+    const flushInterrupted = () => {
+      flushReasoning();
+      flushText();
+      setActiveTools([]);
+    };
+
     const off = session.bus.on((event: AgentEvent) => {
       switch (event.type) {
         case 'turn-start':
           push({ kind: 'user', text: event.userText });
-          setStatus(t('status.thinking'));
+          // 新一轮从零开始计时,不沿用上一轮残留的 since。
+          setWork({ phase: 'thinking', since: Date.now() });
           break;
 
-        case 'text-delta':
-          setActiveText((prev) => prev + event.text);
-          setStatus(t('status.responding'));
+        case 'text-delta': {
+          activeTextRef.current += event.text;
+          // 段落级增量提交:已被空行收尾的段落立即定稿进时间线,预览只留
+          // 正在生成的尾段。动态区高度天然受控,已生成内容随时可回看。
+          const { committed, rest } = splitCommitted(activeTextRef.current);
+          if (committed) {
+            push({ kind: 'assistant', text: committed, continuation: textCommitted.current });
+            textCommitted.current = true;
+            activeTextRef.current = rest;
+          }
+          setActiveText(activeTextRef.current);
+          beginWork('responding');
           break;
+        }
         case 'text-end':
-          setActiveText((prev) => {
-            if (prev.trim()) push({ kind: 'assistant', text: prev.trimEnd() });
-            return '';
-          });
+          flushText();
           break;
 
         case 'reasoning-delta':
-          setActiveReasoning((prev) => prev + event.text);
-          setStatus(t('status.thinking'));
+          activeReasoningRef.current += event.text;
+          setActiveReasoning(activeReasoningRef.current);
+          beginWork('thinking');
           break;
         case 'reasoning-end':
-          setActiveReasoning((prev) => {
-            if (prev.trim()) push({ kind: 'reasoning', text: prev.trim() });
-            return '';
-          });
+          flushReasoning();
           break;
 
         case 'tool-start':
@@ -152,7 +204,7 @@ export function App({ session }: Props): React.ReactElement {
               startedAt: Date.now(),
             },
           ]);
-          setStatus(t('status.runningTool', { tool: event.toolName }));
+          beginWork('tool', event.toolName);
           break;
 
         case 'tool-end': {
@@ -168,13 +220,13 @@ export function App({ session }: Props): React.ReactElement {
             isError: event.isError,
             durationMs: event.durationMs,
           });
-          setStatus(t('status.thinking'));
+          beginWork('thinking');
           break;
         }
 
         case 'permission-request':
           setPermission(event.request);
-          setStatus(t('status.waiting'));
+          beginWork('waiting');
           break;
 
         case 'step-end':
@@ -187,7 +239,7 @@ export function App({ session }: Props): React.ReactElement {
 
         case 'turn-end':
           setUsage((prev) => ({ ...prev, total: event.usage.cumulativeTotalTokens }));
-          setStatus(t('status.ready'));
+          endWork();
           break;
 
         case 'compaction':
@@ -206,13 +258,15 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'error':
+          flushInterrupted();
           push({ kind: 'error', message: event.error.message });
-          setStatus(t('status.ready'));
+          endWork();
           break;
 
         case 'aborted':
+          flushInterrupted();
           push({ kind: 'notice', level: 'warn', message: t('notice.interrupted') });
-          setStatus(t('status.ready'));
+          endWork();
           break;
 
         default:
@@ -221,7 +275,7 @@ export function App({ session }: Props): React.ReactElement {
     });
 
     return off;
-  }, [session.bus, push]);
+  }, [session.bus, push, beginWork, endWork]);
 
   useEffect(() => session.todos.subscribe(setTodos), [session.todos]);
 
@@ -237,6 +291,9 @@ export function App({ session }: Props): React.ReactElement {
 
   const onDecide = useCallback((decision: PermissionDecision) => {
     setPermission(undefined);
+    // 决定之后 agent 继续跑,状态从"等待确认"回到"思考中";若拒绝导致
+    // 回合结束,turn-end/aborted 会随后把状态清掉。
+    setWork((prev) => (prev ? { phase: 'thinking', since: prev.since } : prev));
     const resolve = resolvePermission.current;
     resolvePermission.current = undefined;
     resolve?.(decision);
@@ -263,19 +320,17 @@ export function App({ session }: Props): React.ReactElement {
     if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
   }, []);
 
-  useInput(
-    (input, key) => {
-      if (key.escape && running) {
-        session.agent.abort();
-      }
-    },
-    { isActive: permission === undefined },
-  );
 
   const runCommand = useCallback(
     async (raw: string) => {
       const [name, ...rest] = raw.slice(1).trim().split(/\s+/);
       const arg = rest.join(' ');
+
+      // 这些命令会改写正在被进行中的流读写的历史/模型,运行中禁止。
+      if (name && BUSY_BLOCKED_COMMANDS.has(name) && session.agent.isRunning) {
+        push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
+        return;
+      }
 
       switch (name) {
         case 'help':
@@ -300,13 +355,13 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'compact':
-          setStatus(t('status.compacting'));
+          setWork({ phase: 'compacting', since: Date.now() });
           setRunning(true);
           await session.agent.compact().catch((err: Error) => {
             push({ kind: 'error', message: t('notice.compactFailed', { message: err.message }) });
           });
           setRunning(false);
-          setStatus(t('status.ready'));
+          endWork();
           break;
 
         case 'mode': {
@@ -336,7 +391,6 @@ export function App({ session }: Props): React.ReactElement {
           }
           setLocale(arg);
           setLocaleState(arg);
-          setStatus(t('status.ready'));
           push({ kind: 'notice', level: 'info', message: t('notice.langSet', { lang: arg }) });
           await saveLanguage(arg).catch((err: Error) => {
             push({ kind: 'notice', level: 'warn', message: t('notice.langSaveFailed', { message: err.message }) });
@@ -408,7 +462,7 @@ export function App({ session }: Props): React.ReactElement {
 
         case 'model': {
           if (!arg) {
-            setStatus(t('status.listingModels'));
+            setWork({ phase: 'listingModels', since: Date.now() });
             try {
               const models = await listModels(session.provider);
               push({
@@ -421,7 +475,7 @@ export function App({ session }: Props): React.ReactElement {
             } catch (err) {
               push({ kind: 'error', message: (err as Error).message });
             }
-            setStatus(t('status.ready'));
+            endWork();
             break;
           }
           try {
@@ -482,10 +536,18 @@ export function App({ session }: Props): React.ReactElement {
         void runCommand(text);
         return;
       }
+      // 工作中提交 → 注入进行中的一轮作为引导;以 agent 的真实运行状态为
+      // 准,不依赖可能滞后的 React state。空闲时 inject 返回 false,走正常
+      // 新一轮。
+      if (session.agent.inject(text)) {
+        push({ kind: 'user', text });
+        push({ kind: 'notice', level: 'info', message: t('notice.guidanceQueued') });
+        return;
+      }
       setRunning(true);
       void session.agent.run(text).finally(() => setRunning(false));
     },
-    [session, runCommand],
+    [session, runCommand, push],
   );
 
   // 枚举参数的取值来源:在命令菜单上回车会进入二级选择器。
@@ -574,24 +636,30 @@ export function App({ session }: Props): React.ReactElement {
           </Box>
         ))}
 
+        {/* 工作状态行:主流 CLI 的位置——流式内容/工具行之下、输入框之上。 */}
+        {work ? <StatusLine phase={work.phase} detail={work.detail} since={work.since} /> : null}
+
         {permission ? (
           <PermissionPrompt request={permission} onDecide={onDecide} />
         ) : (
           <Box flexDirection="column" marginTop={1}>
             <Input
               onSubmit={handleSubmit}
-              disabled={running}
-              placeholder={running ? t('input.working') : t('input.placeholder')}
+              disabled={false}
+              placeholder={running || work ? t('input.steer') : t('input.placeholder')}
               commands={commands}
+              onEscape={() => {
+                if (session.agent.isRunning) session.agent.abort();
+              }}
             />
             <Footer
               contextUsed={usage.used}
               contextWindow={usage.window}
               cumulativeTokens={usage.total}
               todos={todos}
-              status={ctrlCArmed ? t('status.ctrlcAgain') : status}
               model={model}
               segments={statusSegments}
+              notice={ctrlCArmed ? t('status.ctrlcAgain') : undefined}
             />
           </Box>
         )}

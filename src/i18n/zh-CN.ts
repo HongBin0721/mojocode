@@ -3,7 +3,6 @@ import type { en } from './en.js';
 export const zhCN: Record<keyof typeof en, string> = {
   'header.hints': '/ 查看命令 · shift+enter 换行 · esc 中断 · 连按两次 ctrl+c 退出',
 
-  'status.ready': '就绪',
   'status.thinking': '思考中',
   'status.responding': '回复中',
   'status.runningTool': '正在执行 {tool}',
@@ -11,13 +10,14 @@ export const zhCN: Record<keyof typeof en, string> = {
   'status.compacting': '压缩上下文中',
   'status.listingModels': '获取模型列表中',
   'status.ctrlcAgain': '再按一次 ctrl+c 退出',
+  'status.meta': '({s}s · esc 中断)',
 
   'footer.tasks': '任务',
   'footer.ctx': '上下文',
   'footer.total': '累计 {n} tok',
 
   'input.placeholder': '输入任务，/ 查看命令',
-  'input.working': '执行中… esc 可中断',
+  'input.steer': '执行中… 可输入引导消息，回车发送，esc 中断',
   'input.menuHint': '↑/↓ 选择 · 回车执行 · tab 补全 · esc 收起',
   'input.newlineHint': 'shift+enter（或 ctrl+j / 行尾 `\\` + 回车）换行 · 回车发送',
 
@@ -38,6 +38,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'perm.deny': '拒绝',
   'perm.alwaysSession': '本次会话始终允许',
   'perm.alwaysPersist': '始终允许，保存到 .kdg/config.json',
+  'perm.hint': '↑/↓ 选择 · 回车确认 · 1-4 直达 · esc 拒绝',
   'perm.writeTitle': '写入 {path}',
   'perm.runTitle': '执行 `{command}`',
   'perm.mcpTitle': '调用 MCP 工具 {name}',
@@ -91,6 +92,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.statusbarUsage': '用法：/statusbar <model|context|total|todos|none>（当前：{list}）',
   'notice.statusbarSet': '状态栏现在显示：{list}。',
   'notice.statusbarSaveFailed': '状态栏偏好保存失败：{message}',
+  'notice.guidanceQueued': '引导消息将在下一步开始时送达。',
+  'notice.busyCommand': '任务运行中不能使用 /{name}（可先 esc 中断）。',
   'notice.compacted': '已将 {removed} 条消息压缩为 {chars} 字符的摘要。',
   'notice.compactFailed': '压缩失败：{message}',
   'notice.interrupted': '已中断。',

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { Diff } from './Diff.js';
-import { Markdown } from './Markdown.js';
+import { renderMarkdownAnsi } from './markdown-ansi.js';
 import { theme, glyphs, formatDuration, formatToolInput } from './theme.js';
 import type { TimelineItem } from './types.js';
 import { t } from '../i18n/index.js';
@@ -22,11 +22,13 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
       );
 
     case 'assistant':
+      // 定稿消息用 marked 完整渲染(表格/代码高亮);● 前缀占 2 列,宽度相应
+      // 收窄。增量提交的后续片段不重复画 ●,只缩进对齐。
       return (
         <Box marginTop={1}>
-          <Text color={theme.assistant}>{glyphs.bullet} </Text>
+          <Text color={theme.assistant}>{item.continuation ? '  ' : `${glyphs.bullet} `}</Text>
           <Box flexDirection="column" flexGrow={1}>
-            <Markdown text={item.text} />
+            <Text>{renderMarkdownAnsi(item.text, (process.stdout.columns ?? 80) - 2)}</Text>
           </Box>
         </Box>
       );
