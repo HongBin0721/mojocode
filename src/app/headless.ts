@@ -4,18 +4,18 @@ import type { Session } from './bootstrap.js';
 import { t } from '../i18n/index.js';
 
 export interface HeadlessOptions {
-  /** Emit newline-delimited JSON events instead of prose. */
+  /** 输出以换行分隔的 JSON 事件,而不是普通文本。 */
   json: boolean;
   stream: NodeJS.WriteStream;
-  /** Where progress/tool lines go, so stdout stays pipeable. */
+  /** 进度/工具行的输出目标,使 stdout 保持可用于管道。 */
   errStream: NodeJS.WriteStream;
 }
 
 /**
- * Non-interactive rendering for `kdg -p "..."`.
+ * `kdg -p "..."` 的非交互式渲染。
  *
- * Assistant text goes to stdout so `kdg -p ... | less` works; everything else
- * (tool calls, notices, errors) goes to stderr.
+ * assistant 文本输出到 stdout,保证 `kdg -p ... | less` 可用;其他内容
+ * (工具调用、通知、错误)都输出到 stderr。
  */
 export function renderHeadless(session: Session, options: HeadlessOptions): void {
   const { stream, errStream, json } = options;
@@ -67,9 +67,8 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
 }
 
 /**
- * Permission policy for non-interactive runs: there is nobody to ask, so
- * anything that would prompt is denied with an explanation the model can act on.
- * `--yolo` / `--accept-edits` are the escape hatches.
+ * 非交互运行的权限策略:没有人可以询问,所以任何需要确认的操作都会被
+ * 拒绝,并附上模型可据此行动的解释。`--yolo` / `--accept-edits` 是逃生门。
  */
 export function headlessAsker(mode: PermissionMode): PermissionAsker {
   return async (request): Promise<PermissionDecision> => ({
@@ -80,7 +79,7 @@ export function headlessAsker(mode: PermissionMode): PermissionAsker {
   });
 }
 
-/** Errors are not JSON-serialisable by default; unwrap the useful bits. */
+/** Error 默认无法 JSON 序列化;把有用的部分拆出来。 */
 function serializable(event: AgentEvent): unknown {
   if (event.type === 'error') {
     return { type: 'error', message: event.error.message, recoverable: event.recoverable };

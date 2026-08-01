@@ -3,11 +3,11 @@ import { z } from 'zod';
 export const permissionModeSchema = z.enum(['readonly', 'ask', 'acceptEdits', 'yolo']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
-/** A user-declared provider entry. Built-in ids only need the fields they override. */
+/** 用户声明的 provider 条目。内置 id 只需填写要覆盖的字段。 */
 export const providerConfigSchema = z.object({
   baseURL: z.url().optional(),
   apiKey: z.string().optional(),
-  /** Env var name to read the key from, overriding the preset's list. */
+  /** 读取 API key 的环境变量名,覆盖预设中的列表。 */
   apiKeyEnv: z.string().optional(),
   model: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
@@ -36,21 +36,21 @@ export const mcpServerSchema = z.discriminatedUnion('type', [
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 
 export const permissionRulesSchema = z.object({
-  /** Bash command prefixes that never prompt, e.g. "git status", "npm test". */
+  /** 无需确认即可执行的 bash 命令前缀,例如 "git status"、"npm test"。 */
   allowBash: z.array(z.string()).default([]),
-  /** Bash command prefixes that are always refused, on top of the built-in denylist. */
+  /** 在内置拒绝列表之外,总是被拒绝的 bash 命令前缀。 */
   denyBash: z.array(z.string()).default([]),
-  /** Globs (relative to workspace root) that may be written without prompting. */
+  /** 无需确认即可写入的 glob(相对于工作区根目录)。 */
   allowWrite: z.array(z.string()).default([]),
-  /** Globs that may never be read or written. */
+  /** 永远不允许读或写的 glob。 */
   denyPath: z.array(z.string()).default([]),
 });
 export type PermissionRules = z.infer<typeof permissionRulesSchema>;
 
 export const configSchema = z.object({
-  /** Active provider id — a built-in preset or a key of `providers`. */
+  /** 当前激活的 provider id——内置预设或 `providers` 中的键。 */
   provider: z.string().default('deepseek'),
-  /** Overrides the active provider's default model. */
+  /** 覆盖当前 provider 的默认模型。 */
   model: z.string().optional(),
   providers: z.record(z.string(), providerConfigSchema).default({}),
   permissionMode: permissionModeSchema.default('ask'),
@@ -61,21 +61,21 @@ export const configSchema = z.object({
     denyPath: [],
   }),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
-  /** Hard cap on agent loop steps per user turn — the anti-runaway backstop. */
+  /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
   maxSteps: z.number().int().positive().default(50),
   temperature: z.number().min(0).max(2).optional(),
-  /** Compact the history once input tokens exceed this fraction of the window. */
+  /** 输入 token 超过上下文窗口的这一比例时压缩历史。 */
   compactThreshold: z.number().min(0.1).max(0.95).default(0.8),
-  /** Force a context window, overriding the provider preset. Useful for testing compaction. */
+  /** 强制指定上下文窗口,覆盖 provider 预设。测试压缩逻辑时很有用。 */
   maxContext: z.number().int().positive().optional(),
-  /** Extra instructions appended to the system prompt. */
+  /** 追加到系统提示词末尾的额外指令。 */
   systemPromptAppend: z.string().optional(),
-  /** UI language. `auto` follows KDG_LANG / LANG. */
+  /** UI 语言。`auto` 跟随 KDG_LANG / LANG。 */
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
 });
 
 export type Config = z.infer<typeof configSchema>;
 
-/** Same shape as `Config` but every field optional — what a config file may contain. */
+/** 与 `Config` 形状相同但所有字段可选——即配置文件里可以写的内容。 */
 export const partialConfigSchema = configSchema.partial();
 export type PartialConfig = z.input<typeof partialConfigSchema>;

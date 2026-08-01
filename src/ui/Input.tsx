@@ -6,16 +6,16 @@ interface Props {
   onSubmit: (value: string) => void;
   disabled: boolean;
   placeholder: string;
-  /** Slash commands offered in the autocomplete strip. */
+  /** 自动补全条中展示的斜杠命令。 */
   commands: Array<{ name: string; description: string }>;
 }
 
 /**
- * Prompt line with history, cursor movement and slash-command completion.
+ * 带历史记录、光标移动和斜杠命令补全的输入行。
  *
- * Hand-rolled instead of ink-text-input because we need multi-line entry
- * (ctrl+j), history recall, and the command palette to share one key handler —
- * layering those on top of a controlled third-party input ends up messier.
+ * 手写而不用 ink-text-input,是因为多行输入(ctrl+j)、历史回溯和命令
+ * 面板需要共用同一个按键处理器——把这些叠加在受控的第三方输入组件上
+ * 反而更乱。
  */
 export function Input({ onSubmit, disabled, placeholder, commands }: Props): React.ReactElement {
   const [value, setValue] = useState('');
@@ -41,7 +41,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
         return;
       }
 
-      // ctrl+j inserts a newline; terminals do not reliably deliver shift+enter.
+      // ctrl+j 插入换行;终端并不能可靠地传递 shift+enter。
       if (key.ctrl && input === 'j') {
         insert('\n');
         return;
@@ -107,7 +107,7 @@ export function Input({ onSubmit, disabled, placeholder, commands }: Props): Rea
         return;
       }
 
-      // Ignore control sequences that reach us as raw input.
+      // 忽略以原始输入形式到达的控制序列。
       if (key.ctrl || key.meta || key.escape) return;
       if (input) insert(input);
 

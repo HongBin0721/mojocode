@@ -54,9 +54,9 @@ describe('PermissionGate', () => {
     await gate.checkWrite('src/a.ts');
     expect(ask).toHaveBeenCalledOnce();
     await gate.checkWrite('src/nested/b.ts');
-    expect(ask).toHaveBeenCalledOnce(); // covered by the remembered rule
+    expect(ask).toHaveBeenCalledOnce(); // 被记住的规则覆盖
     await gate.checkWrite('other/c.ts');
-    expect(ask).toHaveBeenCalledTimes(2); // outside it, so it asks again
+    expect(ask).toHaveBeenCalledTimes(2); // 在规则之外,所以再次询问
   });
 
   it('remembers an allowed bash prefix for the session', async () => {

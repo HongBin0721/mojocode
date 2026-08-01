@@ -22,11 +22,11 @@ type Step =
   | { kind: 'done' };
 
 /**
- * Interactive API key setup: pick a provider, paste the key (masked), verify
- * it against the live /models endpoint, save to ~/.kdg/config.json.
+ * 交互式 API key 配置:选择 provider,粘贴 key(掩码显示),对线上
+ * /models 端点验证,保存到 ~/.kdg/config.json。
  *
- * Runs standalone as `kdg auth`, and is auto-launched by `kdg` when no key is
- * configured anywhere.
+ * 可通过 `kdg auth` 独立运行;当任何地方都没有配置 key 时,`kdg` 会
+ * 自动启动它。
  */
 export function AuthWizard(): React.ReactElement {
   const { exit } = useApp();
@@ -34,10 +34,10 @@ export function AuthWizard(): React.ReactElement {
   const [step, setStep] = useState<Step>({ kind: 'select' });
   const [cursor, setCursor] = useState(0);
   const [buffer, setBuffer] = useState('');
-  // Providers whose key was saved during this run, so ✓ updates immediately.
+  // 本次运行中已保存 key 的 provider,让 ✓ 能立即更新。
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
 
-  // Validation runs as an effect so the "validating…" frame paints first.
+  // 验证放在 effect 中执行,让"验证中…"那一帧先绘制出来。
   useEffect(() => {
     if (step.kind !== 'validating') return;
     const { id, key } = step;
@@ -97,7 +97,7 @@ export function AuthWizard(): React.ReactElement {
         } else if (key.backspace || key.delete) {
           setBuffer((b) => b.slice(0, -1));
         } else if (!key.ctrl && !key.meta && input) {
-          // Paste arrives as one multi-character chunk; strip line breaks.
+          // 粘贴会作为一个多字符块到达;去掉其中的换行符。
           setBuffer((b) => b + input.replace(/[\r\n]/g, ''));
         }
         break;

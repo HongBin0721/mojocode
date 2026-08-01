@@ -7,9 +7,8 @@ export interface TodoItem {
 }
 
 /**
- * A scratchpad the model uses to keep multi-step work on track. The list lives
- * in memory and is mirrored into the UI footer, which is most of its value:
- * the user can see what the agent thinks it is doing.
+ * 模型用来跟进多步骤工作的草稿板。列表保存在内存中,并同步镜像到 UI
+ * 底栏——这正是它的主要价值:用户可以看到 agent 自认为正在做什么。
  */
 export class TodoStore {
   private items: TodoItem[] = [];

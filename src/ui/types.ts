@@ -16,10 +16,10 @@ export type TimelineItem =
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string };
 
-/** Plain `Omit` collapses a union to its common keys; this keeps each variant. */
+/** 普通 `Omit` 会把联合类型折叠成公共键;这个写法保留每个变体。 */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/** A timeline item before the renderer assigns it a key. */
+/** 渲染器分配 key 之前的时间线条目。 */
 export type NewTimelineItem = DistributiveOmit<TimelineItem, 'key'>;
 
 export interface ActiveToolCall {

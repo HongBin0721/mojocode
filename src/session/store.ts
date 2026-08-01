@@ -11,7 +11,7 @@ export interface SessionMeta {
   model: string;
   createdAt: string;
   updatedAt: string;
-  /** First user message, used as the label in `kdg --resume`. */
+  /** 第一条用户消息,用作 `kdg --resume` 中的标签。 */
   title: string;
   messageCount: number;
 }
@@ -30,11 +30,10 @@ interface MessagesRecord {
 type Record_ = MetaRecord | MessagesRecord;
 
 /**
- * Append-only JSONL per session.
+ * 每个会话一个只追加的 JSONL 文件。
  *
- * The full, *uncompacted* history is written here. Compaction only shrinks what
- * we send to the model — the transcript on disk stays complete so `--resume`
- * and post-hoc debugging see everything that actually happened.
+ * 这里写入的是完整的、*未压缩的*历史。压缩只缩减发给模型的内容——磁盘上
+ * 的记录保持完整,这样 `--resume` 和事后调试能看到实际发生的一切。
  */
 export class SessionStore {
   private constructor(
@@ -90,7 +89,7 @@ export class SessionStore {
       try {
         record = JSON.parse(line) as Record_;
       } catch {
-        continue; // a partial trailing write shouldn't make the session unopenable
+        continue; // 末尾的不完整写入不应导致会话无法打开
       }
       if (record.kind === 'meta') meta = record.meta;
       else if (record.kind === 'messages') messages = record.messages;
@@ -100,7 +99,7 @@ export class SessionStore {
     return new SessionStore(file, meta, messages);
   }
 
-  /** Newest first. Optionally filtered to one workspace. */
+  /** 最新的在前。可选按工作区过滤。 */
   static async list(root?: string): Promise<SessionMeta[]> {
     const dir = sessionsDir();
     let names: string[];

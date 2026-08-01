@@ -8,7 +8,7 @@ interface Props {
   maxLines?: number;
 }
 
-/** Renders a unified diff with +/- colouring, collapsing very long patches. */
+/** 渲染带 +/- 着色的 unified diff,过长的补丁会折叠。 */
 export function Diff({ patch, maxLines = 40 }: Props): React.ReactElement {
   const all = patch.split('\n').filter((line) => !line.startsWith('---') && !line.startsWith('+++'));
   const lines = all.slice(0, maxLines);

@@ -148,8 +148,8 @@ program
         )}\n`,
       );
     } catch (error) {
-      // A missing API key must not stop `config` from showing the config —
-      // seeing it is usually the first step in fixing the key.
+      // 缺少 API key 不能阻止 `config` 展示配置——
+      // 看到配置通常是修复 key 的第一步。
       if (error instanceof ConfigError) {
         process.stderr.write(`${t('cli.warning', { message: error.message })}\n\n`);
         const { config, sources } = await loadRawConfig({ root });
@@ -163,13 +163,13 @@ program
     }
   });
 
-/** Best-effort: honour the config's `language` even before full config load. */
+/** 尽力而为:在完整配置加载前也尊重配置中的 `language`。 */
 async function applyConfigLocale(root: string): Promise<void> {
   try {
     const { config } = await loadRawConfig({ root });
     if (config.language !== 'auto') setLocale(detectLocale(config.language));
   } catch {
-    // An unreadable config shouldn't stop the wizard; env detection stands.
+    // 配置读不了也不应阻止向导;环境变量检测的结果继续有效。
   }
 }
 
@@ -182,8 +182,8 @@ async function runMain(
   try {
     loaded = await loadConfig({ root, overrides: overridesFromFlags(flags) });
   } catch (error) {
-    // Interactive session with no key anywhere: offer the setup wizard once,
-    // then retry. Headless (-p) and non-TTY runs fail fast instead.
+    // 交互式会话且到处都找不到 key:提供一次配置向导,然后重试。
+    // headless(-p)和非 TTY 运行则直接快速失败。
     const interactive = process.stdin.isTTY && typeof flags.print !== 'string';
     if (!(error instanceof MissingKeyError) || !interactive) return fail(error);
 

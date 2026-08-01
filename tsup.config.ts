@@ -9,8 +9,8 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  // Keep deps external: bundling React/Ink/AI-SDK into one file buys little and
-  // breaks their internal dynamic requires.
+  // 依赖保持 external:把 React/Ink/AI-SDK 打进一个文件收益甚微,
+  // 还会破坏它们内部的动态 require。
   skipNodeModulesBundle: true,
   banner: { js: '#!/usr/bin/env node' },
 });

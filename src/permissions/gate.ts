@@ -24,12 +24,11 @@ export interface GateOptions {
 }
 
 /**
- * Decides whether a tool call may proceed.
+ * 决定一次工具调用是否可以继续。
  *
- * AI SDK 7 ships a `toolApproval` mechanism, but it suspends the stream and
- * expects the caller to resume with approval messages — built for a
- * client/server round-trip. In a CLI we own the loop, so gating inside
- * `execute()` is both simpler and keeps the stream alive while the user decides.
+ * AI SDK 7 自带 `toolApproval` 机制,但它会挂起流,并要求调用方带着批准
+ * 消息恢复——那是为客户端/服务器往返设计的。在 CLI 里循环由我们自己掌控,
+ * 所以在 `execute()` 内部做门禁既更简单,也能在用户决定期间保持流不中断。
  */
 export class PermissionGate {
   private readonly sessionAllowBash: string[] = [];
@@ -46,20 +45,19 @@ export class PermissionGate {
   }
 
   /**
-   * Replaces the approval callback. The TUI installs its own once mounted; the
-   * bootstrap-time asker is the headless fallback used before that (and by
-   * `-p` mode for the whole run).
+   * 替换批准回调。TUI 挂载后会安装自己的回调;在那之前用的是启动时的
+   * headless 兜底回调(`-p` 模式则全程使用它)。
    */
   setAsker(ask: PermissionAsker): void {
     this.options.ask = ask;
   }
 
   /**
-   * Called before a mutating tool does any work at all.
+   * 在会修改状态的工具做任何工作之前调用。
    *
-   * Separate from `checkWrite` because tools take shortcuts — `write` returns
-   * early when the content is unchanged — and readonly mode must hold even on
-   * those paths, or the guarantee depends on which branch happens to run.
+   * 与 `checkWrite` 分开,是因为工具会走捷径——`write` 在内容未变化时会
+   * 提前返回——而 readonly 模式在这些路径上也必须成立,否则这条保证就
+   * 取决于恰好执行了哪个分支。
    */
   assertCanMutate(what: string): void {
     if (this.options.mode === 'readonly') {
@@ -113,7 +111,7 @@ export class PermissionGate {
     });
   }
 
-  /** MCP tools are opaque, so they always prompt outside yolo mode. */
+  /** MCP 工具是不透明的,所以在非 yolo 模式下总是需要确认。 */
   async checkMcpTool(toolName: string, input: unknown): Promise<void> {
     if (this.options.mode === 'yolo') return;
     if (this.options.mode === 'readonly') {
@@ -169,7 +167,7 @@ export class PermissionGate {
     }
   }
 
-  /** Appends the rule to <workspace>/.kdg/config.json, creating it if needed. */
+  /** 把规则追加到 <workspace>/.kdg/config.json,文件不存在则创建。 */
   private async persist(risk: PermissionRequest['risk'], rule: string): Promise<void> {
     const file = projectConfigPath(this.options.root);
     await fs.mkdir(projectDir(this.options.root), { recursive: true });
@@ -190,13 +188,13 @@ export class PermissionGate {
 
     await fs.writeFile(file, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
 
-    // Keep the in-memory rules in sync so the same file doesn't prompt twice.
+    // 同步更新内存中的规则,避免同一个文件被提示两次。
     if (risk === 'write') this.options.rules.allowWrite.push(rule);
     else this.options.rules.allowBash.push(ruleToPrefix(rule));
   }
 }
 
-/** `src/foo/bar.ts` → `src/foo/**` so approving one file covers its directory. */
+/** `src/foo/bar.ts` → `src/foo/**`,批准一个文件即覆盖其所在目录。 */
 function suggestWriteRule(relativePath: string): string {
   const dir = path.posix.dirname(relativePath);
   return dir === '.' ? relativePath : `${dir}/**`;

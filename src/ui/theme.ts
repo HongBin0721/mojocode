@@ -35,7 +35,7 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
 }
 
-/** Compact one-liner for a tool's arguments, shown next to the tool name. */
+/** 工具参数的紧凑单行摘要,显示在工具名旁边。 */
 export function formatToolInput(toolName: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
   switch (toolName) {

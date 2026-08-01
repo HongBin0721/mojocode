@@ -23,7 +23,7 @@ export interface Session {
   todos: TodoStore;
   mcpStatuses: McpStatus[];
   store: SessionStore;
-  /** Change model and/or provider mid-session; returns the new resolved provider. */
+  /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
   switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
   setMode: (mode: PermissionMode) => void;
   dispose: () => Promise<void>;
@@ -33,9 +33,9 @@ export interface BootstrapOptions {
   root: string;
   loaded: LoadedConfig;
   ask: PermissionAsker;
-  /** Resume this session's history instead of starting fresh. */
+  /** 恢复该会话的历史,而不是从头开始。 */
   resume?: SessionStore;
-  /** Skip MCP connections — used by `-p` when speed matters more. */
+  /** 跳过 MCP 连接——`-p` 模式在速度更重要时使用。 */
   skipMcp?: boolean;
   onMcpStatus?: (status: McpStatus) => void;
 }
@@ -112,8 +112,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       const next = resolveProvider({
         ...config,
         provider: providerId ?? config.provider,
-        // A bare `/model x` keeps the provider; switching provider without a
-        // model must fall back to that provider's default, not carry the old id.
+        // 单独的 `/model x` 保留当前 provider;不带模型切换 provider 时,
+        // 必须回退到该 provider 的默认模型,而不是沿用旧的模型 id。
         model: model ?? (providerId ? undefined : config.model),
       });
       config.provider = next.id;

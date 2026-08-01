@@ -14,7 +14,7 @@ export interface AgentOptions {
   systemPrompt: string;
   tools: ToolSet;
   bus: EventBus;
-  /** Called after each turn with the full history, for session persistence. */
+  /** 每轮结束后以完整历史调用,用于会话持久化。 */
   onHistoryChange?: (messages: ModelMessage[]) => void;
 }
 
@@ -34,7 +34,7 @@ export class Agent {
     this.messages = messages;
   }
 
-  /** Swap the model mid-session (`/model`, `/provider`). History carries over. */
+  /** 会话中途切换模型(`/model`、`/provider`)。历史会保留。 */
   updateModel(model: LanguageModel, provider: ResolvedProvider): void {
     this.options.model = model;
     this.options.provider = provider;
@@ -56,7 +56,7 @@ export class Agent {
     };
   }
 
-  /** Cancels the in-flight turn. Safe to call when nothing is running. */
+  /** 取消进行中的一轮。没有任务在跑时调用也是安全的。 */
   abort(): void {
     this.controller?.abort();
   }
@@ -65,7 +65,7 @@ export class Agent {
     return this.controller !== undefined;
   }
 
-  /** Manually trigger compaction, e.g. from the `/compact` command. */
+  /** 手动触发压缩,例如来自 `/compact` 命令。 */
   async compact(): Promise<void> {
     const result = await compactMessages(this.messages, this.options.model);
     if (result.removedMessages === 0) return;
@@ -132,9 +132,9 @@ export class Agent {
       abortSignal: signal,
       temperature: config.temperature,
       ...(provider.parallelToolCalls ? {} : { providerOptions: { [provider.id]: { parallel_tool_calls: false } } }),
-      // A tool throwing must not kill the turn: the model needs to see the
-      // error so it can correct course (wrong path, stale oldString, denied
-      // permission). Returning the message as the tool output does that.
+      // 工具抛出异常绝不能终结整轮对话:模型需要看到错误才能纠正方向
+      // (路径写错、oldString 过期、权限被拒)。把错误消息作为工具输出
+      // 返回即可做到这一点。
       onError: ({ error }) => {
         bus.emit({ type: 'error', error: normalizeError(error, provider), recoverable: true });
       },
@@ -214,10 +214,9 @@ export class Agent {
       }
     }
 
-    // `responseMessages` accumulates the assistant + tool messages across every
-    // step. (`result.response.messages` is the *last* step only — using it drops
-    // the tool calls and results from earlier steps, so the next turn would see
-    // an assistant that apparently did nothing.)
+    // `responseMessages` 累积了每一步的 assistant 消息和工具消息。
+    // (`result.response.messages` 只包含*最后*一步——用它会丢掉前面各步的
+    // 工具调用和结果,下一轮看到的 assistant 就像什么都没做过一样。)
     this.messages.push(...(await result.responseMessages));
 
     const finishReason = await result.finishReason;
@@ -258,9 +257,8 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Turns provider errors into something a user can act on. The three platforms
- * all return OpenAI-shaped errors but with different wording, and the raw
- * message is usually unhelpful on its own.
+ * 把 provider 的错误转成用户能据此采取行动的信息。三个平台返回的都是
+ * OpenAI 形状的错误,但措辞各不相同,原始消息本身通常没什么帮助。
  */
 function normalizeError(error: unknown, provider: ResolvedProvider): Error {
   const base = error instanceof Error ? error : new Error(errorMessage(error));

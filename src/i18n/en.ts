@@ -1,10 +1,10 @@
 /**
- * English catalog — the source of truth. Every locale must provide exactly
- * these keys (enforced by the type of the other catalogs and a parity test).
+ * 英文目录——权威来源。每种语言必须提供完全相同的这组键
+ * (由其他目录的类型和一个一致性测试来保证)。
  *
- * Only user-facing UI text lives here. Anything fed back to the model (tool
- * errors, permission-denial reasons) stays English in the code: it is part of
- * the prompt, and mixing languages there degrades tool-use behaviour.
+ * 这里只存放面向用户的 UI 文本。凡是要回传给模型的内容(工具错误、
+ * 权限拒绝原因)在代码中保持英文:它们是提示词的一部分,混用语言会
+ * 降低工具调用的表现。
  */
 export const en = {
   'header.hints': '/help for commands · esc to interrupt · ctrl+c twice to exit',

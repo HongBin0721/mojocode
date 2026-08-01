@@ -67,8 +67,8 @@ async function connectOne(name: string, config: McpServerConfig): Promise<McpCon
 }
 
 /**
- * Connects to every enabled server. A server that fails to start must not stop
- * the session — its error surfaces in `/mcp` and the rest still work.
+ * 连接所有已启用的 server。某个 server 启动失败不能中断会话——其错误
+ * 会显示在 `/mcp` 中,其余 server 照常工作。
  */
 export async function connectMcpServers(
   servers: Record<string, McpServerConfig>,

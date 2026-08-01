@@ -3,7 +3,7 @@ import path from 'node:path';
 
 export const APP_NAME = 'kdg';
 
-/** `~/.kdg` — global config, session store, logs. */
+/** `~/.kdg`——全局配置、会话存储、日志。 */
 export function globalDir(): string {
   return path.join(os.homedir(), `.${APP_NAME}`);
 }
@@ -20,7 +20,7 @@ export function logPath(): string {
   return path.join(globalDir(), 'debug.log');
 }
 
-/** `<workspace>/.kdg` — per-project config, checked into the repo if desired. */
+/** `<workspace>/.kdg`——项目级配置,如有需要可提交进仓库。 */
 export function projectDir(root: string): string {
   return path.join(root, `.${APP_NAME}`);
 }

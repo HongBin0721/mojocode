@@ -38,7 +38,7 @@ export interface EnvironmentInfo {
   isGitRepo: boolean;
   gitBranch?: string;
   projectFiles: string[];
-  /** Contents of AGENTS.md / KDG.md if present. */
+  /** AGENTS.md / KDG.md 的内容(如果存在)。 */
   projectInstructions?: string;
 }
 
@@ -48,7 +48,7 @@ async function readFirstExisting(root: string, names: string[]): Promise<string 
       const content = await fs.readFile(path.join(root, name), 'utf8');
       if (content.trim()) return content.trim().slice(0, 20_000);
     } catch {
-      // try the next candidate
+      // 尝试下一个候选文件
     }
   }
   return undefined;

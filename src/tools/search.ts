@@ -23,7 +23,7 @@ const MAX_MATCHES = 300;
 
 let ripgrepAvailable: boolean | undefined;
 
-/** ripgrep is 10-100x faster on real repos; the JS fallback keeps us portable. */
+/** 在真实仓库上 ripgrep 快 10-100 倍;JS 回退实现保证可移植性。 */
 async function hasRipgrep(): Promise<boolean> {
   if (ripgrepAvailable !== undefined) return ripgrepAvailable;
   try {
@@ -60,7 +60,7 @@ async function grepWithRipgrep(
     maxBuffer: 10 * 1024 * 1024,
   });
 
-  // rg exits 1 when there are simply no matches — not an error for us.
+  // rg 在没有任何匹配时以退出码 1 结束——对我们来说这不算错误。
   if (result.exitCode !== 0 && result.exitCode !== 1) {
     throw new Error(`ripgrep failed: ${result.stderr || `exit ${result.exitCode}`}`);
   }
@@ -97,7 +97,7 @@ async function grepWithJs(
     let content: string;
     try {
       const buffer = await fs.readFile(path.join(root, file));
-      if (buffer.subarray(0, 8000).includes(0)) continue; // binary
+      if (buffer.subarray(0, 8000).includes(0)) continue; // 二进制文件
       content = buffer.toString('utf8');
     } catch {
       continue;

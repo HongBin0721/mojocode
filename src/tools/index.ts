@@ -26,10 +26,9 @@ export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet 
 }
 
 /**
- * A one-line summary for the collapsed tool card in the UI. Keeping this here
- * rather than in the components means the headless `-p` renderer shows the
- * exact same text. UI-only, so it is localized — unlike tool *results*, which
- * go back to the model and stay English.
+ * UI 中折叠工具卡片的一行摘要。放在这里而不是组件里,是为了让 headless
+ * `-p` 渲染器显示完全相同的文本。它只用于 UI,所以做了本地化——不同于
+ * 工具*结果*,后者要回传给模型,保持英文。
  */
 export function summarizeToolResult(toolName: string, output: unknown): string {
   const o = output as Record<string, unknown> | undefined;

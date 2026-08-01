@@ -10,16 +10,16 @@ import { globalConfigPath, projectConfigPath } from './paths.js';
 import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider } from './providers.js';
 
 export interface LoadOptions {
-  /** Workspace root, used to find `<root>/.kdg/config.json`. */
+  /** 工作区根目录,用于定位 `<root>/.kdg/config.json`。 */
   root: string;
-  /** Values from command-line flags — highest precedence. */
+  /** 来自命令行参数的值——优先级最高。 */
   overrides?: PartialConfig;
   env?: NodeJS.ProcessEnv;
 }
 
 export class ConfigError extends Error {}
 
-/** Distinguished so the CLI can offer the interactive `kdg auth` wizard. */
+/** 单独区分出来,以便 CLI 能提供交互式的 `kdg auth` 向导。 */
 export class MissingKeyError extends ConfigError {
   constructor(
     message: string,
@@ -57,7 +57,7 @@ async function readLayer(file: string): Promise<PartialConfig> {
   return parsed.data as PartialConfig;
 }
 
-/** Env vars that map onto top-level config keys. Provider API keys are handled separately. */
+/** 映射到顶层配置键的环境变量。provider 的 API key 另行单独处理。 */
 function envLayer(env: NodeJS.ProcessEnv): PartialConfig {
   const layer: PartialConfig = {};
   if (env.KDG_PROVIDER) layer.provider = env.KDG_PROVIDER;
@@ -70,9 +70,9 @@ function envLayer(env: NodeJS.ProcessEnv): PartialConfig {
 }
 
 /**
- * Shallow merge per key, with `providers`, `permissions` and `mcpServers` merged
- * one level deeper so a project config can add a single MCP server without
- * wiping the ones defined globally.
+ * 按键做浅合并,其中 `providers`、`permissions` 和 `mcpServers` 会多深入
+ * 一层合并,这样项目配置可以只新增一个 MCP server,而不会抹掉全局定义的
+ * 其他条目。
  */
 function mergeLayers(layers: PartialConfig[]): PartialConfig {
   const out: PartialConfig = {};
@@ -93,7 +93,7 @@ function mergeLayers(layers: PartialConfig[]): PartialConfig {
   return out;
 }
 
-/** The fully resolved provider the agent will talk to. */
+/** agent 实际对话的、完全解析后的 provider。 */
 export interface ResolvedProvider {
   id: string;
   label: string;
@@ -109,7 +109,7 @@ export interface ResolvedProvider {
 export interface LoadedConfig {
   config: Config;
   provider: ResolvedProvider;
-  /** Files that actually contributed, in precedence order. For `kdg config`. */
+  /** 实际生效的配置文件,按优先级排序。供 `kdg config` 使用。 */
   sources: string[];
 }
 
@@ -167,8 +167,8 @@ export function resolveProvider(
 }
 
 /**
- * Layered merge only — no provider resolution, so this succeeds even when no
- * API key is set. `kdg config` uses it to show the config that would fix that.
+ * 只做分层合并——不解析 provider,因此即使没有设置 API key 也能成功。
+ * `kdg config` 用它来展示配置,帮助用户定位如何修复缺失的 key。
  */
 export async function loadRawConfig(
   options: LoadOptions,
@@ -197,7 +197,7 @@ export async function loadRawConfig(
   return { config, sources };
 }
 
-/** Layered load: defaults < ~/.kdg/config.json < <root>/.kdg/config.json < env < flags. */
+/** 分层加载:默认值 < ~/.kdg/config.json < <root>/.kdg/config.json < 环境变量 < 命令行参数。 */
 export async function loadConfig(options: LoadOptions): Promise<LoadedConfig> {
   const { config, sources } = await loadRawConfig(options);
   return { config, provider: resolveProvider(config, options.env ?? process.env), sources };

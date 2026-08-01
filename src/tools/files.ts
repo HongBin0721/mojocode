@@ -13,12 +13,12 @@ function looksBinary(buffer: Buffer): boolean {
   return sample.includes(0);
 }
 
-/** Renders a compact unified diff for the permission prompt and the UI. */
+/** 渲染紧凑的 unified diff,供权限确认提示和 UI 使用。 */
 export function renderDiff(relativePath: string, before: string, after: string): string {
   const patch = createTwoFilesPatch(relativePath, relativePath, before, after, '', '', {
     context: 3,
   });
-  // Drop the redundant `Index:`/`===` preamble createTwoFilesPatch emits.
+  // 去掉 createTwoFilesPatch 输出的冗余 `Index:`/`===` 头部。
   const body = patch.split('\n').slice(2).join('\n');
   return truncate(body, 8000);
 }

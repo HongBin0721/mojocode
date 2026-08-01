@@ -6,9 +6,8 @@ import type { TimelineItem } from './types.js';
 import { t } from '../i18n/index.js';
 
 /**
- * One finished timeline entry. Rendered inside Ink's <Static>, so this component
- * is mounted exactly once per item and then never re-rendered — which is what
- * keeps long sessions from crawling.
+ * 一条已完成的时间线条目。渲染在 Ink 的 <Static> 内,因此该组件对每个
+ * 条目只挂载一次,之后永不重新渲染——这正是长会话不会越来越卡的原因。
  */
 export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
@@ -85,7 +84,7 @@ function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) 
         <Text color={theme.dim}>{glyphs.branch} </Text>
         <Text color={item.isError ? theme.error : theme.dim}>
           {truncateInline(item.summary, 160)}
-          {/* bash already reports its own duration in the summary. */}
+          {/* bash 已经在摘要里报告了自己的耗时。 */}
           {!item.isError && item.toolName !== 'bash' && item.durationMs > 1500
             ? ` · ${formatDuration(item.durationMs)}`
             : ''}

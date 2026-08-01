@@ -1,27 +1,26 @@
 /**
- * The contract between the agent core and whatever is rendering it.
+ * agent 核心与其渲染层之间的契约。
  *
- * The core never imports React. It emits these events and awaits permission
- * decisions through a callback, so the exact same loop drives the Ink TUI and
- * the non-interactive `-p` mode.
+ * 核心从不引入 React。它发出这些事件,并通过回调等待权限决定,因此同一个
+ * 循环既驱动 Ink TUI,也驱动非交互式的 `-p` 模式。
  */
 
 export type PermissionDecision =
   | { type: 'allow' }
-  /** Allow, and remember this pattern for the rest of the session. */
+  /** 允许,并在本会话余下时间里记住这个模式。 */
   | { type: 'allow-always'; rule: string }
-  /** Allow, and persist the rule into <workspace>/.kdg/config.json. */
+  /** 允许,并把规则持久化到 <workspace>/.kdg/config.json。 */
   | { type: 'allow-persist'; rule: string }
   | { type: 'deny'; reason?: string };
 
 export interface PermissionRequest {
   id: string;
   toolName: string;
-  /** One-line summary, e.g. `bash: npm test` or `write: src/index.ts`. */
+  /** 一行摘要,例如 `bash: npm test` 或 `write: src/index.ts`。 */
   title: string;
-  /** Optional detail body — a diff preview, the full command, etc. */
+  /** 可选的详情正文——diff 预览、完整命令等。 */
   detail?: string;
-  /** The rule that `allow-always` would add, e.g. `Bash(npm test:*)`. */
+  /** `allow-always` 会添加的规则,例如 `Bash(npm test:*)`。 */
   suggestedRule?: string;
   risk: 'read' | 'write' | 'execute';
 }
@@ -30,7 +29,7 @@ export interface UsageSnapshot {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** Running total across the whole session, not just this turn. */
+  /** 整个会话的累计总量,而不只是本轮。 */
   cumulativeTotalTokens: number;
   contextWindow: number;
 }
@@ -48,7 +47,7 @@ export type AgentEvent =
       type: 'tool-end';
       callId: string;
       toolName: string;
-      /** Short line for the collapsed view, e.g. `Read 120 lines`. */
+      /** 折叠视图中的简短一行,例如 `Read 120 lines`。 */
       summary: string;
       output: unknown;
       isError: boolean;
@@ -65,10 +64,10 @@ export type AgentEvent =
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
-/** Asks the host (TUI or headless policy) to approve a tool call. */
+/** 请求宿主(TUI 或 headless 策略)批准一次工具调用。 */
 export type PermissionAsker = (request: PermissionRequest) => Promise<PermissionDecision>;
 
-/** Minimal typed emitter — an EventEmitter would lose the discriminated union. */
+/** 极简的类型化事件发射器——用 EventEmitter 会丢失可辨识联合类型。 */
 export class EventBus {
   private handlers = new Set<AgentEventHandler>();
 
@@ -82,7 +81,7 @@ export class EventBus {
       try {
         handler(event);
       } catch {
-        // A broken renderer must never take down the agent loop.
+        // 渲染层出错绝不能拖垮 agent 循环。
       }
     }
   }

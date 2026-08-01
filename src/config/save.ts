@@ -3,9 +3,8 @@ import path from 'node:path';
 import { globalConfigPath } from './paths.js';
 
 /**
- * Read-modify-write on the global config file. The file may hold API keys, so
- * it is always written with mode 0600 (chmod'd explicitly too, since
- * writeFile's mode only applies when the file is created).
+ * 对全局配置文件做读取-修改-写回。文件可能存有 API key,因此总是以 0600
+ * 权限写入(还会显式 chmod,因为 writeFile 的 mode 只在文件新建时生效)。
  */
 export async function updateGlobalConfig(
   mutate: (config: Record<string, unknown>) => void,
@@ -28,20 +27,20 @@ export async function updateGlobalConfig(
 }
 
 export interface SaveApiKeyOptions {
-  /** Also make this provider the default. */
+  /** 同时把该 provider 设为默认。 */
   setDefault?: boolean;
-  /** Override the target file — used by tests. */
+  /** 覆盖目标文件——测试用。 */
   file?: string;
 }
 
-/** Sets the top-level default provider without touching stored keys. */
+/** 设置顶层默认 provider,不动已保存的 key。 */
 export async function setDefaultProvider(providerId: string, file?: string): Promise<string> {
   return updateGlobalConfig((config) => {
     config.provider = providerId;
   }, file);
 }
 
-/** Stores `providers.<id>.apiKey`, preserving whatever else the file contains. */
+/** 保存 `providers.<id>.apiKey`,保留文件中的其他内容。 */
 export async function saveApiKey(
   providerId: string,
   apiKey: string,

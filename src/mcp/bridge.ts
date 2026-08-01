@@ -4,11 +4,10 @@ import type { PermissionGate } from '../permissions/gate.js';
 import { truncate } from '../tools/context.js';
 
 /**
- * Converts MCP tools into AI SDK tools.
+ * 把 MCP 工具转换成 AI SDK 工具。
  *
- * Deliberately hand-rolled rather than using AI SDK's experimental MCP client:
- * this way the permission gate sits in front of every call, and an AI SDK
- * upgrade cannot silently change how MCP tools behave.
+ * 有意手写而不用 AI SDK 的实验性 MCP client:这样权限门禁能挡在每次调用
+ * 前面,AI SDK 升级也不会悄悄改变 MCP 工具的行为。
  */
 export function bridgeMcpTools(connections: McpConnection[], gate: PermissionGate): ToolSet {
   const tools: ToolSet = {};
@@ -16,15 +15,15 @@ export function bridgeMcpTools(connections: McpConnection[], gate: PermissionGat
 
   for (const connection of connections) {
     for (const mcpTool of connection.tools) {
-      // Namespace so two servers exposing `search` don't collide.
+      // 加命名空间,避免两个 server 都暴露 `search` 时发生冲突。
       let name = `mcp__${connection.name}__${mcpTool.name}`.replace(/[^a-zA-Z0-9_]/g, '_');
       if (taken.has(name)) name = `${name}_${taken.size}`;
       taken.add(name);
 
       tools[name] = tool({
         description: mcpTool.description ?? `Tool "${mcpTool.name}" from MCP server "${connection.name}".`,
-        // MCP hands us raw JSON Schema; jsonSchema() passes it through without
-        // a zod round-trip that would lose constraints.
+        // MCP 给的是原始 JSON Schema;jsonSchema() 直接透传,避免经过
+        // zod 往返转换而丢失约束。
         inputSchema: jsonSchema(mcpTool.inputSchema as Record<string, unknown>),
         execute: async (input) => {
           await gate.checkMcpTool(name, input);
@@ -47,7 +46,7 @@ export function bridgeMcpTools(connections: McpConnection[], gate: PermissionGat
   return tools;
 }
 
-/** MCP content is a list of typed blocks; flatten to text the model can read. */
+/** MCP 的 content 是一组带类型的块;压平成模型可读的文本。 */
 function renderContent(content: unknown): string {
   if (!Array.isArray(content)) return typeof content === 'string' ? content : '';
 

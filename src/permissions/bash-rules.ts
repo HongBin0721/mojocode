@@ -1,14 +1,13 @@
 /**
- * Bash command inspection.
+ * Bash 命令检查。
  *
- * This is a heuristic layer, not a security boundary — a determined model can
- * always obfuscate a command. The real boundary is the user confirming the
- * command they see. What this buys us is (a) not prompting for obviously safe
- * reads, and (b) hard-refusing a small set of patterns that are catastrophic
- * and never worth a "y" typed on autopilot.
+ * 这是一个启发式层,不是安全边界——铁了心的模型总能混淆命令。真正的边界
+ * 是用户对自己看到的命令进行确认。这一层的价值在于:(a) 对明显安全的读
+ * 操作不再打扰用户;(b) 对一小撮后果灾难性、绝不值得顺手按个 "y" 的模式
+ * 直接硬拒绝。
  */
 
-/** Commands that are read-only enough to run without prompting in `ask` mode. */
+/** 足够只读、在 `ask` 模式下无需确认即可运行的命令。 */
 export const SAFE_PREFIXES = [
   'ls',
   'pwd',
@@ -50,7 +49,7 @@ export const SAFE_PREFIXES = [
   'cargo test',
 ];
 
-/** Patterns refused outright. `deny` beats every allowlist and every mode except yolo. */
+/** 直接拒绝的模式。`deny` 优先于所有允许列表和除 yolo 外的所有模式。 */
 const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
   { pattern: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rR][a-zA-Z]*f|\brm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]/, why: 'recursive force delete' },
   { pattern: /\brm\s+(-\S+\s+)*\/(\s|$)/, why: 'delete of /' },
@@ -68,15 +67,15 @@ const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
 
 export interface CommandVerdict {
   kind: 'deny' | 'safe' | 'needs-approval';
-  /** Present when `kind === 'deny'`. */
+  /** 当 `kind === 'deny'` 时存在。 */
   reason?: string;
-  /** Rule string offered for "always allow", e.g. `Bash(npm test:*)`. */
+  /** 供"总是允许"使用的规则字符串,例如 `Bash(npm test:*)`。 */
   suggestedRule: string;
 }
 
 /**
- * Splits on shell operators so `git status && rm -rf /` is judged on both
- * halves rather than only the benign prefix.
+ * 按 shell 操作符切分,使 `git status && rm -rf /` 的两半都会被审查,
+ * 而不是只看无害的前半段。
  */
 export function splitCommands(command: string): string[] {
   return command
@@ -89,12 +88,12 @@ function normalize(command: string): string {
   return command.trim().replace(/\s+/g, ' ');
 }
 
-/** `npm test --watch` → `Bash(npm test:*)`; single-word commands → `Bash(ls:*)`. */
+/** `npm test --watch` → `Bash(npm test:*)`;单词命令 → `Bash(ls:*)`。 */
 export function suggestRule(command: string): string {
   const words = normalize(command).split(' ');
   const head = words[0] ?? '';
   const second = words[1];
-  // Subcommand-style tools read better with two words in the rule.
+  // 子命令风格的工具,规则里带上两个词更易读。
   const multiword = new Set(['git', 'npm', 'pnpm', 'yarn', 'go', 'cargo', 'docker', 'kubectl', 'uv', 'pip']);
   const prefix = multiword.has(head) && second && !second.startsWith('-') ? `${head} ${second}` : head;
   return `Bash(${prefix}:*)`;
@@ -108,8 +107,8 @@ function matchesPrefix(command: string, prefix: string): boolean {
 }
 
 /**
- * Converts a rule like `Bash(npm test:*)` back to the prefix `npm test`.
- * Plain strings are treated as prefixes directly.
+ * 把 `Bash(npm test:*)` 这样的规则还原为前缀 `npm test`。
+ * 普通字符串直接当作前缀处理。
  */
 export function ruleToPrefix(rule: string): string {
   const match = /^Bash\((.*?)(?::\*)?\)$/.exec(rule.trim());
@@ -125,9 +124,9 @@ export function judgeCommand(command: string, options: JudgeOptions): CommandVer
   const segments = splitCommands(command);
   const suggestedRule = suggestRule(segments[0] ?? command);
 
-  // Match the denylist against the whole command *and* each segment: patterns
-  // like `curl … | sh` span a pipe and would vanish if we only saw segments,
-  // while `git status && rm -rf /` only trips on the second segment.
+  // 拒绝列表要同时匹配整条命令*和*每个片段:像 `curl … | sh` 这样的模式
+  // 横跨管道,只看片段就会漏掉;而 `git status && rm -rf /` 只有第二个
+  // 片段才会触发。
   for (const { pattern, why } of HARD_DENY) {
     if (pattern.test(command)) {
       return { kind: 'deny', reason: `refused: ${why} (\`${command.trim()}\`)`, suggestedRule };
@@ -143,7 +142,7 @@ export function judgeCommand(command: string, options: JudgeOptions): CommandVer
     }
   }
 
-  // Any redirection or command substitution can write files, so never auto-allow it.
+  // 任何重定向或命令替换都可能写文件,所以永远不自动放行。
   if (/[>`]|\$\(/.test(command)) {
     return { kind: 'needs-approval', suggestedRule };
   }

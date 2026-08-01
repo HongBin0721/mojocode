@@ -4,12 +4,11 @@ import type { LanguageModel } from 'ai';
 import type { ResolvedProvider } from '../config/load.js';
 
 /**
- * Builds an AI SDK language model for a resolved provider.
+ * 为解析后的 provider 构建 AI SDK 语言模型。
  *
- * DeepSeek gets its dedicated package so `reasoning_content` is mapped into
- * proper reasoning parts. Everything else goes through the generic
- * OpenAI-compatible provider with the baseURL used verbatim (see the note in
- * providers.ts about GLM's `/api/paas/v4` path).
+ * DeepSeek 使用其专用包,这样 `reasoning_content` 能被映射为正规的
+ * reasoning 部分。其余都走通用的 OpenAI 兼容 provider,baseURL 原样使用
+ * (参见 providers.ts 中关于 GLM `/api/paas/v4` 路径的说明)。
  */
 export function createModel(provider: ResolvedProvider): LanguageModel {
   if (provider.sdk === 'deepseek') {
@@ -36,8 +35,8 @@ export interface ModelInfo {
 }
 
 /**
- * Hits `GET {baseURL}/models`. Used by `kdg models` so users can discover the
- * ids their key actually has, instead of guessing at fast-moving names.
+ * 请求 `GET {baseURL}/models`。供 `kdg models` 使用,让用户能查到自己的
+ * key 实际拥有的模型 id,而不是去猜那些变化频繁的名字。
  */
 export async function listModels(provider: ResolvedProvider): Promise<ModelInfo[]> {
   const url = `${provider.baseURL.replace(/\/$/, '')}/models`;

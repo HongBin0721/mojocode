@@ -1,34 +1,33 @@
 /**
- * Single source of truth for the built-in provider presets.
+ * 内置 provider 预设的唯一权威来源。
  *
- * Model IDs on all three platforms churn fast (DeepSeek retired `deepseek-chat`
- * in favour of the v4 line, GLM is already on 5.x, Kimi on K2.6/K3). So the
- * `defaultModel` here is only a starting point — it is always overridable from
- * config, and `kdg models --provider <id>` hits the live `/models` endpoint so
- * users can see what their key actually has access to.
+ * 三个平台的模型 ID 都变得很快(DeepSeek 用 v4 系列取代了 `deepseek-chat`,
+ * GLM 已到 5.x,Kimi 已到 K2.6/K3)。所以这里的 `defaultModel` 只是一个起点——
+ * 它始终可以在配置中覆盖,而且 `kdg models --provider <id>` 会请求线上的
+ * `/models` 端点,让用户看到自己的 key 实际能访问哪些模型。
  */
 
 export interface ProviderPreset {
-  /** Human-readable name shown in the UI. */
+  /** UI 中展示的可读名称。 */
   label: string;
   /**
-   * Full base URL including any version path. NOTE: we never append `/v1`
-   * ourselves — GLM serves at `/api/paas/v4/chat/completions` and an extra
-   * `/v1` produces a 404. Whatever is written here is used verbatim.
+   * 包含版本路径在内的完整 base URL。注意:我们从不自行追加 `/v1`——
+   * GLM 的服务路径是 `/api/paas/v4/chat/completions`,多加一个 `/v1`
+   * 会得到 404。这里写什么就原样用什么。
    */
   baseURL: string;
-  /** Env vars checked in order for the API key. */
+  /** 按顺序检查以获取 API key 的环境变量。 */
   apiKeyEnv: string[];
-  /** Console page where the user creates a key — shown by `kdg auth`. */
+  /** 用户创建 key 的控制台页面——由 `kdg auth` 展示。 */
   keyUrl: string;
   defaultModel: string;
-  /** Known context windows, used for the ctx meter and compaction threshold. */
+  /** 已知的上下文窗口大小,用于 ctx 用量显示和压缩阈值。 */
   contextWindows: Record<string, number>;
-  /** Fallback when the model isn't in `contextWindows`. */
+  /** 模型不在 `contextWindows` 中时的兜底值。 */
   defaultContextWindow: number;
-  /** Some endpoints choke on parallel tool calls; opt out per provider. */
+  /** 有些端点无法处理并行工具调用;可按 provider 关闭。 */
   parallelToolCalls: boolean;
-  /** Use the dedicated @ai-sdk/deepseek package instead of openai-compatible. */
+  /** 使用专用的 @ai-sdk/deepseek 包,而不是 openai-compatible。 */
   sdk?: 'deepseek';
 }
 
@@ -90,7 +89,7 @@ export const PROVIDER_PRESETS = {
     contextWindows: {
       'deepseek-v4-flash': 1_000_000,
       'deepseek-v4-pro': 1_000_000,
-      // Legacy aliases, kept so old configs still report a sane window.
+      // 旧版别名,保留下来让老配置仍能报告合理的窗口大小。
       'deepseek-chat': 128_000,
       'deepseek-reasoner': 128_000,
     },
@@ -158,7 +157,7 @@ export function isBuiltinProvider(id: string): id is BuiltinProviderId {
   return id in PROVIDER_PRESETS;
 }
 
-/** Reads the first non-empty env var listed in the preset. */
+/** 读取预设中列出的第一个非空环境变量。 */
 export function apiKeyFromEnv(
   envNames: readonly string[],
   env: NodeJS.ProcessEnv = process.env,

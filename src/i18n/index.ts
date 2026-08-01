@@ -12,9 +12,8 @@ const catalogs: Record<Locale, Record<MessageKey, string>> = {
 };
 
 /**
- * Resolution order: explicit preference (config `language`) > KDG_LANG >
- * LC_ALL > LC_MESSAGES > LANG. Any `zh*` value maps to zh-CN; everything else
- * falls back to English.
+ * 解析顺序:显式偏好(配置项 `language`)> KDG_LANG > LC_ALL >
+ * LC_MESSAGES > LANG。任何 `zh*` 值都映射到 zh-CN;其余一律回退到英文。
  */
 export function detectLocale(pref?: string, env: NodeJS.ProcessEnv = process.env): Locale {
   if (pref && isLocale(pref)) return pref;
@@ -26,8 +25,8 @@ export function isLocale(value: string): value is Locale {
   return (LOCALES as string[]).includes(value);
 }
 
-// Env-detected at import so strings evaluated at module load (commander help)
-// are already localized. Config/`/lang` override it later via setLocale().
+// 在 import 时就按环境变量检测,使模块加载时求值的字符串(commander 帮助)
+// 已经是本地化的。之后配置或 `/lang` 会通过 setLocale() 覆盖。
 let current: Locale = detectLocale();
 
 export function setLocale(locale: Locale): void {
@@ -38,7 +37,7 @@ export function getLocale(): Locale {
   return current;
 }
 
-/** Looks up `key` in the active catalog and fills `{name}` placeholders. */
+/** 在当前语言目录中查找 `key`,并填充 `{name}` 占位符。 */
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
   const template = catalogs[current][key] ?? en[key];
   if (!params) return template;

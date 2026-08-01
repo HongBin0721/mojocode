@@ -31,7 +31,7 @@ describe('judgeCommand', () => {
   });
 
   it('judges every segment, not just the first', () => {
-    // The benign prefix must not launder the dangerous tail.
+    // 无害的前缀不能为危险的尾部"洗白"。
     expect(judgeCommand('git status && rm -rf /tmp/x', none).kind).toBe('deny');
     expect(judgeCommand('ls && npm install', none).kind).toBe('needs-approval');
   });
@@ -54,7 +54,7 @@ describe('judgeCommand', () => {
   });
 
   it('matches prefixes on word boundaries, not substrings', () => {
-    // "npm test" must not allow "npm testfoo-publish".
+    // "npm test" 不能放行 "npm testfoo-publish"。
     const options = { allow: ['Bash(npm test:*)'], deny: [] };
     expect(judgeCommand('npm testify --publish', options).kind).toBe('needs-approval');
     expect(judgeCommand('npm test --watch', options).kind).toBe('safe');

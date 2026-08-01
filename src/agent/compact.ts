@@ -19,12 +19,11 @@ export interface CompactionResult {
 }
 
 /**
- * Decides whether the history needs compacting.
+ * 判断历史是否需要压缩。
  *
- * We use the provider-reported input token count from the last step rather than
- * a local tokenizer: the three providers tokenise Chinese very differently and
- * a JS estimate would be off by enough to either compact too early or blow the
- * window.
+ * 我们使用上一步中 provider 上报的输入 token 数,而不是本地分词器:三家
+ * provider 对中文的分词方式差异很大,JS 估算的误差足以导致过早压缩或者
+ * 直接撑爆上下文窗口。
  */
 export function shouldCompact(
   lastInputTokens: number | undefined,
@@ -36,12 +35,11 @@ export function shouldCompact(
 }
 
 /**
- * Replaces the older part of the history with a summary, keeping the most
- * recent exchanges verbatim.
+ * 用摘要替换历史中较早的部分,最近的几轮对话原样保留。
  *
- * The cut point is snapped forward to the next user message so we never split
- * an assistant tool-call from its tool-result — providers reject a tool result
- * whose call is missing, and that failure mode is confusing to debug.
+ * 切分点会向后对齐到下一条用户消息,确保永远不会把 assistant 的工具调用
+ * 和它的工具结果拆开——provider 会拒绝找不到对应调用的工具结果,而这种
+ * 失败模式调试起来非常费解。
  */
 export async function compactMessages(
   messages: ModelMessage[],

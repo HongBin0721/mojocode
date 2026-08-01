@@ -15,7 +15,7 @@ import { BUILTIN_PROVIDER_IDS } from '../config/providers.js';
 import { listModels } from '../model/registry.js';
 import { getLocale, isLocale, setLocale, t } from '../i18n/index.js';
 
-/** Built per render pass so /lang and the config language both apply. */
+/** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
 function buildCommands() {
   return [
     { name: 'help', description: t('cmd.help') },
@@ -56,18 +56,18 @@ export function App({ session }: Props): React.ReactElement {
   const [ctrlCArmed, setCtrlCArmed] = useState(false);
   const [locale, setLocaleState] = useState(getLocale());
 
-  // The pending permission resolver lives in a ref: resolving it must not
-  // depend on a re-render having happened.
+  // 待处理的权限 resolver 放在 ref 里:resolve 它绝不能依赖于
+  // 某次重新渲染是否已经发生。
   const resolvePermission = useRef<((decision: PermissionDecision) => void) | undefined>(undefined);
 
-  // `tool-end` does not carry the call's input, so remember it from `tool-start`.
+  // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = useRef(new Map<string, unknown>());
 
   const push = useCallback((item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
   }, []);
 
-  // Wire the agent's event bus into React state.
+  // 把 agent 的事件总线接入 React 状态。
   useEffect(() => {
     const off = session.bus.on((event: AgentEvent) => {
       switch (event.type) {
@@ -182,7 +182,7 @@ export function App({ session }: Props): React.ReactElement {
 
   useEffect(() => session.todos.subscribe(setTodos), [session.todos]);
 
-  // Bridge the gate's permission asker to the prompt component.
+  // 把权限门禁的询问回调桥接到确认提示组件。
   useEffect(() => {
     session.gate.setAsker((request) => {
       setPermission(request);
@@ -398,7 +398,7 @@ export function App({ session }: Props): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      {/* Finished entries render once and stay in the terminal scrollback. */}
+      {/* 已完成的条目只渲染一次,留在终端回滚缓冲区中。 */}
       <Static items={items}>{(item) => <TimelineEntry key={item.key} item={item} />}</Static>
 
       <Box flexDirection="column" marginTop={1}>
