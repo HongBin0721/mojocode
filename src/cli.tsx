@@ -127,7 +127,7 @@ program
     for (const meta of sessions) {
       process.stdout.write(
         `${meta.id.slice(0, 8)}  ${meta.updatedAt.slice(0, 16).replace('T', ' ')}  ` +
-          `${meta.provider}/${meta.model}  ${meta.messageCount} msgs  ${meta.title}\n`,
+          `${meta.provider}/${meta.model}  ${t('cli.msgs', { n: meta.messageCount })}  ${meta.title}\n`,
       );
     }
   });
@@ -139,7 +139,7 @@ program
     const root = process.cwd();
     try {
       const loaded = await loadConfig({ root });
-      process.stdout.write(`sources: ${loaded.sources.join(', ') || '(defaults only)'}\n\n`);
+      process.stdout.write(`${t('cli.sources', { list: loaded.sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
       process.stdout.write(
         `${JSON.stringify(
           { ...loaded.config, providers: redactKeys(loaded.config.providers) },
@@ -151,9 +151,9 @@ program
       // A missing API key must not stop `config` from showing the config —
       // seeing it is usually the first step in fixing the key.
       if (error instanceof ConfigError) {
-        process.stderr.write(`warning: ${error.message}\n\n`);
+        process.stderr.write(`${t('cli.warning', { message: error.message })}\n\n`);
         const { config, sources } = await loadRawConfig({ root });
-        process.stdout.write(`sources: ${sources.join(', ') || '(defaults only)'}\n\n`);
+        process.stdout.write(`${t('cli.sources', { list: sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
         process.stdout.write(
           `${JSON.stringify({ ...config, providers: redactKeys(config.providers) }, null, 2)}\n`,
         );

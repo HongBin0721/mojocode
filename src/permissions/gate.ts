@@ -79,7 +79,7 @@ export class PermissionGate {
     await this.request({
       id: randomUUID(),
       toolName: 'write',
-      title: `Write ${relativePath}`,
+      title: t('perm.writeTitle', { path: relativePath }),
       detail,
       suggestedRule: suggestWriteRule(relativePath),
       risk: 'write',
@@ -106,8 +106,8 @@ export class PermissionGate {
     await this.request({
       id: randomUUID(),
       toolName: 'bash',
-      title: `Run \`${command}\``,
-      detail: cwdLabel ? `in ${cwdLabel}` : undefined,
+      title: t('perm.runTitle', { command }),
+      detail: cwdLabel ? t('perm.inDir', { dir: cwdLabel }) : undefined,
       suggestedRule: verdict.suggestedRule,
       risk: 'execute',
     });
@@ -127,7 +127,7 @@ export class PermissionGate {
     await this.request({
       id: randomUUID(),
       toolName,
-      title: `Call MCP tool ${toolName}`,
+      title: t('perm.mcpTitle', { name: toolName }),
       detail: safeJson(input),
       suggestedRule: rule,
       risk: 'execute',
@@ -205,7 +205,7 @@ function suggestWriteRule(relativePath: string): string {
 function safeJson(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value, null, 2);
-    return text && text.length > 2000 ? `${text.slice(0, 2000)}\n… (truncated)` : text;
+    return text && text.length > 2000 ? `${text.slice(0, 2000)}\n${t('ui.truncated')}` : text;
   } catch {
     return undefined;
   }

@@ -1,3 +1,5 @@
+import { t } from '../i18n/index.js';
+
 export const theme = {
   accent: 'cyan',
   user: 'green',
@@ -45,11 +47,11 @@ export function formatToolInput(toolName: string, input: unknown): string {
     case 'glob':
       return String(i.pattern ?? '');
     case 'grep':
-      return `${String(i.pattern ?? '')}${i.include ? ` in ${String(i.include)}` : ''}`;
+      return `${String(i.pattern ?? '')}${i.include ? ` · ${String(i.include)}` : ''}`;
     case 'bash':
       return String(i.command ?? '');
     case 'todo':
-      return `${Array.isArray(i.todos) ? i.todos.length : 0} tasks`;
+      return t('ui.nTasks', { n: Array.isArray(i.todos) ? i.todos.length : 0 });
     default: {
       const text = JSON.stringify(i);
       return text.length > 80 ? `${text.slice(0, 80)}…` : text;

@@ -39,7 +39,7 @@ export function Footer({
       ) : null}
       <Box>
         <Text color={theme.dim}>{status}</Text>
-        <Text color={theme.dim}> · ctx </Text>
+        <Text color={theme.dim}> · {t('footer.ctx')} </Text>
         <Text color={pct > 0.85 ? theme.warn : theme.dim}>
           {formatTokens(contextUsed)}/{formatTokens(contextWindow)}
         </Text>
