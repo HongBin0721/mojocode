@@ -50,10 +50,15 @@ kdg auth            # 别名：kdg login
 **方式 B：环境变量**（共用机器上更安全，写进 `~/.zshrc`）：
 
 ```bash
-export DEEPSEEK_API_KEY=sk-...      # DeepSeek: platform.deepseek.com
-export MOONSHOT_API_KEY=sk-...      # Kimi:     platform.moonshot.cn
-export ZHIPU_API_KEY=...            # GLM:      open.bigmodel.cn
+export DEEPSEEK_API_KEY=sk-...      # DeepSeek:      platform.deepseek.com
+export MOONSHOT_API_KEY=sk-...      # Kimi 开放平台:  platform.moonshot.cn（按量付费）
+export KIMI_CODE_API_KEY=sk-kimi-.. # Kimi Code 订阅: kimi.com/code（包月，密钥仅限 api.kimi.com）
+export ZHIPU_API_KEY=...            # GLM:           open.bigmodel.cn
 ```
+
+> Kimi 有两套产品：开放平台（`kimi` 预设，api.moonshot.cn，按量付费）和
+> Kimi Code 订阅（`kimi-coding` 预设，api.kimi.com/coding/v1，包月）。
+> 两边密钥互不通用，按你买的是哪种选对应预设。
 
 **方式 C：直接写配置文件** `~/.kdg/config.json`：
 

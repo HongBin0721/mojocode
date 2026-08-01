@@ -50,6 +50,24 @@ export const PROVIDER_PRESETS = {
     defaultContextWindow: 128_000,
     parallelToolCalls: true,
   },
+  /**
+   * Kimi Code 订阅（包月会员）与开放平台是两套产品：sk-kimi- 前缀的密钥只在
+   * api.kimi.com 域名下有效，与 api.moonshot.cn 的按量付费密钥互不通用。
+   * OpenAI 兼容端点是 /coding/v1；/coding/ 是给 Claude Code 的 Anthropic 兼容端点。
+   */
+  'kimi-coding': {
+    label: 'Kimi Code (订阅)',
+    baseURL: 'https://api.kimi.com/coding/v1',
+    apiKeyEnv: ['KIMI_CODE_API_KEY'],
+    keyUrl: 'https://www.kimi.com/code',
+    defaultModel: 'kimi-k3',
+    contextWindows: {
+      'kimi-k3': 1_000_000,
+      'kimi-k2.6': 256_000,
+    },
+    defaultContextWindow: 256_000,
+    parallelToolCalls: true,
+  },
   'kimi-intl': {
     label: 'Kimi (Moonshot 国际)',
     baseURL: 'https://api.moonshot.ai/v1',
