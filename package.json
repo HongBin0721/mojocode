@@ -2,6 +2,15 @@
   "name": "mojocode",
   "version": "0.1.0",
   "description": "A terminal coding agent that works with any LLM (Kimi / DeepSeek / GLM / ...)",
+  "license": "MIT",
+  "keywords": [
+    "cli",
+    "ai",
+    "agent",
+    "llm",
+    "tui",
+    "coding-agent"
+  ],
   "type": "module",
   "bin": {
     "mojocode": "./dist/cli.js"
@@ -17,6 +26,7 @@
     "dev": "tsup --watch",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },
