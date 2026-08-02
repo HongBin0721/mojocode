@@ -19,6 +19,11 @@ export interface SlashCommand {
   name: string;
   description: string;
   /**
+   * 别名。菜单里以 `/name (alias)` 展示,输入别名同样能匹配到本命令;
+   * 补全与提交仍用主名,别名的分发由 App 的 runCommand 自行处理。
+   */
+  aliases?: string[];
+  /**
    * 枚举参数的取值来源。提供了它的命令,在菜单上回车会进入二级选择器
    * 而不是直接执行;异步形式用于要请求线上数据的命令(如 /model)。
    */
@@ -28,6 +33,11 @@ export interface SlashCommand {
    * 全部取消时提交 `none`。`current` 标记初始选中集合。
    */
   multi?: boolean;
+}
+
+/** 命令的展示名:主名加括号列出别名,如 `/exit (quit)`。菜单与 /help 共用。 */
+export function formatCommandLabel(c: SlashCommand): string {
+  return `/${c.name}${c.aliases?.length ? ` (${c.aliases.join(', ')})` : ''}`;
 }
 
 interface Props {
@@ -180,7 +190,9 @@ export function Input({
     !value.includes(' ') &&
     !value.includes('\n');
   const matches = showMenu
-    ? commands.filter((c) => c.name.startsWith(value.slice(1).toLowerCase()))
+    ? commands.filter((c) =>
+        [c.name, ...(c.aliases ?? [])].some((n) => n.startsWith(value.slice(1).toLowerCase())),
+      )
     : [];
   const menuCursor = matches.length > 0 ? Math.min(menuIndex, matches.length - 1) : 0;
   // 光标居中的滚动窗口:候选多于一屏时跟随光标滚动,而不是截断列表。
@@ -241,7 +253,8 @@ export function Input({
   function menuTarget(): SlashCommand | undefined {
     if (matches.length === 0) return undefined;
     if (menuIndex === 0) {
-      const exact = matches.find((c) => c.name === value.slice(1).toLowerCase());
+      const typed = value.slice(1).toLowerCase();
+      const exact = matches.find((c) => c.name === typed || c.aliases?.includes(typed));
       if (exact) return exact;
     }
     return matches[menuCursor];
@@ -706,7 +719,7 @@ export function Input({
             return (
               <Text key={c.name} color={index === menuCursor ? theme.accent : undefined}>
                 {index === menuCursor ? `${glyphs.pointer} ` : '  '}
-                <Text color={theme.accent}>/{c.name}</Text>
+                <Text color={theme.accent}>{formatCommandLabel(c)}</Text>
                 {c.options ? <Text color={theme.dim}> ▸</Text> : null}
                 <Text color={theme.dim}> — {c.description}</Text>
               </Text>

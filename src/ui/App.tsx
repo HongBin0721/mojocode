@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
 import { Footer } from './Footer.js';
-import { Input, type CommandOption, type SlashCommand } from './Input.js';
+import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
 import { TodoPanel, todoPanelRows } from './TodoPanel.js';
 import { TimelineEntry } from './Timeline.js';
@@ -48,7 +48,7 @@ import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/
 import { readClipboardImage } from '../app/clipboard.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
-function buildCommands() {
+function buildCommands(): SlashCommand[] {
   return [
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
@@ -65,7 +65,7 @@ function buildCommands() {
     { name: 'mcp', description: t('cmd.mcp') },
     { name: 'cost', description: t('cmd.cost') },
     { name: 'resume', description: t('cmd.resume') },
-    { name: 'exit', description: t('cmd.exit') },
+    { name: 'exit', aliases: ['quit'], description: t('cmd.exit') },
   ];
 }
 
@@ -635,7 +635,7 @@ export function App({ session }: Props): React.ReactElement {
             kind: 'notice',
             level: 'info',
             message: buildCommands()
-              .map((c) => `/${c.name} — ${c.description}`)
+              .map((c) => `${formatCommandLabel(c)} — ${c.description}`)
               .join('\n'),
           });
           break;
