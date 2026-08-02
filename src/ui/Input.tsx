@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
+import { fuzzyFilter } from '../app/file-index.js';
+import type { ImageAttachment } from '../app/attachments.js';
+import type { ClipboardImage } from '../app/clipboard.js';
 
 export interface CommandOption {
   /** 提交给命令的参数值。 */
@@ -28,7 +31,8 @@ export interface SlashCommand {
 }
 
 interface Props {
-  onSubmit: (value: string) => void;
+  /** 第二个参数是随消息发送的图片(ctrl+v 粘贴的占位符所对应的数据)。 */
+  onSubmit: (value: string, images?: ImageAttachment[]) => void;
   disabled: boolean;
   placeholder: string;
   /** 自动补全菜单中展示的斜杠命令。 */
@@ -51,6 +55,19 @@ interface Props {
    * 后 ref 归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
    */
   onPrefillConsumed?: () => void;
+  /**
+   * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
+   * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
+   * 不传则完全关闭 @ 补全。
+   */
+  fileIndex?: () => Promise<string[]>;
+  /**
+   * ctrl+v 时读取剪贴板图片。与 fileIndex 同理由注入:组件不碰子进程,
+   * 测试注假的。不传则 ctrl+v 保持原样(被控制序列吞噬)。
+   */
+  readClipboardImage?: () => Promise<ClipboardImage | undefined>;
+  /** 粘贴失败/为空/超限时的提示(已本地化),由调用方决定呈现方式。 */
+  onImageNotice?: (message: string) => void;
 }
 
 interface SelectorState {
@@ -61,6 +78,13 @@ interface SelectorState {
   /** 多选模式下当前选中的值集合。 */
   selected: Set<string>;
 }
+
+/** 粘贴图片的上限:单张字节数、待发送总字节数与张数(与 @ 引用图片一致)。 */
+const MAX_PASTE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_PASTE_BYTES = 10 * 1024 * 1024;
+const MAX_PENDING_IMAGES = 8;
+/** 粘贴占位符。提交时据此把文本里的占位符与图片数据配对。 */
+const IMAGE_PLACEHOLDER = /\[image #(\d+)\]/g;
 
 /** 二级选择器一屏最多显示的选项数,超出部分滚动。 */
 const SELECTOR_WINDOW = 8;
@@ -87,6 +111,9 @@ export function Input({
   onEscape,
   prefill,
   onPrefillConsumed,
+  fileIndex,
+  readClipboardImage,
+  onImageNotice,
 }: Props): React.ReactElement {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -97,6 +124,25 @@ export function Input({
   const [selector, setSelector] = useState<SelectorState | undefined>(undefined);
   // 递增代号,防止上一次异步加载的选项覆盖已关闭/重开的选择器。
   const selectorGen = useRef(0);
+  // @ 文件菜单的状态与斜杠菜单分开:两者触发与重置语义各自独立。
+  const [fileMenuIndex, setFileMenuIndex] = useState(0);
+  const [fileMenuDismissed, setFileMenuDismissed] = useState(false);
+  /** 用户是否用上下键在文件菜单里选过——回车是否该拦截取决于它。 */
+  const [fileMenuTouched, setFileMenuTouched] = useState(false);
+  const [fileList, setFileList] = useState<string[] | undefined>(undefined);
+  // 同 selectorGen:丢弃过期的异步文件扫描结果。
+  const fileGen = useRef(0);
+  // ctrl+v 粘贴的图片,按占位符编号索引;提交/清空输入时一并清理。
+  const [pastedImages, setPastedImages] = useState<Map<number, ImageAttachment>>(new Map());
+  // 单调递增,挂载期内不回收:历史回翻出来的旧占位符不能与新粘贴撞号。
+  const imageId = useRef(0);
+  const pasteInFlight = useRef(false);
+  // useInput 是同步的而剪贴板读取是异步的:插入占位符时必须用 ref 里的
+  // 最新值,否则读取的几十毫秒里用户打的字会被闭包旧值覆盖。
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
 
   // 外部预填:写入后立刻通知调用方清空,消费权只有一次。
   useEffect(() => {
@@ -111,7 +157,21 @@ export function Input({
   useEffect(() => {
     setMenuIndex(0);
     setMenuDismissed(false);
+    setFileMenuIndex(0);
+    setFileMenuDismissed(false);
+    setFileMenuTouched(false);
   }, [value]);
+
+  // 占位符从文本里消失(整删、ctrl+u/w、清空)时同步丢弃暂存的图片,
+  // 让"已附加 N 张"提示与实际会发送的内容保持一致。
+  useEffect(() => {
+    if (pastedImages.size === 0) return;
+    const present = new Set<number>();
+    for (const match of value.matchAll(IMAGE_PLACEHOLDER)) present.add(Number(match[1]));
+    if ([...pastedImages.keys()].some((id) => !present.has(id))) {
+      setPastedImages((prev) => new Map([...prev].filter(([id]) => present.has(id))));
+    }
+  }, [value, pastedImages]);
 
   const showMenu =
     !selector &&
@@ -129,6 +189,50 @@ export function Input({
     Math.min(menuCursor - Math.floor(MENU_WINDOW / 2), matches.length - MENU_WINDOW),
   );
 
+  // ── @ 文件引用补全 ──
+  // 与斜杠菜单天然互斥:斜杠菜单要求整条以 `/` 开头且无空格,而 @token
+  // 要求 `@` 在行首或空白之后,两个条件不可能同时成立。
+  const fileToken = fileIndex && !selector ? atTokenAt(value, cursor) : undefined;
+  const showFileMenu = fileToken !== undefined && !fileMenuDismissed;
+  const fileLoading = showFileMenu && fileList === undefined;
+  const fileMatches =
+    showFileMenu && fileList ? fuzzyFilter(fileToken.query, fileList) : [];
+  const fileCursor = fileMatches.length > 0 ? Math.min(fileMenuIndex, fileMatches.length - 1) : 0;
+  const fileWindowStart = Math.max(
+    0,
+    Math.min(fileCursor - Math.floor(MENU_WINDOW / 2), fileMatches.length - MENU_WINDOW),
+  );
+  /**
+   * 回车是否作用于文件菜单。模糊匹配是子序列匹配,几乎对任何词都能命中
+   * 点什么;若回车一律插入,`看下 @types/node 的用法` 这类正常行文一按
+   * 回车就被改写成不相干的仓库路径,而不是把消息发出去。因此只在用户
+   * 确有选择意图时才拦截回车:
+   *   - 刚敲下 `@` 还没打字(菜单是纯选择器);
+   *   - 上下键移动过光标;
+   *   - 候选确实以已输入的串开头(路径或文件名前缀)。
+   * tab 不受此限——它本来就是"补全"键。
+   */
+  const fileQuery = fileToken?.query ?? '';
+  const fileEnterSelects =
+    fileMatches.length > 0 &&
+    (fileQuery === '' || fileMenuTouched || isPrefixMatch(fileQuery, fileMatches[fileCursor]!));
+
+  // token 激活时才懒加载文件列表(TTL 缓存在 App 注入的列举器里)。
+  const fileTokenActive = fileToken !== undefined;
+  useEffect(() => {
+    if (!fileTokenActive || !fileIndex) return;
+    const gen = ++fileGen.current;
+    void fileIndex().then(
+      (files) => {
+        if (fileGen.current === gen) setFileList(files);
+      },
+      () => {
+        // 扫描失败静默降级为空列表:补全弹窗消失,输入本身不受影响。
+        if (fileGen.current === gen) setFileList([]);
+      },
+    );
+  }, [fileTokenActive, fileIndex]);
+
   /**
    * 菜单上回车/tab 作用的命令。精确匹配优先于光标位置:`model` 排在 `mode`
    * 之前,输完整的 `/mode` 时光标默认停在 `model` 上,直接取光标项会执行错
@@ -143,14 +247,87 @@ export function Input({
     return matches[menuCursor];
   }
 
+  /** 把文件菜单当前选中项拼进 @token 区间(token 起点到光标),光标移到其后。 */
+  function insertFileSelection() {
+    const path = fileMatches[fileCursor];
+    if (!path || !fileToken) return;
+    const inserted = `@${path} `;
+    setValue(value.slice(0, fileToken.start) + inserted + value.slice(cursor));
+    setCursor(fileToken.start + inserted.length);
+  }
+
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed) return;
+    // 按占位符在文本中的出现顺序配对图片;被删掉的占位符自然收集不到,
+    // 没有背书数据的占位符(历史回翻/手打)退化为字面文本。
+    const images: ImageAttachment[] = [];
+    const seen = new Set<number>();
+    for (const match of trimmed.matchAll(IMAGE_PLACEHOLDER)) {
+      const id = Number(match[1]);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const image = pastedImages.get(id);
+      if (image) images.push(image);
+    }
     setHistory((prev) => [trimmed, ...prev.filter((h) => h !== trimmed)].slice(0, 100));
     setHistoryIndex(undefined);
     setValue('');
     setCursor(0);
-    onSubmit(trimmed);
+    if (pastedImages.size > 0) setPastedImages(new Map());
+    onSubmit(trimmed, images.length > 0 ? images : undefined);
+  }
+
+  /** ctrl+v:异步读剪贴板,成功则在光标处插入 `[image #N]` 并暂存图片。 */
+  function pasteImage() {
+    if (!readClipboardImage || pasteInFlight.current) return;
+    if (pastedImages.size >= MAX_PENDING_IMAGES) {
+      onImageNotice?.(t('notice.tooManyImages', { n: MAX_PENDING_IMAGES }));
+      return;
+    }
+    pasteInFlight.current = true;
+    readClipboardImage().then(
+      (image) => {
+        pasteInFlight.current = false;
+        if (!image) {
+          onImageNotice?.(t('notice.clipboardNoImage'));
+          return;
+        }
+        // base64 比原始字节多约 1/3,按解码后的体积检查。
+        const bytes = image.data.length * 0.75;
+        if (bytes > MAX_PASTE_BYTES) {
+          onImageNotice?.(t('notice.imageTooLarge'));
+          return;
+        }
+        // 总量也要拦:8 张 5MB 的截图会让这一条消息在会话文件里占几十 MB,
+        // 而且此后每一步都要重新上传(压缩只剥离摘要请求里的图片)。
+        const pendingBytes = [...pastedImages.values()].reduce(
+          (sum, img) => sum + img.data.length * 0.75,
+          0,
+        );
+        if (pendingBytes + bytes > MAX_TOTAL_PASTE_BYTES) {
+          onImageNotice?.(t('notice.imagesTooLarge'));
+          return;
+        }
+        const id = ++imageId.current;
+        const ext = image.mediaType === 'image/jpeg' ? 'jpg' : 'png';
+        setPastedImages((prev) =>
+          new Map(prev).set(id, {
+            mediaType: image.mediaType,
+            data: image.data,
+            filename: `clipboard-${id}.${ext}`,
+          }),
+        );
+        const at = cursorRef.current;
+        const placeholder = `[image #${id}]`;
+        setValue(valueRef.current.slice(0, at) + placeholder + valueRef.current.slice(at));
+        setCursor(at + placeholder.length);
+      },
+      () => {
+        pasteInFlight.current = false;
+        onImageNotice?.(t('notice.clipboardReadFailed'));
+      },
+    );
   }
 
   function openSelector(command: SlashCommand) {
@@ -251,6 +428,11 @@ export function Input({
       }
 
       if (key.return) {
+        // 文件菜单打开且用户确有选择意图时,回车插入路径而不是提交。
+        if (fileEnterSelects) {
+          insertFileSelection();
+          return;
+        }
         // 命令菜单打开时,回车作用于菜单里选中的命令。
         if (matches.length > 0) {
           const command = menuTarget()!;
@@ -272,6 +454,10 @@ export function Input({
 
       // 必须排除 shift:shift+tab 是切换权限模式的全局快捷键(App.tsx),
       // ink 把它报成 tab + shift,不排除的话命令菜单一开就被补全吞掉。
+      if (key.tab && !key.shift && fileMatches.length > 0) {
+        insertFileSelection();
+        return;
+      }
       if (key.tab && !key.shift && matches.length > 0) {
         const completed = `/${menuTarget()!.name} `;
         setValue(completed);
@@ -280,7 +466,10 @@ export function Input({
       }
 
       if (key.escape) {
-        if (matches.length > 0) {
+        // 文件菜单可见(含加载中)→ 只收起菜单,绝不落到 onEscape 触发中断。
+        if (fileMatches.length > 0 || fileLoading) {
+          setFileMenuDismissed(true);
+        } else if (matches.length > 0) {
           setMenuDismissed(true);
         } else {
           onEscape?.();
@@ -290,6 +479,14 @@ export function Input({
 
       if (key.backspace || key.delete) {
         if (cursor > 0) {
+          // 光标在图片占位符内部或紧随其后 → 整个占位符一次删除,
+          // 不用一个字符一个字符地退格。
+          const span = placeholderSpanAt(value, cursor);
+          if (span) {
+            setValue(value.slice(0, span.start) + value.slice(span.end));
+            setCursor(span.start);
+            return;
+          }
           setValue(value.slice(0, cursor - 1) + value.slice(cursor));
           setCursor(cursor - 1);
         }
@@ -335,8 +532,23 @@ export function Input({
         setCursor(boundary);
         return;
       }
+      // ctrl+v 粘贴剪贴板图片(cmd+v 被终端拦截为文本粘贴,到不了这里)。
+      if (key.ctrl && input === 'v') {
+        pasteImage();
+        return;
+      }
 
       if (key.upArrow || key.downArrow) {
+        // 文件菜单打开 → 在文件菜单里移动(优先于历史/多行光标逻辑)。
+        if (fileMatches.length > 0) {
+          setFileMenuTouched(true);
+          setFileMenuIndex(
+            key.upArrow
+              ? (fileCursor + fileMatches.length - 1) % fileMatches.length
+              : (fileCursor + 1) % fileMatches.length,
+          );
+          return;
+        }
         // 菜单打开 → 在菜单里移动。
         if (matches.length > 0) {
           setMenuIndex(
@@ -508,6 +720,43 @@ export function Input({
           <Text color={theme.dim}>{t('input.menuHint')}</Text>
         </Box>
       ) : null}
+      {fileLoading || fileMatches.length > 0 ? (
+        <Box flexDirection="column" paddingLeft={2}>
+          {fileLoading ? (
+            <Text color={theme.dim}>
+              {glyphs.running} {t('input.filesLoading')}
+            </Text>
+          ) : (
+            <>
+              {fileWindowStart > 0 ? (
+                <Text color={theme.dim}>{t('selector.moreAbove', { n: fileWindowStart })}</Text>
+              ) : null}
+              {fileMatches.slice(fileWindowStart, fileWindowStart + MENU_WINDOW).map((file, i) => {
+                const index = fileWindowStart + i;
+                return (
+                  <Text key={file} color={index === fileCursor ? theme.accent : undefined}>
+                    {index === fileCursor ? `${glyphs.pointer} ` : '  '}
+                    {file}
+                  </Text>
+                );
+              })}
+              {fileWindowStart + MENU_WINDOW < fileMatches.length ? (
+                <Text color={theme.dim}>
+                  {t('selector.moreBelow', {
+                    n: fileMatches.length - fileWindowStart - MENU_WINDOW,
+                  })}
+                </Text>
+              ) : null}
+              <Text color={theme.dim}>{t('input.fileHint')}</Text>
+            </>
+          )}
+        </Box>
+      ) : null}
+      {pastedImages.size > 0 ? (
+        <Box paddingLeft={2}>
+          <Text color={theme.dim}>{t('input.imagesAttached', { n: pastedImages.size })}</Text>
+        </Box>
+      ) : null}
       {value.includes('\n') ? (
         <Box paddingLeft={2}>
           <Text color={theme.dim}>{t('input.newlineHint')}</Text>
@@ -515,6 +764,46 @@ export function Input({
       ) : null}
     </Box>
   );
+}
+
+/** 候选路径是否以输入串开头(整条路径或文件名),大小写不敏感。 */
+function isPrefixMatch(query: string, candidate: string): boolean {
+  if (!query) return false;
+  const q = query.toLowerCase();
+  const path = candidate.toLowerCase();
+  return path.startsWith(q) || path.slice(path.lastIndexOf('/') + 1).startsWith(q);
+}
+
+/** 光标(退格作用点)所落在的图片占位符区间;不在任何占位符上返回 undefined。 */
+function placeholderSpanAt(
+  value: string,
+  cursor: number,
+): { start: number; end: number } | undefined {
+  for (const match of value.matchAll(IMAGE_PLACEHOLDER)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    // cursor === end 即光标紧跟在 `]` 之后——最常见的"刚粘贴完就退格"。
+    if (cursor > start && cursor <= end) return { start, end };
+  }
+  return undefined;
+}
+
+/**
+ * 从光标处向左识别 @token:扫到最近的空白/行首为止,该位置必须正好是
+ * `@`(即 `@` 在行首或空白之后,`foo@bar.com` 不触发)。返回 token 的
+ * 起始下标与 `@` 到光标之间的查询串;查询串里再出现 `@` 视为非引用。
+ */
+function atTokenAt(
+  value: string,
+  cursor: number,
+): { start: number; query: string } | undefined {
+  let i = cursor - 1;
+  while (i >= 0 && !/\s/.test(value[i]!)) i--;
+  const start = i + 1;
+  if (value[start] !== '@' || start >= cursor) return undefined;
+  const query = value.slice(start + 1, cursor);
+  if (query.includes('@')) return undefined;
+  return { start, query };
 }
 
 /** 每一行在整个字符串中的起始下标。 */

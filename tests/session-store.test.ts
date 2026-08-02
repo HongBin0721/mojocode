@@ -151,6 +151,21 @@ describe('SessionStore 增量保存', () => {
     expect(reopened.state.allowBash).toEqual(['Bash(git:*)']);
   });
 
+  it('含 base64 图片的 parts 消息经 JSONL 往返后完全一致', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const message: ModelMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' },
+      ],
+    } as ModelMessage;
+    await store.save([message]);
+
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages).toEqual([message]);
+  });
+
   it('标题取第一条用户消息', async () => {
     const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
     await store.save([msg('user', '  修复   bug  '), msg('assistant', 'ok')]);

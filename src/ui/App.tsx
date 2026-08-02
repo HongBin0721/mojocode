@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
-import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
@@ -44,6 +43,9 @@ import { listModels } from '../model/registry.js';
 import { supportedEfforts } from '../model/reasoning.js';
 import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 import { INIT_PROMPT } from '../agent/init.js';
+import { createFileLister } from '../app/file-index.js';
+import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
+import { readClipboardImage } from '../app/clipboard.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
 function buildCommands() {
@@ -119,8 +121,28 @@ let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
 
 /**
- * 恢复会话时的初始时间线:一条 divider + 完整回放。空会话返回空数组,
- * Header 照常显示(items 非空即隐藏 Header)。
+ * 启动横幅条目:字段取自 session 的当前值。会话中途 /model、shift+tab
+ * 改掉的值走 App 内的 bannerItem(那边读的是 state 镜像)。
+ */
+function sessionBanner(session: Session): TimelineItem {
+  const mode = session.config.plan
+    ? 'plan'
+    : permissionsLabel({ sandbox: session.config.sandbox, approval: session.config.approval });
+  const connected = session.mcpStatuses.filter((s) => s.connected).length;
+  return {
+    key: nextKey(),
+    kind: 'banner',
+    providerLabel: session.provider.label,
+    model: session.provider.model,
+    root: session.root,
+    mode,
+    mcpSummary: session.mcpStatuses.length > 0 ? `${connected}/${session.mcpStatuses.length}` : undefined,
+  };
+}
+
+/**
+ * 恢复会话时的初始时间线:一条 divider + 完整回放。空会话返回空数组。
+ * 调用方负责在最前面补横幅(sessionBanner / bannerItem)。
  */
 function buildResumeItems(session: Session): TimelineItem[] {
   const messages = session.store.messages;
@@ -144,7 +166,11 @@ export function App({ session }: Props): React.ReactElement {
   const { stdout, write: writeStdout } = useStdout();
 
   // 惰性初始化:`mojocode -r` 恢复的会话在首帧就带着回放的历史时间线。
-  const [items, setItems] = useState<TimelineItem[]>(() => buildResumeItems(session));
+  // 横幅永远是第一条(见 types.ts 的 banner 注释)。
+  const [items, setItems] = useState<TimelineItem[]>(() => [
+    sessionBanner(session),
+    ...buildResumeItems(session),
+  ]);
   /**
    * 每次清空时间线时递增,作为 <Static> 的 key 强制重挂载。
    *
@@ -226,6 +252,13 @@ export function App({ session }: Props): React.ReactElement {
 
   const ctrlCTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const escTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  /**
+   * 已受理但尚未发起 run() 的提交(@ 引用展开是异步的)。这段窗口里
+   * agent 仍是 idle,esc 与 busy 拦截都要把它当作"忙"看待;submitGen
+   * 递增即作废在途提交。
+   */
+  const submitPending = useRef(false);
+  const submitGen = useRef(0);
 
   const push = useCallback((item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
@@ -477,6 +510,24 @@ export function App({ session }: Props): React.ReactElement {
     if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
   }, []);
 
+  // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/model、
+  // shift+tab 等会话中途的改动会反映进去。
+  const bannerItem = useCallback(
+    (): TimelineItem => ({
+      key: nextKey(),
+      kind: 'banner',
+      providerLabel,
+      model,
+      root: session.root,
+      mode: modeLabel,
+      mcpSummary:
+        session.mcpStatuses.length > 0
+          ? `${session.mcpStatuses.filter((s) => s.connected).length}/${session.mcpStatuses.length}`
+          : undefined,
+    }),
+    [providerLabel, model, modeLabel, session],
+  );
+
   // 清屏 + 换 <Static> 身份 + 重放:/resume 与 esc-esc 回退共用。
   // 不清屏直接换内容的话,ink 攒下的 fullStaticOutput 会把旧时间线重播回来
   // (见 staticEpoch 的注释)。
@@ -491,6 +542,17 @@ export function App({ session }: Props): React.ReactElement {
 
   /** esc 的总入口:运行中 → 中断;空闲二连 esc → 回退选择器。 */
   const handleEscape = useCallback(() => {
+    // 提交已受理但 @ 引用还在展开(run 尚未发起):作废这一次提交。
+    // 注意不能就此返回——运行中提交的是引导消息,此时按 esc 要的是中断
+    // 那一轮,只取消引导会表现为"esc 没反应,状态栏却灭了"。
+    if (submitPending.current) {
+      submitGen.current++;
+      submitPending.current = false;
+      if (!session.agent.isRunning) {
+        setRunning(false);
+        return;
+      }
+    }
     if (session.agent.isRunning) {
       session.agent.abort();
       return;
@@ -525,7 +587,7 @@ export function App({ session }: Props): React.ReactElement {
       const replayed = replayTimeline(session.agent.history).map(
         (item) => ({ ...item, key: nextKey() }) as TimelineItem,
       );
-      resetTimeline(replayed);
+      resetTimeline([bannerItem(), ...replayed]);
       // 上下文用量归零:历史刚变短,旧数字会一直挂到下一轮 step-end。
       // 累计消耗保留——那些 token 确实花掉了。
       setUsage((prev) => ({ ...prev, used: 0 }));
@@ -533,7 +595,7 @@ export function App({ session }: Props): React.ReactElement {
       // 原消息放回输入框,编辑后重发即分叉出新的走向。
       setPrefill({ text: entry.text });
     },
-    [session, push, resetTimeline],
+    [session, push, resetTimeline, bannerItem],
   );
 
 
@@ -546,7 +608,7 @@ export function App({ session }: Props): React.ReactElement {
       // 压缩没有 controller,isRunning 期间为 false——不把它算进来的话,
       // /compact 等待摘要返回时还能执行 /clear,压缩随后会把已丢弃的对话
       // 写回内存,并存进那个全新的会话文件。
-      const busy = session.agent.isRunning || session.agent.isCompacting;
+      const busy = session.agent.isRunning || session.agent.isCompacting || submitPending.current;
       if (name && BUSY_BLOCKED_COMMANDS.has(name) && busy) {
         push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
         return;
@@ -590,8 +652,8 @@ export function App({ session }: Props): React.ReactElement {
             // 恰好没变(如时间线本就为空),ink 会跳过重绘,屏幕停在全空。
             writeStdout('\x1b[2J\x1b[3J\x1b[H');
           }
-          // 清空时间线让 Header 重新出现,和启动时的界面一致。
-          setItems([]);
+          // 清空时间线,只留横幅,回到和启动时一致的界面。
+          setItems([bannerItem()]);
           // 同时换掉 <Static> 的身份,让 ink 丢掉已累积的静态输出。
           setStaticEpoch((epoch) => epoch + 1);
           setUsage((prev) => ({ ...prev, used: 0, total: 0 }));
@@ -899,7 +961,9 @@ export function App({ session }: Props): React.ReactElement {
               break;
             }
           }
-          resetTimeline(buildResumeItems(session));
+          // 横幅取 session 值而非 state 镜像:resumeSession 可能刚改写了
+          // provider/model/权限,镜像要到下面的 set 之后才追上。
+          resetTimeline([sessionBanner(session), ...buildResumeItems(session)]);
           // 同步 UI 状态:权限/provider/model 可能都被恢复改写;上下文用量
           // 归零,下一轮 step-end 会带回真实值。todos 由订阅自动更新。
           setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
@@ -923,27 +987,78 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, perms, planActive, modeLabel, think, usage, statusSegments, push, exit, writeStdout, resetTimeline],
+    [session, perms, planActive, modeLabel, think, usage, statusSegments, push, exit, writeStdout, resetTimeline, bannerItem],
   );
+
+  // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
+  const fileLister = useMemo(() => createFileLister(session.root), [session]);
 
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
   // 的 runCommand,上面那串依赖形同虚设,命令永远读到启动时的状态快照。
   const handleSubmit = useCallback(
-    (text: string) => {
+    (text: string, pastedImages?: ImageAttachment[]) => {
       if (text.startsWith('/')) {
         void runCommand(text);
         return;
       }
-      // 工作中提交 → 注入进行中的一轮作为引导;以 agent 的真实运行状态为
-      // 准,不依赖可能滞后的 React state。空闲时 inject 返回 false,走正常
-      // 新一轮。
-      if (session.agent.inject(text)) {
-        push({ kind: 'user', text });
-        push({ kind: 'notice', level: 'info', message: t('notice.guidanceQueued') });
-        return;
-      }
-      setRunning(true);
-      void session.agent.run(text).finally(() => setRunning(false));
+      // 以 agent 的真实运行状态为准,不依赖可能滞后的 React state。展开
+      // @ 引用是异步的,空闲时先亮起运行态保住提交的即时反馈。
+      if (!session.agent.isRunning) setRunning(true);
+      // 回车之后、run() 之前有一段 agent 仍是 idle 的窗口。不标记的话,
+      // 这期间 esc 会去武装回退选择器而不是取消,/clear 之类命令也会绕过
+      // busy 拦截把历史换掉,随后排队的这一轮再往新会话里写。
+      const gen = ++submitGen.current;
+      submitPending.current = true;
+      void (async () => {
+        let expanded = text;
+        const images: ImageAttachment[] = [...(pastedImages ?? [])];
+        try {
+          const result = await expandAtReferences(text, {
+            root: session.root,
+            denyPath: session.config.permissions.denyPath,
+          });
+          expanded = result.expanded;
+          images.push(...result.images);
+          const warnable = warnableSkips(result);
+          if (warnable.length > 0) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.attachSkipped', {
+                list: warnable.map((s) => `@${s.path} (${s.reason})`).join(', '),
+              }),
+            });
+          }
+        } catch {
+          // 展开失败不阻塞提交:按原文发送,文件内容让模型自己用工具读。
+        }
+        // 展开期间按了 esc(或又提交了一次):这一轮作废,不再发起。
+        if (submitGen.current !== gen) {
+          if (!session.agent.isRunning) setRunning(false);
+          return;
+        }
+        submitPending.current = false;
+        // deepseek SDK 会静默丢弃图片 part(只发无人读的 warning),
+        // 用户不提示的话会以为模型看到了图。
+        if (images.length > 0 && session.provider.sdk === 'deepseek') {
+          push({ kind: 'notice', level: 'warn', message: t('notice.providerNoVision') });
+        }
+        // 工作中提交 → 注入进行中的一轮作为引导;时间线显示原文。inject
+        // 落空(展开期间那一轮恰好结束)则顺势降级为新一轮。
+        if (session.agent.inject(expanded, images.length > 0 ? images : undefined)) {
+          push({ kind: 'user', text });
+          push({ kind: 'notice', level: 'info', message: t('notice.guidanceQueued') });
+          return;
+        }
+        setRunning(true);
+        const runOptions = {
+          ...(expanded !== text ? { display: text } : {}),
+          ...(images.length > 0 ? { images } : {}),
+        };
+        await session.agent
+          .run(expanded, Object.keys(runOptions).length > 0 ? runOptions : undefined)
+          .finally(() => setRunning(false));
+      })();
     },
     [session, runCommand, push],
   );
@@ -997,12 +1112,6 @@ export function App({ session }: Props): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locale, perms, planActive, think, model, providerLabel, statusSegments, session]);
 
-  const mcpSummary = useMemo(() => {
-    if (session.mcpStatuses.length === 0) return undefined;
-    const ok = session.mcpStatuses.filter((s) => s.connected).length;
-    return `${ok}/${session.mcpStatuses.length}`;
-  }, [session.mcpStatuses]);
-
   // 工作中且有任务时,状态行下方挂实时任务面板(Claude Code 的 ctrl+t 面板);
   // 空闲时清单仍走 Footer 的单行摘要,面板不重复占位。
   const todoPanelActive = Boolean(work) && todos.length > 0;
@@ -1024,16 +1133,6 @@ export function App({ session }: Props): React.ReactElement {
       </Static>
 
       <Box flexDirection="column" marginTop={1}>
-        {items.length === 0 ? (
-          <Header
-            providerLabel={providerLabel}
-            model={model}
-            root={session.root}
-            mode={modeLabel}
-            mcpSummary={mcpSummary}
-          />
-        ) : null}
-
         {activeReasoning.trim() ? (
           <Box marginTop={1} paddingRight={WIDTH_SAFETY}>
             <Text color={theme.dim} italic>
@@ -1098,6 +1197,9 @@ export function App({ session }: Props): React.ReactElement {
               onEscape={handleEscape}
               prefill={prefill}
               onPrefillConsumed={clearPrefill}
+              fileIndex={fileLister}
+              readClipboardImage={readClipboardImage}
+              onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
             />
             <Footer
               contextUsed={usage.used}

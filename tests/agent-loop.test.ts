@@ -144,6 +144,78 @@ describe('引导消息注入', () => {
   });
 });
 
+describe('图片附件', () => {
+  const IMG = { mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' };
+
+  it('run 带图片时历史里是 parts 数组:文本 + file part', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    await agent.run('看这张图', { images: [IMG] });
+
+    expect(agent.history[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' },
+      ],
+    });
+  });
+
+  it('不带图片时保持裸字符串 content(零扰动)', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    await agent.run('普通消息');
+
+    expect(agent.history[0]).toEqual({ role: 'user', content: '普通消息' });
+  });
+
+  it('运行中注入带图片的引导:包装文本 + file part 落入历史', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    onStream = (call) => {
+      if (call === 1) expect(agent.inject('中途看图', [IMG])).toBe(true);
+    };
+    await agent.run('你好');
+
+    const guidance = agent.history.find((m) => Array.isArray(m.content));
+    expect(guidance).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: wrapGuidance('中途看图') },
+        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' },
+      ],
+    });
+  });
+
+  it('运行中重入 run 带图片 → 转为注入时图片不丢', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    onStream = (call) => {
+      if (call === 1) void agent.run('重入消息', { images: [IMG] });
+    };
+    await agent.run('你好');
+
+    const guidance = agent.history.find((m) => Array.isArray(m.content));
+    expect(Array.isArray(guidance?.content) && guidance.content[1]).toMatchObject({
+      type: 'file',
+      filename: 'shot.png',
+    });
+  });
+
+  it('turn-start 事件携带 imageCount,不携带图片字节', async () => {
+    installDefaultStream();
+    const { agent, bus } = makeAgent();
+    const starts: unknown[] = [];
+    bus.on((e) => {
+      if (e.type === 'turn-start') starts.push(e);
+    });
+    await agent.run('看图', { images: [IMG] });
+
+    expect(starts[0]).toEqual({ type: 'turn-start', userText: '看图', imageCount: 1 });
+    expect(JSON.stringify(starts[0])).not.toContain(IMG.data);
+  });
+});
+
 describe('并发防护', () => {
   it('运行中再次 run 转为注入,不并发第二个流', async () => {
     installDefaultStream();

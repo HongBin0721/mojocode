@@ -31,6 +31,7 @@
     "execa": "^10.0.1",
     "fast-glob": "^3.3.3",
     "ink": "^7.1.1",
+    "jpeg-js": "^0.4.4",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "react": "^19.2.8",

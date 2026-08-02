@@ -20,7 +20,22 @@ export type TimelineItem =
     }
   | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { key: string; kind: 'error'; message: string }
-  | { key: string; kind: 'divider'; label: string };
+  | { key: string; kind: 'divider'; label: string }
+  | {
+      /**
+       * 启动横幅。终端非全屏模式下无法把组件钉在窗口顶部(Ink 动态区永远
+       * 贴着输入框),所以横幅作为第一条 Static 条目打进回滚区,固定在对话
+       * 最顶部随历史自然滚动——与 Claude Code 一致。字段是创建时的快照,
+       * 之后改 model/权限档不回写(实时值在 Footer 常驻)。
+       */
+      key: string;
+      kind: 'banner';
+      providerLabel: string;
+      model: string;
+      root: string;
+      mode: string;
+      mcpSummary?: string;
+    };
 
 /** 普通 `Omit` 会把联合类型折叠成公共键;这个写法保留每个变体。 */
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;

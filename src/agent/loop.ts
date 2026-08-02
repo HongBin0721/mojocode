@@ -1,5 +1,13 @@
-import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import {
+  streamText,
+  stepCountIs,
+  type LanguageModel,
+  type ModelMessage,
+  type ToolSet,
+  type UserContent,
+} from 'ai';
 import type { EventBus, UsageSnapshot } from '../core/events.js';
+import type { ImageAttachment } from '../app/attachments.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
 import { summarizeToolResult } from '../tools/index.js';
@@ -46,9 +54,34 @@ export function unwrapGuidance(text: string): string | undefined {
   return text.slice(prefix.length, end);
 }
 
-const guidanceMessage = (text: string): ModelMessage => ({
+/** 运行中排队的一条引导:文本 + 可选图片。 */
+interface GuidanceEntry {
+  text: string;
+  images?: ImageAttachment[];
+}
+
+/**
+ * 组装用户消息的 content。无图片时保持裸字符串(既有行为零扰动);有图
+ * 片时为 parts 数组,图片用 FilePart(ImagePart 在 AI SDK v7 已废弃),
+ * data 必须是 base64 字符串——历史经 JSONL 明文往返,Buffer 会 revive
+ * 成字节映射对象,恢复会话后第一轮即被 SDK 校验拒绝。
+ */
+export function buildUserContent(text: string, images?: ImageAttachment[]): UserContent {
+  if (!images || images.length === 0) return text;
+  return [
+    { type: 'text', text },
+    ...images.map((image) => ({
+      type: 'file' as const,
+      mediaType: image.mediaType,
+      data: image.data,
+      ...(image.filename ? { filename: image.filename } : {}),
+    })),
+  ];
+}
+
+const guidanceMessage = (entry: GuidanceEntry): ModelMessage => ({
   role: 'user',
-  content: wrapGuidance(text),
+  content: buildUserContent(wrapGuidance(entry.text), entry.images),
 });
 
 /** 一个流正常收尾时带回的信息,汇总后作为整轮的 turn-end 发出。 */
@@ -63,7 +96,7 @@ export class Agent {
   private lastInputTokens: number | undefined;
   private controller: AbortController | undefined;
   /** 运行中用户发来的引导消息,等待下一步开始时注入。 */
-  private pendingGuidance: string[] = [];
+  private pendingGuidance: GuidanceEntry[] = [];
   /** 本轮已注入的引导消息,轮末并入持久历史。 */
   private injectedThisTurn: ModelMessage[] = [];
   /** 进行中的压缩。run() 开始前要等它收尾,并发调用共享同一次。 */
@@ -162,9 +195,9 @@ export class Agent {
    * 运行中插入一条引导消息,在下一个步骤边界(当前模型输出/工具调用
    * 完成后)注入对话。空闲时调用返回 false——调用方应转为发起新一轮。
    */
-  inject(text: string): boolean {
+  inject(text: string, images?: ImageAttachment[]): boolean {
     if (!this.isRunning) return false;
-    this.pendingGuidance.push(text);
+    this.pendingGuidance.push({ text, images });
     return true;
   }
 
@@ -202,15 +235,23 @@ export class Agent {
     this.options.onHistoryChange?.(this.messages);
   }
 
-  async run(userText: string, options?: { display?: string }): Promise<void> {
+  async run(
+    userText: string,
+    options?: { display?: string; images?: ImageAttachment[] },
+  ): Promise<void> {
     // 防重入兜底:已在运行时转为注入引导,绝不能并发起第二个流
     // (两个流共享 this.messages,controller 也会被覆盖)。
     if (this.isRunning) {
-      this.inject(userText);
+      this.inject(userText, options?.images);
       return;
     }
     const { bus } = this.options;
-    bus.emit({ type: 'turn-start', userText, display: options?.display });
+    bus.emit({
+      type: 'turn-start',
+      userText,
+      display: options?.display,
+      ...(options?.images?.length ? { imageCount: options.images.length } : {}),
+    });
 
     // controller 在任何 await 之前就位:压缩等待期间 isRunning 已为 true,
     // 此时提交的消息走 inject 排队,而不是再起一轮。
@@ -227,7 +268,7 @@ export class Agent {
       // `/compact` 的调用方自己呈现。
       if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
       await this.maybeCompact();
-      this.messages.push({ role: 'user', content: userText });
+      this.messages.push({ role: 'user', content: buildUserContent(userText, options?.images) });
       let finish = await this.stream();
 
       // 末步开始之后注入的引导等不到下一个 prepareStep——立即作为新的

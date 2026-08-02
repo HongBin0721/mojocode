@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai';
 import type { NewTimelineItem } from '../ui/types.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { unwrapGuidance } from '../agent/loop.js';
+import { unwrapAttachments } from '../app/attachments.js';
 import { isInitPrompt } from '../agent/init.js';
 import { t } from '../i18n/index.js';
 
@@ -26,7 +27,8 @@ export function replayTimeline(messages: ModelMessage[]): NewTimelineItem[] {
 
     if (message.role === 'user') {
       const text = contentText(message.content);
-      if (!text) continue;
+      const images = imageLabels(message.content);
+      if (!text && images.length === 0) continue;
       if (text.startsWith(COMPACT_MARKER)) {
         items.push({ kind: 'notice', level: 'info', message: t('replay.compacted') });
         continue;
@@ -36,8 +38,9 @@ export function replayTimeline(messages: ModelMessage[]): NewTimelineItem[] {
         items.push({ kind: 'user', text: '/init' });
         continue;
       }
-      // 运行中插入的引导消息持久化的是包装后的版本;时间线还原为原文。
-      items.push({ kind: 'user', text: unwrapGuidance(text) ?? text });
+      // 运行中插入的引导消息持久化的是包装后的版本;@ 引用展开的消息同理。
+      // 两层信封可能嵌套(运行中提交的消息也会展开 @),依次解开。
+      items.push({ kind: 'user', text: joinWithImages(unwrapUserText(text), images) });
       continue;
     }
 
@@ -135,15 +138,42 @@ export function collectRewindEntries(messages: ModelMessage[]): RewindEntry[] {
   messages.forEach((message, index) => {
     if (message.role !== 'user') return;
     const text = contentText(message.content);
-    if (!text || text.startsWith(COMPACT_MARKER)) return;
+    const images = imageLabels(message.content);
+    if ((!text && images.length === 0) || text.startsWith(COMPACT_MARKER)) return;
     // /init 显示为命令本身:回退到它会把 `/init` 填回输入框,重发即重跑。
     entries.push({
       index,
       ordinal: entries.length + 1,
-      text: isInitPrompt(text) ? '/init' : (unwrapGuidance(text) ?? text),
+      text: isInitPrompt(text) ? '/init' : joinWithImages(unwrapUserText(text), images),
     });
   });
   return entries.reverse();
+}
+
+/** 依次解开引导包装与 @ 附件信封,还原用户当时输入的原文。 */
+function unwrapUserText(text: string): string {
+  const inner = unwrapGuidance(text) ?? text;
+  return unwrapAttachments(inner) ?? inner;
+}
+
+/**
+ * 消息里随附图片(file part)的展示标签。图片本身无法在终端时间线里
+ * 呈现,用 `[image: 文件名]` 占位,纯图片消息因此不会从回放里消失。
+ */
+function imageLabels(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter(
+      (part): part is { type: 'file'; filename?: string; mediaType?: string } =>
+        typeof part === 'object' && part !== null && (part as { type?: string }).type === 'file',
+    )
+    .map((part) => `[image: ${part.filename ?? part.mediaType ?? 'file'}]`);
+}
+
+/** 原文与图片标签拼成一行;注意标签必须在信封解包之后追加。 */
+function joinWithImages(text: string, images: string[]): string {
+  if (images.length === 0) return text;
+  return text ? `${text} ${images.join(' ')}` : images.join(' ');
 }
 
 function contentText(content: unknown): string {

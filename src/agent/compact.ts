@@ -12,6 +12,22 @@ Cover, as applicable:
 
 Write it as plain prose with headings. Do not add commentary about summarising.`;
 
+/**
+ * 摘要请求里不重传历史图片:把用户消息中的 file part 换成文本占位。
+ * 图片对"接下来该干什么"的摘要几乎无贡献,却按整张的 token 计费,
+ * 且文本模型会直接拒收。只映射发给摘要模型的副本,持久历史不动。
+ */
+function stripImageParts(message: ModelMessage): ModelMessage {
+  if (message.role !== 'user' || !Array.isArray(message.content)) return message;
+  if (!message.content.some((part) => part.type === 'file')) return message;
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      part.type === 'file' ? { type: 'text' as const, text: '[image omitted]' } : part,
+    ),
+  };
+}
+
 export interface CompactionResult {
   messages: ModelMessage[];
   removedMessages: number;
@@ -58,7 +74,7 @@ export async function compactMessages(
     return { messages, removedMessages: 0, summaryChars: 0 };
   }
 
-  const toSummarize = messages.slice(0, cut);
+  const toSummarize = messages.slice(0, cut).map(stripImageParts);
   const toKeep = messages.slice(cut);
 
   const { text } = await generateText({

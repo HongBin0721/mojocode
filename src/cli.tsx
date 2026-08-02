@@ -22,6 +22,7 @@ import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
 import { INIT_PROMPT } from './agent/init.js';
+import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
 
 interface GlobalFlags {
   provider?: string;
@@ -410,10 +411,40 @@ async function runMain(flags: MainFlags): Promise<void> {
     if (isInit && !writesFree) {
       session.bus.emit({ type: 'notice', level: 'warn', message: t('cli.initNeedsWrite') });
     }
-    await session.agent.run(
-      isInit ? INIT_PROMPT : flags.print!,
-      isInit ? { display: '/init' } : undefined,
-    );
+    // -p 同样支持 @文件引用(含图片):展开后发给模型,display 保留原文
+    // (--json 的事件流与 --resume 回放看到的都是用户输入的原样)。
+    let prompt = isInit ? INIT_PROMPT : flags.print!;
+    let display = isInit ? '/init' : undefined;
+    let images: ImageAttachment[] = [];
+    if (!isInit) {
+      const result = await expandAtReferences(prompt, {
+        root: session.root,
+        denyPath: session.config.permissions.denyPath,
+      });
+      const warnable = warnableSkips(result);
+      if (warnable.length > 0) {
+        session.bus.emit({
+          type: 'notice',
+          level: 'warn',
+          message: t('notice.attachSkipped', {
+            list: warnable.map((s) => `@${s.path} (${s.reason})`).join(', '),
+          }),
+        });
+      }
+      images = result.images;
+      if (images.length > 0 && session.provider.sdk === 'deepseek') {
+        session.bus.emit({ type: 'notice', level: 'warn', message: t('notice.providerNoVision') });
+      }
+      if (result.expanded !== prompt) {
+        display = prompt;
+        prompt = result.expanded;
+      }
+    }
+    const runOptions = {
+      ...(display !== undefined ? { display } : {}),
+      ...(images.length > 0 ? { images } : {}),
+    };
+    await session.agent.run(prompt, Object.keys(runOptions).length > 0 ? runOptions : undefined);
     await session.dispose();
     process.stdout.write('\n');
     return;

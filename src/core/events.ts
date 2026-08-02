@@ -44,7 +44,7 @@ export interface UsageSnapshot {
 
 export type AgentEvent =
   // display:时间线展示用的替代文本(如 `/init`);userText 才是喂给模型的内容。
-  | { type: 'turn-start'; userText: string; display?: string }
+  | { type: 'turn-start'; userText: string; display?: string; imageCount?: number }
   | { type: 'text-start'; id: string }
   | { type: 'text-delta'; id: string; text: string }
   | { type: 'text-end'; id: string }

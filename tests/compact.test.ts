@@ -27,6 +27,33 @@ function toolLoop(steps: number): ModelMessage[] {
   return messages;
 }
 
+describe('摘要请求剥离图片', () => {
+  const filePart = { type: 'file', mediaType: 'image/png', data: 'AAAA', filename: 'shot.png' };
+
+  it('被摘要的历史里 file part 换成占位文本,保留区原样', async () => {
+    const messages = toolLoop(20);
+    messages[0] = {
+      role: 'user',
+      content: [{ type: 'text', text: '看这张图' }, filePart],
+    } as ModelMessage;
+    // 保留区末尾放一条带图消息,确认不被改写。
+    messages.push({ role: 'user', content: [filePart] } as ModelMessage);
+
+    const result = await compactMessages(messages, {} as never);
+    expect(result.removedMessages).toBeGreaterThan(0);
+
+    const sent = mockGenerateText.mock.calls[0]![0].messages as ModelMessage[];
+    const first = sent[0]!;
+    expect(first.content).toEqual([
+      { type: 'text', text: '看这张图' },
+      { type: 'text', text: '[image omitted]' },
+    ]);
+    // 保留的尾部消息未被剥离。
+    const kept = result.messages[result.messages.length - 1]!;
+    expect(kept.content).toEqual([filePart]);
+  });
+});
+
 describe('compactMessages 的切分点', () => {
   it('尾部没有用户消息的长工具循环也能压缩(轮内压缩的核心场景)', async () => {
     const result = await compactMessages(toolLoop(20), {} as never);

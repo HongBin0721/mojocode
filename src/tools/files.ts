@@ -8,7 +8,8 @@ import { truncate, type ToolContext } from './context.js';
 
 const MAX_READ_BYTES = 400_000;
 
-function looksBinary(buffer: Buffer): boolean {
+/** 用开头 8KB 是否含 NUL 字节粗判二进制,read 工具与 @ 引用展开共用。 */
+export function looksBinary(buffer: Buffer): boolean {
   const sample = buffer.subarray(0, 8000);
   return sample.includes(0);
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { Diff } from './Diff.js';
+import { Header } from './Header.js';
 import { renderMarkdownAnsi } from './markdown-ansi.js';
 import {
   theme,
@@ -83,6 +84,18 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
         <Box marginTop={1}>
           <Text color={theme.dim}>── {item.label} ──</Text>
         </Box>
+      );
+
+    case 'banner':
+      // 永远是时间线第一条(启动/清屏后紧贴屏幕顶部),不加 marginTop。
+      return (
+        <Header
+          providerLabel={item.providerLabel}
+          model={item.model}
+          root={item.root}
+          mode={item.mode}
+          mcpSummary={item.mcpSummary}
+        />
       );
 
     default:

@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import { collectRewindEntries, replayTimeline } from '../src/session/replay.js';
 import { wrapGuidance, unwrapGuidance } from '../src/agent/loop.js';
 import { INIT_PROMPT, INIT_PROMPT_MARKER } from '../src/agent/init.js';
+import { expandAtReferences } from '../src/app/attachments.js';
 
 describe('replayTimeline', () => {
   it('字符串与 parts 两种形态的 user 消息都还原为 user 条目', () => {
@@ -164,6 +168,78 @@ describe('unwrapGuidance', () => {
   it('与 wrapGuidance 互逆;非包装文本返回 undefined', () => {
     expect(unwrapGuidance(wrapGuidance('多行\n原文'))).toBe('多行\n原文');
     expect(unwrapGuidance('普通消息')).toBeUndefined();
+  });
+});
+
+describe('@ 附件信封的回放', () => {
+  let root: string;
+  let envelope: string;
+  const raw = '解释 @hello.ts';
+
+  beforeAll(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-replay-attach-'));
+    await fs.writeFile(path.join(root, 'hello.ts'), 'export const hi = 1;\n');
+    envelope = (await expandAtReferences(raw, { root })).expanded;
+  });
+
+  afterAll(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('持久化的展开消息回放为原文', () => {
+    const items = replayTimeline([{ role: 'user', content: envelope }] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: raw }]);
+  });
+
+  it('运行中提交的展开消息(双层信封)也还原为原文', () => {
+    const items = replayTimeline([
+      { role: 'user', content: wrapGuidance(envelope) },
+    ] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: raw }]);
+  });
+
+  it('回退选择器同样看到原文', () => {
+    const entries = collectRewindEntries([
+      { role: 'user', content: envelope },
+    ] as ModelMessage[]);
+    expect(entries).toEqual([{ index: 0, ordinal: 1, text: raw }]);
+  });
+});
+
+describe('带图片的用户消息', () => {
+  const filePart = { type: 'file', mediaType: 'image/png', data: 'AAAA', filename: 'shot.png' };
+
+  it('纯图片消息不再从回放里消失,显示为标签', () => {
+    const items = replayTimeline([{ role: 'user', content: [filePart] }] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: '[image: shot.png]' }]);
+  });
+
+  it('文本 + 图片:标签追加在原文之后', () => {
+    const items = replayTimeline([
+      { role: 'user', content: [{ type: 'text', text: '看这个' }, filePart] },
+    ] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: '看这个 [image: shot.png]' }]);
+  });
+
+  it('引导包装先解包,标签再追加', () => {
+    const items = replayTimeline([
+      { role: 'user', content: [{ type: 'text', text: wrapGuidance('中途看图') }, filePart] },
+    ] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: '中途看图 [image: shot.png]' }]);
+  });
+
+  it('回退选择器包含纯图片消息', () => {
+    const entries = collectRewindEntries([
+      { role: 'user', content: [filePart] },
+    ] as ModelMessage[]);
+    expect(entries).toEqual([{ index: 0, ordinal: 1, text: '[image: shot.png]' }]);
+  });
+
+  it('没有 filename 时退回 mediaType', () => {
+    const items = replayTimeline([
+      { role: 'user', content: [{ type: 'file', mediaType: 'image/png', data: 'AAAA' }] },
+    ] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: '[image: image/png]' }]);
   });
 });
 

@@ -37,29 +37,32 @@ function makeSession(messages: ModelMessage[]): Session {
 }
 
 describe('恢复会话的时间线回放', () => {
-  it('首帧包含 divider 与回放的历史内容,Header 不再出现', async () => {
+  it('首帧包含横幅、divider 与回放的历史内容,横幅在最顶部', async () => {
     const session = makeSession([
       { role: 'user', content: '之前的问题' },
       { role: 'assistant', content: '之前的回答' },
     ] as ModelMessage[]);
 
-    const { frames, lastFrame, unmount } = render(<App session={session} />);
+    const { frames, unmount } = render(<App session={session} />);
     await tick();
 
     const out = frames.join('\n');
     expect(out).toContain('resumed'); // divider 带会话 id 前缀
     expect(out).toContain('之前的问题');
     expect(out).toContain('之前的回答');
-    // Header 只在时间线为空时渲染;回放后不应出现根路径行。
-    expect(lastFrame()).not.toContain('/tmp/project');
+    // 横幅是第一条 Static 条目,打在回放内容之前。
+    expect(out).toContain('/tmp/project');
+    expect(out.indexOf('/tmp/project')).toBeLessThan(out.indexOf('resumed'));
     unmount();
   });
 
-  it('空会话不产生 divider,Header 照常显示', async () => {
+  it('空会话不产生 divider,横幅照常显示', async () => {
     const session = makeSession([]);
     const { frames, unmount } = render(<App session={session} />);
     await tick();
-    expect(frames.join('\n')).not.toContain('resumed');
+    const out = frames.join('\n');
+    expect(out).not.toContain('resumed');
+    expect(out).toContain('/tmp/project');
     unmount();
   });
 });

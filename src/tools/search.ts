@@ -7,7 +7,8 @@ import { execa } from 'execa';
 import { resolveInsideWorkspace } from '../permissions/sandbox.js';
 import { truncate, type ToolContext } from './context.js';
 
-const DEFAULT_IGNORE = [
+/** 搜索与文件列举共用的忽略清单(fast-glob 不解析 .gitignore,以此代替)。 */
+export const DEFAULT_IGNORE = [
   '**/node_modules/**',
   '**/.git/**',
   '**/dist/**',
