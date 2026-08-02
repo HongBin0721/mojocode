@@ -1,5 +1,6 @@
 import React from 'react';
 import { Text } from 'ink';
+import { highlightLine, resolveLanguage } from './highlight.js';
 import { theme } from './theme.js';
 
 /**
@@ -11,18 +12,26 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
   const lines = text.split('\n');
   const out: React.ReactNode[] = [];
   let inCode = false;
+  let codeLang: string | undefined;
 
   lines.forEach((line, i) => {
-    if (/^\s*```/.test(line)) {
-      // 围栏行本身不渲染,只切换代码块状态。
+    const fence = /^\s*```(\S*)/.exec(line);
+    if (fence) {
+      // 围栏行本身不渲染,只切换代码块状态并记下语言标注。
       inCode = !inCode;
+      codeLang = inCode && fence[1] ? resolveLanguage(fence[1]) : undefined;
       return;
     }
     if (inCode) {
+      // 认得语言就语法着色,认不出(或没标注)统一用行内代码的颜色兜底。
       out.push(
-        <Text key={i} color={theme.code}>
-          {`  ${line}`}
-        </Text>,
+        codeLang ? (
+          <Text key={i}>{`  ${highlightLine(line, codeLang)}`}</Text>
+        ) : (
+          <Text key={i} color={theme.code}>
+            {`  ${line}`}
+          </Text>
+        ),
       );
       return;
     }
@@ -42,7 +51,8 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
       out.push(
         <Text key={i}>
           {bullet[1]}
-          <Text color={theme.dim}>• </Text>
+          {/* 与定稿渲染(markdown-ansi.ts 的 BULLET)同一个符号,提交前后不跳字。 */}
+          <Text color={theme.dim}>- </Text>
           {renderInline(bullet[2]!, i)}
         </Text>,
       );

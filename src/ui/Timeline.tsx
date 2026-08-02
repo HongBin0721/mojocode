@@ -7,10 +7,12 @@ import {
   glyphs,
   formatDuration,
   formatToolInput,
+  toolDisplayName,
   truncateWidth,
   WIDTH_SAFETY,
 } from './theme.js';
 import type { TimelineItem } from './types.js';
+import type { TodoItem } from '../tools/todo.js';
 import { t } from '../i18n/index.js';
 
 /**
@@ -20,13 +22,11 @@ import { t } from '../i18n/index.js';
 export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElement | null {
   switch (item.kind) {
     case 'user':
-      // 用户消息带背景高亮:绿色提示符 + 反衬底色,回滚历史里一眼能定位。
+      // 用户消息用高亮色,和 agent 的白色回复、灰色思考区分开;回看时靠
+      // 行首的 > 提示符加这一抹颜色定位自己问了什么。
       return (
         <Box marginTop={1}>
-          <Text color={theme.user}>{glyphs.prompt} </Text>
-          <Text bold backgroundColor={theme.userBg} color="white">
-            {item.text}
-          </Text>
+          <Text color={theme.user}>{`> ${item.text}`}</Text>
         </Box>
       );
 
@@ -46,6 +46,8 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
       );
 
     case 'reasoning':
+      // 不加"思考中"标题:输入框上方的状态行已实时显示工作阶段,这里只
+      // 保留内容本身,灰色斜体已足够和正式回复区分。
       return (
         <Box marginTop={1} flexDirection="column">
           <Text color={theme.dim} italic>
@@ -91,32 +93,66 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
 function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
+  const todos = extractTodos(item);
 
   return (
     <Box marginTop={1} flexDirection="column">
       <Box>
-        <Text color={item.isError ? theme.error : theme.tool}>{glyphs.bullet} </Text>
-        <Text bold>{item.toolName}</Text>
+        <Text color={item.isError ? theme.error : theme.success}>{glyphs.bullet} </Text>
+        <Text bold>{toolDisplayName(item.toolName)}</Text>
         {args ? <Text color={theme.dim}>({truncateWidth(args, 100)})</Text> : null}
       </Box>
-      <Box paddingLeft={2}>
-        <Text color={theme.dim}>{glyphs.branch} </Text>
-        <Text color={item.isError ? theme.error : theme.dim}>
-          {truncateWidth(item.summary, 160)}
-          {/* bash 已经在摘要里报告了自己的耗时。 */}
-          {!item.isError && item.toolName !== 'bash' && item.durationMs > 1500
-            ? ` · ${formatDuration(item.durationMs)}`
-            : ''}
-        </Text>
-      </Box>
+      {todos ? (
+        <TodoChecklist todos={todos} />
+      ) : (
+        <Box paddingLeft={2}>
+          <Text color={theme.dim}>{glyphs.branch}  </Text>
+          <Text color={item.isError ? theme.error : theme.dim}>
+            {truncateWidth(item.summary, 160)}
+            {/* bash 已经在摘要里报告了自己的耗时。 */}
+            {!item.isError && item.toolName !== 'bash' && item.durationMs > 1500
+              ? ` · ${formatDuration(item.durationMs)}`
+              : ''}
+          </Text>
+        </Box>
+      )}
       {diff ? (
-        <Box paddingLeft={4} flexDirection="column">
+        <Box paddingLeft={5} flexDirection="column">
           <Diff patch={diff} maxLines={24} />
         </Box>
       ) : null}
       {item.toolName === 'bash' && !item.isError ? (
         <BashOutput output={item.output} />
       ) : null}
+    </Box>
+  );
+}
+
+/**
+ * todo 工具直接展开任务清单(Claude Code 风格),比"3 tasks"摘要直观:
+ * 已完成的画勾 + 删除线,进行中的用强调色标出。
+ */
+function TodoChecklist({ todos }: { todos: TodoItem[] }) {
+  return (
+    <Box paddingLeft={2} flexDirection="column">
+      {todos.map((todo, index) => (
+        <Box key={index}>
+          <Text color={theme.dim}>{index === 0 ? `${glyphs.branch}  ` : '   '}</Text>
+          {todo.status === 'completed' ? (
+            <Text color={theme.dim} strikethrough>
+              {glyphs.checked} {todo.content}
+            </Text>
+          ) : todo.status === 'in_progress' ? (
+            <Text color={theme.accent}>
+              {glyphs.unchecked} {todo.content}
+            </Text>
+          ) : (
+            <Text>
+              {glyphs.unchecked} {todo.content}
+            </Text>
+          )}
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -130,7 +166,7 @@ function BashOutput({ output }: { output: unknown }) {
   const hidden = lines.length - shown.length;
 
   return (
-    <Box paddingLeft={4} flexDirection="column">
+    <Box paddingLeft={5} flexDirection="column">
       {shown.map((line, index) => (
         <Text key={index} color={theme.dim}>
           {line.slice(0, 200) || ' '}
@@ -145,6 +181,19 @@ function extractDiff(item: Extract<TimelineItem, { kind: 'tool' }>): string | un
   if (item.isError) return undefined;
   const output = item.output as { diff?: unknown } | undefined;
   return typeof output?.diff === 'string' ? output.diff : undefined;
+}
+
+/** 成功的 todo 调用返回其输入里的完整任务列表,用于渲染清单。 */
+function extractTodos(item: Extract<TimelineItem, { kind: 'tool' }>): TodoItem[] | undefined {
+  if (item.toolName !== 'todo' || item.isError) return undefined;
+  const todos = (item.input as { todos?: unknown } | undefined)?.todos;
+  if (!Array.isArray(todos)) return undefined;
+  const valid = todos.filter(
+    (todo): todo is TodoItem =>
+      typeof (todo as TodoItem | undefined)?.content === 'string' &&
+      typeof (todo as TodoItem | undefined)?.status === 'string',
+  );
+  return valid.length > 0 ? valid : undefined;
 }
 
 function truncateLines(text: string, limit: number): string {

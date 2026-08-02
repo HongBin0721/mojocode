@@ -67,6 +67,50 @@ describe('renderMarkdownAnsi', () => {
     }
   });
 
+  // marked-terminal 7.3.0 在 marked 15 下的两处列表缺陷,由 patchListRendering 接管。
+  it('列表项内的行内标记同样被消费(不是只有段落生效)', () => {
+    const out = plain(
+      renderMarkdownAnsi('1. **粗体** 与 `代码`\n2. 另一项 **也要** 生效', 80),
+    );
+    expect(out).toContain('粗体 与 代码');
+    expect(out).not.toContain('**');
+    expect(out).not.toContain('`');
+  });
+
+  it('有序列表里的无序子项不会被接着编号', () => {
+    const src = ['1. 父项一', '    * 子项 A', '    * 子项 B', '2. 父项二'].join('\n');
+    const lines = plain(renderMarkdownAnsi(src, 80))
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    expect(lines).toEqual(['1. 父项一', '- 子项 A', '- 子项 B', '2. 父项二']);
+  });
+
+  it('有序列表按 start 起编,子项缩进在父项正文之下', () => {
+    const src = ['3. 第三项', '    - 子项', '4. 第四项'].join('\n');
+    const out = plain(renderMarkdownAnsi(src, 80));
+    expect(out).toContain('3. 第三项');
+    expect(out).toContain('4. 第四项');
+    // 父项标记 "3. " 宽 3 列,子项悬挂在其后。
+    expect(out).toContain('   - 子项');
+  });
+
+  it('从 0 起编的有序列表保留 0', () => {
+    const out = plain(renderMarkdownAnsi('0. 零\n1. 一', 80));
+    expect(out).toContain('0. 零');
+    expect(out).toContain('1. 一');
+  });
+
+  it('有序列表项的折行续行挂在正文下方,不顶回行首', () => {
+    const out = plain(renderMarkdownAnsi(`1. ${'很长的列表项内容'.repeat(8)}`, 40));
+    const lines = out.split('\n').filter((l) => l.trim() !== '');
+    expect(lines.length).toBeGreaterThan(1);
+    for (const cont of lines.slice(1)) {
+      // "1. " 占 3 列。
+      expect(cont.startsWith('   ')).toBe(true);
+    }
+  });
+
   it('混排英文与 CJK 的长段落同样不超宽', () => {
     const text =
       'Markdown、Org-mode、AsciiDoc 三者的取舍:**生态碾压设计**——解析器几百行就能写,于是无处不在,表达力最差却成了事实标准。';

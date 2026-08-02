@@ -1,4 +1,4 @@
-import { Marked } from 'marked';
+import { Marked, type MarkedExtension } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
@@ -21,8 +21,15 @@ import wrapAnsi from 'wrap-ansi';
 export function renderMarkdownAnsi(text: string, columns: number): string {
   const width = Math.max(20, columns);
   if (!cached || cached.width !== width) {
+    const extension = markedTerminal({
+      width,
+      reflowText: false,
+      showSectionPrefix: false,
+      tab: 2,
+    });
+    patchListRendering(extension);
     const instance = new Marked();
-    instance.use(markedTerminal({ width, reflowText: false, showSectionPrefix: false, tab: 2 }));
+    instance.use(extension);
     cached = { width, instance };
   }
   const rendered = (cached.instance.parse(text, { async: false }) as string).trimEnd();
@@ -32,8 +39,86 @@ export function renderMarkdownAnsi(text: string, columns: number): string {
 /** 终端宽度基本不变,缓存单个实例即可;resize 后按新宽度重建。 */
 let cached: { width: number; instance: Marked } | undefined;
 
-/** 行首缩进:跳过开头的 ANSI 样式序列后取空格。 */
-const INDENT_RE = /^(?:\u001b\[[0-9;]*m)*( *)/;
+/** marked-terminal 内部用来占位列表标记的字符串,替换标记时要剥掉。 */
+const MARKED_TERMINAL_BULLET = '* ';
+/** 无序列表的项目符号,与流式预览(Markdown.tsx)保持一致,定稿前后不跳动。 */
+const BULLET = '- ';
+
+/**
+ * 修掉 marked-terminal 7.3.0 在 marked 15 下的三处列表渲染缺陷。
+ * 都没有上游修复(7.3.0 已是最新版),只能在这里接管对应的渲染器。
+ *
+ * 1. `text` 渲染器直接取 `token.text` 交差,丢掉了 marked 15 挂在
+ *    `token.tokens` 上的行内子节点。紧凑列表项正是 `text` 节点,于是列表
+ *    里的 `**粗体**`、`` `代码` `` 全部以原文出现——而同一篇文档里的普通
+ *    段落(走 `paragraph`,它正确调用了 parseInline)却好好的。
+ * 2. 它给列表项打的占位标记就是 `'* '`,与无序列表的最终符号同一个串;
+ *    有序列表编号时按行扫描这个串,会把嵌套在里面的无序子项一并编号,
+ *    子项因此接着父列表的序号往下排(1. 2. 下面冒出 3. 4.)。
+ * 3. 紧凑列表项里的子列表,marked 不会在父项正文与子列表之间插换行,
+ *    直接拼接会粘成「3. 第三项• 子项」。
+ *
+ * 这里自己排版列表:序号按 `start` 逐项递增、无序项用固定符号、续行按
+ * 标记宽度悬挂缩进、子列表另起一行。条目正文仍交回 marked-terminal 渲染,
+ * 它负责的实体反转义、emoji 与冒号占位还原都不受影响。
+ */
+function patchListRendering(extension: MarkedExtension): void {
+  const renderer = extension.renderer;
+  if (!renderer) return;
+  const baseListItem = renderer.listitem;
+  if (!baseListItem) return;
+
+  renderer.text = function (token) {
+    const inline = 'tokens' in token ? token.tokens : undefined;
+    return inline && inline.length > 0 ? this.parser.parseInline(inline) : token.text;
+  };
+
+  // 嵌套深度。条目正文是在本函数执行期间递归渲染出来的,子列表因此能看到
+  // depth > 1,据此决定要不要另起一行——不必回过头用正则去猜哪一段是子列表。
+  let depth = 0;
+
+  renderer.list = function (token) {
+    depth += 1;
+    try {
+      // `0.` 起编的列表是合法的,不能把 0 当作"没给起始值"而顶成 1。
+      const start = typeof token.start === 'number' ? token.start : 1;
+      const lines: string[] = [];
+
+      token.items.forEach((item, index) => {
+        const marker = token.ordered ? `${start + index}. ` : BULLET;
+        // 条目正文交回 marked-terminal;它固定返回 '\n' + '* ' + 正文。
+        // 渲染器约定可以返回 false 表示走默认实现,那时自己解析条目内容。
+        const raw = baseListItem.call(this, item);
+        const rendered = (
+          typeof raw === 'string' ? raw : this.parser.parse(item.tokens, Boolean(item.loose))
+        ).trim();
+        const body = rendered.startsWith(MARKED_TERMINAL_BULLET)
+          ? rendered.slice(MARKED_TERMINAL_BULLET.length)
+          : rendered;
+        // 悬挂缩进:续行与首行正文左对齐,子列表因此逐层递进。
+        const pad = ' '.repeat(marker.length);
+        const [first = '', ...rest] = body.split('\n');
+        lines.push(marker + first);
+        for (const line of rest) lines.push(line.trim() ? pad + line : line);
+      });
+
+      const body = lines.join('\n');
+      // 子列表先断行再排;顶层列表与 marked-terminal 的 section() 一致,
+      // 块级元素之间空一行。
+      return depth > 1 ? `\n${body}` : `${body}\n\n`;
+    } finally {
+      depth -= 1;
+    }
+  };
+}
+
+/**
+ * 行首缩进:跳过开头的 ANSI 样式序列后,取前导空格,以及紧随其后的列表
+ * 标记(`• ` / `- ` / `1. `)。把标记宽度算进缩进,折出来的续行才会挂在
+ * 条目正文下方,而不是顶回行首、与下一个条目的标记混作一团。
+ */
+const ANSI_STYLE = `${String.fromCharCode(27)}\\[[0-9;]*m`;
+const INDENT_RE = new RegExp(`^(?:${ANSI_STYLE})*( *)((?:[•\\-*+]|\\d+[.)]) +)?`);
 
 /**
  * 把一行按显示宽度硬折为若干 ≤ width 列的行,续行补上原行的前导缩进。
@@ -42,7 +127,8 @@ const INDENT_RE = /^(?:\u001b\[[0-9;]*m)*( *)/;
  */
 function wrapLine(line: string, width: number): string[] {
   if (stringWidth(line) <= width) return [line];
-  const pad = INDENT_RE.exec(line)?.[1] ?? '';
+  const indent = INDENT_RE.exec(line);
+  const pad = ' '.repeat(stringWidth(`${indent?.[1] ?? ''}${indent?.[2] ?? ''}`));
   const parts = wrapAnsi(line, Math.max(20, width - pad.length), { hard: true, trim: false }).split(
     '\n',
   );

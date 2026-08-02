@@ -2,6 +2,7 @@ import type { AgentEvent, PermissionAsker, PermissionDecision } from '../core/ev
 import type { PermissionMode } from '../config/schema.js';
 import type { Session } from './bootstrap.js';
 import { t } from '../i18n/index.js';
+import { formatToolInput, toolDisplayName, truncateWidth } from '../ui/theme.js';
 
 export interface HeadlessOptions {
   /** 输出以换行分隔的 JSON 事件,而不是普通文本。 */
@@ -34,9 +35,14 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
       case 'text-end':
         stream.write('\n');
         break;
-      case 'tool-start':
-        errStream.write(`  · ${event.toolName}\n`);
+      case 'tool-start': {
+        // 与 TUI 同构:`Read(path)`。摘要行不再重复路径,参数只能由这里给出。
+        const args = formatToolInput(event.toolName, event.input);
+        errStream.write(
+          `  · ${toolDisplayName(event.toolName)}${args ? `(${truncateWidth(args, 100)})` : ''}\n`,
+        );
         break;
+      }
       case 'tool-end':
         errStream.write(`    ${event.isError ? '✗' : '⎿'} ${event.summary}\n`);
         break;

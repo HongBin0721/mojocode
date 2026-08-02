@@ -4,9 +4,10 @@ import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
+import { TodoPanel, todoPanelRows } from './TodoPanel.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
-import { theme, glyphs, formatToolInput, truncateWidth, WIDTH_SAFETY } from './theme.js';
+import { theme, glyphs, formatToolInput, toolDisplayName, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import { Markdown } from './Markdown.js';
 import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
@@ -157,6 +158,13 @@ export function App({ session }: Props): React.ReactElement {
   // todos,那时还没有订阅者,只靠 subscribe 的话要等模型下次调 todo 工具
   // 才显示。
   const [todos, setTodos] = useState<TodoItem[]>(() => session.todos.get());
+  // ctrl+t 折叠/展开工作中的实时任务面板;偏好保持整个会话。
+  //
+  // 默认关闭(与 Claude Code 一致):模型每次调 todo 工具,时间线上就多一条
+  // 完整清单,而面板画的正是同一份当前状态——两者逐字相同、上下紧挨着,
+  // 常驻会让屏幕上重复好几份同样的任务。平时看时间线的记录即可,需要盯
+  // 实时进度时再按 ctrl+t 调出来(状态行一直提示这个快捷键)。
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false);
   const [usage, setUsage] = useState({ used: 0, window: session.provider.contextWindow, total: 0 });
   const [providerLabel, setProviderLabel] = useState(session.provider.label);
   const [model, setModel] = useState(session.provider.model);
@@ -374,6 +382,10 @@ export function App({ session }: Props): React.ReactElement {
   // 始终激活的处理器。依赖 cli.tsx 里 exitOnCtrlC: false——否则 ink 会在
   // useInput 之前吞掉这个按键,这里永远收不到。
   useInput((input, key) => {
+    if (key.ctrl && input === 't') {
+      setTodoPanelOpen((open) => !open);
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (ctrlCArmed) {
         // 必须清掉待触发的定时器:cli.tsx 只设置 process.exitCode 而不调用
@@ -869,9 +881,16 @@ export function App({ session }: Props): React.ReactElement {
     return `${ok}/${session.mcpStatuses.length}`;
   }, [session.mcpStatuses]);
 
+  // 工作中且有任务时,状态行下方挂实时任务面板(Claude Code 的 ctrl+t 面板);
+  // 空闲时清单仍走 Footer 的单行摘要,面板不重复占位。
+  const todoPanelActive = Boolean(work) && todos.length > 0;
+  const todoPanelVisible = todoPanelActive && todoPanelOpen;
+
   // 预览高度按实际终端尺寸收敛,窄/矮窗口下也不会撑爆动态区域。
+  // 任务面板同处动态区,它占的行也要从预算里扣掉。
   const columns = stdout?.columns ?? 80;
-  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS);
+  const panelRows = todoPanelVisible ? todoPanelRows(todos).length : 0;
+  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows);
   const textRows = Math.min(STREAM_PREVIEW_ROWS, budget);
   const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, budget);
 
@@ -911,24 +930,33 @@ export function App({ session }: Props): React.ReactElement {
           </Box>
         ) : null}
 
-        {activeTools.map((call) => (
-          <Box key={call.callId} marginTop={1} paddingRight={WIDTH_SAFETY}>
-            <Text color={theme.tool}>{glyphs.running} </Text>
-            <Text bold>{call.toolName}</Text>
-            <Text color={theme.dim}>
-              (
-              {truncateWidth(
-                formatToolInput(call.toolName, call.input),
-                // 前缀 2 列 + 工具名 + 括号 2 列,截到单行以内。
-                Math.max(20, columns - WIDTH_SAFETY - call.toolName.length - 6),
-              )}
-              )
-            </Text>
-          </Box>
-        ))}
+        {activeTools.map((call) => {
+          const label = toolDisplayName(call.toolName);
+          // 前缀 2 列 + 工具名 + 括号 2 列,截到单行以内。
+          const args = truncateWidth(
+            formatToolInput(call.toolName, call.input),
+            Math.max(20, columns - WIDTH_SAFETY - label.length - 6),
+          );
+          return (
+            <Box key={call.callId} marginTop={1} paddingRight={WIDTH_SAFETY}>
+              <Text color={theme.tool}>{glyphs.running} </Text>
+              <Text bold>{label}</Text>
+              {/* 无参数的工具(todo)不画空括号,与时间线、headless 一致。 */}
+              {args ? <Text color={theme.dim}>({args})</Text> : null}
+            </Box>
+          );
+        })}
 
         {/* 工作状态行:主流 CLI 的位置——流式内容/工具行之下、输入框之上。 */}
-        {work ? <StatusLine phase={work.phase} detail={work.detail} since={work.since} /> : null}
+        {work ? (
+          <StatusLine
+            phase={work.phase}
+            detail={work.detail}
+            since={work.since}
+            todoHint={todoPanelActive ? (todoPanelOpen ? 'hide' : 'show') : undefined}
+          />
+        ) : null}
+        {todoPanelVisible ? <TodoPanel todos={todos} columns={columns} /> : null}
 
         {permission ? (
           <PermissionPrompt request={permission} onDecide={onDecide} />
@@ -953,7 +981,8 @@ export function App({ session }: Props): React.ReactElement {
               contextUsed={usage.used}
               contextWindow={usage.window}
               cumulativeTokens={usage.total}
-              todos={todos}
+              // 实时面板已在上方展开时,底栏不再重复一行摘要。
+              todos={todoPanelVisible ? [] : todos}
               model={model}
               mode={mode}
               think={think}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { theme, glyphs, formatTokens } from './theme.js';
+import { theme, glyphs, formatTokens, truncateWidth } from './theme.js';
 import type { TodoItem } from '../tools/index.js';
 import type { StatusSegment } from '../config/schema.js';
 import { t } from '../i18n/index.js';
@@ -90,11 +90,11 @@ export function Footer({
     <Box flexDirection="column">
       {showTodos ? (
         <Box>
-          <Text color={theme.dim}>
-            {glyphs.branch} {done}/{todos.length}
+          <Text color={active ? theme.accent : theme.dim}>
+            {done === todos.length ? glyphs.checked : glyphs.unchecked} {done}/{todos.length}
           </Text>
           {active ? (
-            <Text color={theme.accent}> {active.content.slice(0, 60)}</Text>
+            <Text color={theme.accent}> {truncateWidth(active.content, 60)}</Text>
           ) : (
             <Text color={theme.dim}> {t('footer.tasks')}</Text>
           )}

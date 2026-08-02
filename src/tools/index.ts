@@ -35,22 +35,16 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
   if (!o || typeof o !== 'object') return t('sum.done');
 
   switch (toolName) {
+    // 路径不进摘要:工具行的 `Read(path)` 已经写着它,重复一遍反而挤掉信息。
     case 'read':
-      return t('sum.read', {
-        path: String(o.path),
-        shown: String(o.shownLines),
-        total: String(o.totalLines),
-      });
+      return t('sum.read', { shown: String(o.shownLines), total: String(o.totalLines) });
     case 'write':
-      if (o.changed === false) return t('sum.writeUnchanged', { path: String(o.path) });
-      return t(o.created ? 'sum.writeCreated' : 'sum.writeWritten', {
-        path: String(o.path),
-        lines: Number(o.lines),
-      });
+      if (o.changed === false) return t('sum.writeUnchanged');
+      return t(o.created ? 'sum.writeCreated' : 'sum.writeWritten', { lines: Number(o.lines) });
     case 'edit':
       return o.replacements === 1
-        ? t('sum.editOne', { path: String(o.path) })
-        : t('sum.editMany', { path: String(o.path), n: Number(o.replacements) });
+        ? t('sum.editOne')
+        : t('sum.editMany', { n: Number(o.replacements) });
     case 'glob':
       return t(o.truncated ? 'sum.globTruncated' : 'sum.globFiles', { n: Number(o.count) });
     case 'grep':

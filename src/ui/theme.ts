@@ -16,9 +16,12 @@ export const WIDTH_SAFETY = 4;
 
 export const theme = {
   accent: 'cyan',
-  user: 'green',
-  /** 用户消息正文的高亮背景;blackBright 在深浅色终端下都保持可读的对比度。 */
-  userBg: 'blackBright',
+  /**
+   * 用户自己发出的消息。刻意不用 success 的绿色——工具行的 ● 已经占了
+   * 绿色,同色会让"谁说的"变模糊;青色与输入框的提示符同色,打进去的和
+   * 回滚区里记下的是同一抹颜色。
+   */
+  user: 'cyan',
   assistant: 'white',
   dim: 'gray',
   tool: 'blue',
@@ -27,12 +30,21 @@ export const theme = {
   success: 'green',
   added: 'green',
   removed: 'red',
+  /**
+   * diff 行的背景高亮(Claude Code 风格)。前景与背景都显式指定:
+   * 背景取深色、前景取浅色,不依赖终端的默认前景色,深浅色主题下
+   * 对比度都够;不支持真彩色的终端由 chalk 自动降到 256 色近似。
+   */
+  diffAddedBg: '#1e4023',
+  diffAddedFg: '#b6e3bc',
+  diffRemovedBg: '#4a2226',
+  diffRemovedFg: '#f2b8bd',
   /** markdown 中的行内代码与代码块。 */
   code: 'cyan',
 } as const;
 
 export const glyphs = {
-  bullet: '●',
+  bullet: '⏺',
   branch: '⎿',
   pending: '○',
   running: '◐',
@@ -40,7 +52,28 @@ export const glyphs = {
   failed: '✗',
   prompt: '›',
   pointer: '❯',
+  checked: '☒',
+  unchecked: '☐',
 } as const;
+
+/**
+ * 工具在时间线上的展示名:内建工具首字母大写(Claude Code 风格),
+ * MCP 等外部工具保持原名。
+ */
+const TOOL_LABELS: Record<string, string> = {
+  read: 'Read',
+  write: 'Write',
+  edit: 'Edit',
+  glob: 'Glob',
+  grep: 'Grep',
+  bash: 'Bash',
+  // 名字里就带上动作:它不带参数,紧随其后的是整份清单。
+  todo: 'Update Todos',
+};
+
+export function toolDisplayName(name: string): string {
+  return TOOL_LABELS[name] ?? name;
+}
 
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
@@ -91,8 +124,9 @@ export function formatToolInput(toolName: string, input: unknown): string {
       return `${String(i.pattern ?? '')}${i.include ? ` · ${String(i.include)}` : ''}`;
     case 'bash':
       return String(i.command ?? '');
+    // 不带参数:任务数在紧随其后的清单里一目了然,写进括号只是重复。
     case 'todo':
-      return t('ui.nTasks', { n: Array.isArray(i.todos) ? i.todos.length : 0 });
+      return '';
     default: {
       const text = JSON.stringify(i);
       return text.length > 80 ? `${text.slice(0, 80)}…` : text;

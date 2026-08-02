@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
-import { theme } from './theme.js';
+import { theme, toolDisplayName } from './theme.js';
 import { t, type MessageKey } from '../i18n/index.js';
 
 /** 工作阶段。undefined(空闲)时整行不渲染,由 App 控制。 */
@@ -18,6 +18,11 @@ export interface WorkState {
   detail?: string;
   /** 本轮工作的起始时刻,用于显示已用时。 */
   since: number;
+}
+
+interface Props extends WorkState {
+  /** 有任务清单时在提示里加上 ctrl+t 开关说明;undefined 表示没有清单。 */
+  todoHint?: 'show' | 'hide';
 }
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
@@ -46,7 +51,7 @@ const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
  * 与主流 CLI(Claude Code / Codex)的布局一致。定时器同时驱动 spinner
  * 帧和秒数刷新,组件卸载(回到空闲)即停止。
  */
-export function StatusLine({ phase, detail, since }: WorkState): React.ReactElement {
+export function StatusLine({ phase, detail, since, todoHint }: Props): React.ReactElement {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), FRAME_MS);
@@ -57,7 +62,13 @@ export function StatusLine({ phase, detail, since }: WorkState): React.ReactElem
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   const color = PHASE_COLORS[phase];
   const label =
-    phase === 'tool' ? t('status.runningTool', { tool: detail ?? '' }) : t(PHASE_LABELS[phase]);
+    phase === 'tool'
+      ? t('status.runningTool', { tool: toolDisplayName(detail ?? '') })
+      : t(PHASE_LABELS[phase]);
+
+  const extra = todoHint
+    ? ` · ${t(todoHint === 'hide' ? 'status.todoHide' : 'status.todoShow')}`
+    : '';
 
   return (
     <Box marginTop={1}>
@@ -65,7 +76,7 @@ export function StatusLine({ phase, detail, since }: WorkState): React.ReactElem
       <Text color={color} bold>
         {label}
       </Text>
-      <Text color={theme.dim}> {t('status.meta', { s: seconds })}</Text>
+      <Text color={theme.dim}> {t('status.meta', { s: seconds, extra })}</Text>
     </Box>
   );
 }
