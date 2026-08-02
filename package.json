@@ -1,6 +1,6 @@
 {
   "name": "mojocode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A terminal coding agent that works with any LLM (Kimi / DeepSeek / GLM / ...)",
   "license": "MIT",
   "keywords": [
