@@ -210,6 +210,7 @@ export const en = {
   'cli.warning': 'warning: {message}',
   'cli.msgs': '{n} msgs',
   'cli.noResume': 'No session to resume — starting a new one.',
+  'cli.resumeHint': 'Resume this session: mojocode --resume {id}',
   'cli.needsTty': 'mojocode needs an interactive terminal. Use `mojocode -p "your prompt"` for scripted runs.',
   'cli.initNeedsWrite': 'Note: /init writes AGENTS.md — re-run with --accept-edits or --yolo if the write is denied.',
   'cli.noSessions': 'No sessions yet.',

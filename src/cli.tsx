@@ -431,6 +431,11 @@ async function runMain(flags: MainFlags): Promise<void> {
   const instance = render(<App session={session} />, { exitOnCtrlC: false });
   await instance.waitUntilExit();
   await session.dispose();
+  // 读 getter 而非启动时的快照:/new、/resume 会中途换 store,提示要指向
+  // 退出那一刻真正在写的会话。空会话没有可恢复的内容,不打扰。
+  if (session.agent.history.length > 0) {
+    process.stdout.write(`${t('cli.resumeHint', { id: session.store.id })}\n`);
+  }
 }
 
 function redactKeys(providers: Record<string, { apiKey?: string }>): unknown {

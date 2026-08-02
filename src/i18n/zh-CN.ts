@@ -198,6 +198,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'cli.warning': '警告：{message}',
   'cli.msgs': '{n} 条消息',
   'cli.noResume': '没有可恢复的会话 — 已新建会话。',
+  'cli.resumeHint': '恢复此会话:mojocode --resume {id}',
   'cli.needsTty': 'mojocode 需要交互式终端。脚本场景请用 `mojocode -p "你的指令"`。',
   'cli.initNeedsWrite': '提示：/init 需要写入 AGENTS.md——若写入被拒，请加 --accept-edits 或 --yolo 重试。',
   'cli.noSessions': '还没有会话。',
