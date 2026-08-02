@@ -7,7 +7,7 @@ import type {
   PermissionRequest,
   EventBus,
 } from '../core/events.js';
-import type { PermissionMode, PermissionRules } from '../config/schema.js';
+import type { ApprovalPolicy, Permissions, PermissionRules, SandboxMode } from '../config/schema.js';
 import { projectConfigPath, projectDir } from '../config/paths.js';
 import { judgeCommand, ruleToPrefix } from './bash-rules.js';
 import { matchGlob } from './sandbox.js';
@@ -22,7 +22,9 @@ export class PermissionDeniedError extends Error {
 
 export interface GateOptions {
   root: string;
-  mode: PermissionMode;
+  permissions: Permissions;
+  /** 计划模式激活时压过两轴:等同只读且不可升级,出口是 exit_plan。 */
+  plan: boolean;
   rules: PermissionRules;
   ask: PermissionAsker;
   bus: EventBus;
@@ -47,12 +49,24 @@ export class PermissionGate {
 
   constructor(private readonly options: GateOptions) {}
 
-  get mode(): PermissionMode {
-    return this.options.mode;
+  get sandbox(): SandboxMode {
+    return this.options.permissions.sandbox;
   }
 
-  setMode(mode: PermissionMode): void {
-    this.options.mode = mode;
+  get approval(): ApprovalPolicy {
+    return this.options.permissions.approval;
+  }
+
+  get planMode(): boolean {
+    return this.options.plan;
+  }
+
+  setPermissions(permissions: Permissions): void {
+    this.options.permissions = { ...permissions };
+  }
+
+  setPlanMode(active: boolean): void {
+    this.options.plan = active;
   }
 
   /**
@@ -74,23 +88,61 @@ export class PermissionGate {
   }
 
   /**
+   * "完全写不了"的两种情形:plan 激活,或 read-only+never(沙箱只读且升级
+   * 通道也被 never 关死)。read-only+on-request **不算**——写入可以逐次升级
+   * 确认,所以不在这里拦,由 checkWrite/checkBash 弹确认。
+   */
+  private hardStopReason(action: string): string | undefined {
+    if (this.options.plan) {
+      return (
+        `Cannot ${action}: you are in plan mode. Keep researching with the read-only tools, ` +
+        'then call the exit_plan tool to submit your plan for approval. Do not attempt edits before it is approved.'
+      );
+    }
+    const { sandbox, approval } = this.options.permissions;
+    if (sandbox === 'read-only' && approval === 'never') {
+      return (
+        `Cannot ${action}: the sandbox is read-only and the approval policy is never, ` +
+        'so nothing can be escalated. Ask the user to relaunch with a writable sandbox.'
+      );
+    }
+    return undefined;
+  }
+
+  /**
    * 在会修改状态的工具做任何工作之前调用。
    *
    * 与 `checkWrite` 分开,是因为工具会走捷径——`write` 在内容未变化时会
-   * 提前返回——而 readonly 模式在这些路径上也必须成立,否则这条保证就
-   * 取决于恰好执行了哪个分支。
+   * 提前返回——而硬停组合(plan、read-only+never)在这些路径上也必须成立,
+   * 否则这条保证就取决于恰好执行了哪个分支。可升级的组合在这里放行,
+   * 确认发生在 checkWrite。
    */
   assertCanMutate(what: string): void {
-    if (this.options.mode === 'readonly') {
-      throw new PermissionDeniedError(
-        `Cannot modify ${what}: running in readonly mode. Restart without --readonly to allow edits.`,
-      );
-    }
+    const reason = this.hardStopReason(`modify ${what}`);
+    if (reason) throw new PermissionDeniedError(reason);
   }
 
   async checkWrite(relativePath: string, detail?: string): Promise<void> {
     this.assertCanMutate(relativePath);
-    if (this.options.mode === 'yolo' || this.options.mode === 'acceptEdits') return;
+    const { sandbox, approval } = this.options.permissions;
+    if (sandbox === 'danger-full-access') return;
+
+    if (sandbox === 'read-only') {
+      // 沙箱外的升级确认。刻意不带 suggestedRule 也不查允许名单:read-only
+      // 沙箱下"始终允许写 src/**"是自相矛盾的——每一次写都该单独过目。
+      await this.request({
+        id: randomUUID(),
+        toolName: 'write',
+        title: t('perm.writeTitle', { path: relativePath }),
+        detail,
+        risk: 'write',
+      });
+      return;
+    }
+
+    // workspace-write:on-request / never 下工作区写入在沙箱内,自由放行;
+    // untrusted 下写入也要确认(等价旧 ask)。
+    if (approval !== 'untrusted') return;
 
     const allowGlobs = [...this.options.rules.allowWrite, ...this.sessionAllowWrite];
     if (allowGlobs.some((glob) => matchGlob(glob, relativePath))) return;
@@ -106,51 +158,99 @@ export class PermissionGate {
   }
 
   async checkBash(command: string, cwdLabel: string): Promise<void> {
+    const { sandbox, approval } = this.options.permissions;
     const verdict = judgeCommand(command, {
       allow: [...this.options.rules.allowBash, ...this.sessionAllowBash],
       deny: this.options.rules.denyBash,
+      // 只读环境下,跑测试/npm scripts 会执行仓库自带的任意代码,allow 规则
+      // 也是在可写语境下授的权——都不能自动放行,见 JudgeOptions.readOnly。
+      readOnly: this.options.plan || sandbox === 'read-only',
     });
 
-    if (verdict.kind === 'deny' && this.options.mode !== 'yolo') {
+    // 硬拒名单永不进确认框,只有 danger-full-access 沙箱绕过它(对应旧 yolo)。
+    // plan 激活时不享受这条豁免:计划模式下连普通写入都不行,遑论灾难命令。
+    if (verdict.kind === 'deny' && (this.options.plan || sandbox !== 'danger-full-access')) {
       throw new PermissionDeniedError(`Command ${verdict.reason}. Run it yourself if you intend it.`);
     }
-    if (this.options.mode === 'yolo') return;
-    if (this.options.mode === 'readonly' && verdict.kind !== 'safe') {
-      throw new PermissionDeniedError(
-        `Cannot run \`${command}\`: running in readonly mode, only read-only commands are permitted.`,
-      );
-    }
+    if (!this.options.plan && sandbox === 'danger-full-access') return;
     if (verdict.kind === 'safe') return;
 
+    // 非白名单命令一律视为"沙箱外":没有 OS 沙箱能把命令圈在工作区里,
+    // 所以 workspace-write 也不放行——这是与 Codex 的刻意差异,见 schema.ts。
+    const reason = this.hardStopReason(`run \`${command}\``);
+    if (reason) throw new PermissionDeniedError(`${reason} Only read-only commands run freely.`);
+
+    if (approval === 'never') {
+      throw new PermissionDeniedError(
+        `Cannot run \`${command}\`: it is not on the safe list and the approval policy is never, ` +
+          'so it cannot be escalated. Use safe read-only commands, or ask the user to change the policy.',
+      );
+    }
+
+    // read-only 的升级确认不带 suggestedRule:只读沙箱下不该记住放行规则。
     await this.request({
       id: randomUUID(),
       toolName: 'bash',
       title: t('perm.runTitle', { command }),
       detail: cwdLabel ? t('perm.inDir', { dir: cwdLabel }) : undefined,
-      suggestedRule: verdict.suggestedRule,
+      suggestedRule: sandbox === 'read-only' ? undefined : verdict.suggestedRule,
       risk: 'execute',
     });
   }
 
-  /** MCP 工具是不透明的,所以在非 yolo 模式下总是需要确认。 */
+  /** MCP 工具是不透明的,所以除 danger-full-access 外总要确认(或被 never 拒绝)。 */
   async checkMcpTool(toolName: string, input: unknown): Promise<void> {
-    if (this.options.mode === 'yolo') return;
-    if (this.options.mode === 'readonly') {
+    const { sandbox, approval } = this.options.permissions;
+    if (!this.options.plan && sandbox === 'danger-full-access') return;
+
+    const reason = this.hardStopReason(`call MCP tool ${toolName}`);
+    if (reason) throw new PermissionDeniedError(reason);
+
+    if (approval === 'never') {
       throw new PermissionDeniedError(
-        `Cannot call MCP tool ${toolName}: running in readonly mode.`,
+        `Cannot call MCP tool ${toolName}: the approval policy is never and MCP tools are opaque, ` +
+          'so they cannot be escalated.',
       );
     }
+
     const rule = `Mcp(${toolName})`;
-    if (this.sessionAllowBash.includes(rule)) return;
+    if (sandbox !== 'read-only' && this.sessionAllowBash.includes(rule)) return;
 
     await this.request({
       id: randomUUID(),
       toolName,
       title: t('perm.mcpTitle', { name: toolName }),
       detail: safeJson(input),
-      suggestedRule: rule,
+      suggestedRule: sandbox === 'read-only' ? undefined : rule,
       risk: 'execute',
     });
+  }
+
+  /**
+   * 呈交实现方案等待用户批准(计划模式的出口)。
+   *
+   * 复用 askSerialized 拿到排队与"轮被中断即自动拒绝"这两件事,但**返回**决定
+   * 而不是抛错:用户选"继续完善方案"是正常的往复,不是失败——走 request() 的话
+   * 会抛 PermissionDeniedError,时间线上就画成一条红色的工具报错。
+   *
+   * 门禁只负责问,不碰会话状态:切模式由 exit_plan 工具调 ToolContext 注入的
+   * 回调完成(门禁够不到系统提示词与会话持久化)。
+   */
+  async requestPlanApproval(plan: string): Promise<{ approved: boolean; reason?: string }> {
+    const req: PermissionRequest = {
+      id: randomUUID(),
+      kind: 'plan',
+      toolName: 'exit_plan',
+      title: t('perm.planTitle'),
+      detail: plan,
+      risk: 'write',
+    };
+    const decision = await this.askSerialized(req);
+    this.options.bus.emit({ type: 'permission-resolved', id: req.id, decision });
+    // 只认 allow;allow-always/allow-persist 对方案没有意义(方案不产生规则),
+    // 真出现了也按"未批准"处理,绝不放宽。
+    if (decision.type === 'allow') return { approved: true };
+    return { approved: false, reason: decision.type === 'deny' ? decision.reason : undefined };
   }
 
   private async request(req: PermissionRequest): Promise<void> {

@@ -7,7 +7,8 @@
  * 降低工具调用的表现。
  */
 export const en = {
-  'header.hints': '/ for commands · shift+enter for newline · esc to interrupt · ctrl+c twice to exit',
+  'header.hints':
+    '/ for commands · shift+tab for permission mode · shift+enter for newline · esc to interrupt · ctrl+c twice to exit',
 
   'status.thinking': 'thinking',
   'status.responding': 'responding',
@@ -37,10 +38,10 @@ export const en = {
   'selector.moreAbove': '… {n} more above',
   'selector.moreBelow': '… {n} more below',
 
-  'modeopt.readonly': 'refuse all writes and state-changing commands',
-  'modeopt.ask': 'confirm before writes and shell commands',
-  'modeopt.acceptEdits': 'auto-approve file edits, still prompt for shell commands',
-  'modeopt.yolo': 'auto-approve everything — use with care',
+  'approvalopt.readOnly': 'read-only sandbox — every write or command asks for an escalation',
+  'approvalopt.ask': 'confirm before writes and shell commands (default)',
+  'approvalopt.auto': 'workspace edits are free, shell commands still confirm',
+  'approvalopt.fullAccess': 'no sandbox, no prompts — use with care',
 
   'perm.title': 'Permission needed',
   'perm.allowOnce': 'Allow once',
@@ -52,6 +53,10 @@ export const en = {
   'perm.runTitle': 'Run `{command}`',
   'perm.mcpTitle': 'Call MCP tool {name}',
   'perm.inDir': 'in {dir}',
+  'perm.planTitle': 'Ready to code?',
+  'perm.planApprove': 'Yes, start implementing it',
+  'perm.planKeepPlanning': 'No, keep planning',
+  'perm.planHint': '↑/↓ select · enter confirm · 1-2 jump · esc keep planning',
 
   'ui.moreLines': '… {n} more lines',
   'ui.moreDiffLines': '… {n} more diff lines',
@@ -74,13 +79,17 @@ export const en = {
   'sum.bashTimeout': 'timed out',
   'sum.bashExit': 'exit {code} in {time}',
   'sum.todo': '{done}/{total} done',
+  'sum.planApproved': 'approved → {mode}',
+  'sum.planRejected': 'not approved, still planning',
+  'sum.planNotApplicable': 'not in plan mode — nothing submitted',
   'sum.done': 'done',
 
   'cmd.help': 'Show these commands',
   'cmd.init': 'Analyze the project and generate AGENTS.md',
+  'cmd.plan': 'Plan before coding — /plan, or /plan <task> to start right away',
   'cmd.model': 'Switch model — /model <id>, or bare to list',
   'cmd.provider': 'Switch provider — /provider <kimi|deepseek|glm|…>',
-  'cmd.mode': 'Set permission mode — /mode <readonly|ask|acceptEdits|yolo>',
+  'cmd.approvals': 'Set sandbox & approval preset — /approvals <read-only|ask|auto|full-access>',
   'cmd.lang': 'Switch language — /lang <en|zh-CN>',
   'cmd.think': 'Set reasoning effort — levels depend on the current model',
   'thinkopt.auto': 'provider default — send nothing',
@@ -109,8 +118,8 @@ export const en = {
   'notice.modeSet': 'Permission mode is now {mode}.',
   'notice.modeSaveFailed': 'Could not save permission mode: {message}',
   'notice.modeSavedTo': 'Saved for this workspace in {path}.',
-  'notice.modeSessionOnly': 'yolo applies to this session only and is never saved.',
-  'notice.modeUsage': 'Usage: /mode <readonly|ask|acceptEdits|yolo> (currently {mode})',
+  'notice.modeSessionOnly': '{mode} applies to this session only and is never saved.',
+  'notice.approvalsUsage': 'Usage: /approvals <{list}> (currently {mode})',
   'notice.langSet': 'Language is now {lang}.',
   'notice.langUsage': 'Usage: /lang <en|zh-CN> (currently {lang})',
   'notice.langSaveFailed': 'Could not save language preference: {message}',
@@ -127,7 +136,14 @@ export const en = {
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
   'notice.compactFailed': 'Compaction failed: {message}',
-  'notice.initReadonly': '/init needs to write AGENTS.md — switch out of readonly first (/mode acceptEdits).',
+  'notice.initReadonly':
+    '/init needs to write AGENTS.md, but "{mode}" refuses every write — switch first (/approvals auto).',
+  'notice.planEntered':
+    'Plan mode: research only, no edits. The plan comes back for your approval, then it gets built.',
+  'notice.planNoSubmission':
+    'This turn ended without submitting a plan, so nothing was approved — and nothing was changed. Still in plan mode.',
+  'notice.planReturnFromReadonly':
+    'Approving the plan will switch to ask (the current permissions cannot approve any write).',
   'notice.initFailed': '/init did not finish: {message}',
   'notice.interrupted': 'Interrupted.',
   'notice.providers': 'Providers: {list} (currently {current})',
@@ -141,6 +157,7 @@ export const en = {
   'notice.rewound': 'Rewound to before message {n}. Edit and resend.',
   'notice.rewindNothing': 'Nothing to rewind to.',
   'status.escAgainRewind': 'press esc again to rewind',
+  'status.modeCycled': 'permission mode: {mode} — shift+tab to cycle',
   'picker.title': 'Resume a session',
   'picker.hint': '↑/↓ select · enter resume · esc start fresh',
   'rewind.title': 'Rewind to an earlier message',
@@ -168,9 +185,12 @@ export const en = {
   'cli.opt.provider': 'provider to use ({list})',
   'cli.opt.model': 'model id, overriding the provider default',
   'cli.opt.cwd': 'workspace root (defaults to the current directory)',
-  'cli.opt.readonly': 'refuse all writes and state-changing commands',
-  'cli.opt.acceptEdits': 'auto-approve file edits, still prompt for shell commands',
-  'cli.opt.yolo': 'auto-approve everything — use with care',
+  'cli.opt.sandbox': 'sandbox mode: read-only | workspace-write | danger-full-access',
+  'cli.opt.approval': 'approval policy: untrusted | on-request | never',
+  'cli.opt.fullAuto': 'shortcut for the auto preset (workspace-write + on-request)',
+  'cli.opt.dangerous':
+    'no sandbox, no prompts, hard-deny list bypassed — the full-access preset, session only',
+  'cli.opt.plan': 'start in plan mode — research and plan before any edits',
   'cli.opt.maxContext': 'override the context window, e.g. to test compaction',
   'cli.opt.maxSteps': 'maximum agent steps per turn',
   'cli.opt.noMcp': 'skip connecting to MCP servers',

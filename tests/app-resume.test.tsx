@@ -12,7 +12,7 @@ function makeSession(messages: ModelMessage[]): Session {
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   return {
     root: '/tmp/project',
-    config: { permissionMode: 'ask', statusBar: [] },
+    config: { sandbox: 'workspace-write', approval: 'untrusted', plan: false, statusBar: [] },
     provider,
     agent: {
       isRunning: false,

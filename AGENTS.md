@@ -39,9 +39,19 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   provider presets in `providers.ts`.
 - `src/permissions/` — `sandbox.ts` (realpath workspace containment; `.git/`, `.env*`,
   keys/SSH always denied), `bash-rules.ts` (command judgment + `Bash(prefix:*)` rules;
-  hard-denies `rm -rf`/`sudo`/`curl|sh`/force-push), `gate.ts` (`readonly`/`ask`/
-  `acceptEdits`/`yolo` policy).
-- `src/tools/` — builtin `read write edit glob grep bash todo`.
+  hard-denies `rm -rf`/`sudo`/`curl|sh`/force-push; safelist is two-tier — commands that
+  run project code (`npm test`, test runners) are safe only in writable sandboxes, and
+  find/fd/git-branch arg forms that write are never safe), `gate.ts` (two-axis policy à la
+  Codex: sandbox `read-only`/`workspace-write`/`danger-full-access` × approval
+  `untrusted`/`on-request`/`never`; `/approvals` presets read-only/ask/auto/full-access
+  in `config/schema.ts`). Unlike Codex there is no OS sandbox, so non-safelisted bash
+  stays "outside the sandbox" even under workspace-write, and `on-failure` does not
+  exist. Plan mode is a flag that overrides both axes (read-only, non-escalatable);
+  the `exit_plan` tool submits a plan and approval restores the pre-plan combo
+  (read-only+never promotes to ask). `full-access` and plan are session-only, never
+  persisted. `shift+tab` cycles ask→auto→plan; from outside the cycle it lands on
+  `plan`, so a stray keystroke can only tighten permissions, never loosen them.
+- `src/tools/` — builtin `read write edit glob grep bash todo exit_plan`.
 - `src/agent/` — loop, system prompt (`prompt.ts` injects this file), compaction (`compact.ts`).
 - `src/mcp/` — MCP client; MCP tools are wrapped as AI SDK tools through the same gate.
 - `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs with a parity test asserting key sets match.

@@ -69,10 +69,22 @@ const TOOL_LABELS: Record<string, string> = {
   bash: 'Bash',
   // 名字里就带上动作:它不带参数,紧随其后的是整份清单。
   todo: 'Update Todos',
+  exit_plan: 'Plan',
 };
 
 export function toolDisplayName(name: string): string {
   return TOOL_LABELS[name] ?? name;
+}
+
+/**
+ * 权限档位标签的显示颜色。full-access(以及自由组合出的 danger-full-access)
+ * 是危险(警示色),plan 是当下的工作方式而非危险(强调色),其余弱化。
+ * Header 与 Footer 共用,避免两处各写一份三元。
+ */
+export function modeColor(label: string): string {
+  if (label === 'full-access' || label.startsWith('danger-full-access')) return theme.warn;
+  if (label === 'plan') return theme.accent;
+  return theme.dim;
 }
 
 export function formatTokens(n: number): string {
@@ -126,6 +138,9 @@ export function formatToolInput(toolName: string, input: unknown): string {
       return String(i.command ?? '');
     // 不带参数:任务数在紧随其后的清单里一目了然,写进括号只是重复。
     case 'todo':
+      return '';
+    // 同理:方案正文紧随其后完整展开,塞进括号只会被截成一行乱码。
+    case 'exit_plan':
       return '';
     default: {
       const text = JSON.stringify(i);

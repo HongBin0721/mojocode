@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { globalConfigPath, projectConfigPath } from './paths.js';
+import { isEphemeralPermissions, type Permissions } from './schema.js';
 
 /**
  * 对全局配置文件做读取-修改-写回。文件可能存有 API key,因此总是以 0600
@@ -118,25 +119,28 @@ export async function saveStatusBar(segments: string[], file?: string): Promise<
 }
 
 /**
- * 保存 `/mode` 切换的权限模式,写**项目级** `<root>/.mojocode/config.json`。
+ * 保存 `/approvals` 切换的两轴权限,写**项目级** `<root>/.mojocode/config.json`。
  *
- * 刻意不写全局配置:权限模式是对某个工作区的信任声明,和 allow 规则同一个
- * 边界。写进 `~/.mojocode/config.json` 会让一次临时放宽泄漏到之后每个目录的每次
- * 启动,而界面上除了状态栏一行小字没有任何提示。
+ * 刻意不写全局配置:权限是对某个工作区的信任声明,和 allow 规则同一个边界。
+ * 写进 `~/.mojocode/config.json` 会让一次临时放宽泄漏到之后每个目录的每次启动,
+ * 而界面上除了状态栏一行小字没有任何提示。
  *
- * `yolo` 永不落盘——它是"就这一次"的临时逃生口。返回 undefined 表示未保存,
- * 调用方据此告知用户该模式仅本次会话有效。
+ * full-access(danger-full-access)永不落盘——它绕过硬拒名单,是"就这一次"的
+ * 逃生口。返回 undefined 表示未保存,调用方据此告知用户仅本次会话有效。
+ * 顺带清掉旧版单轴字段 permissionMode,完成一次性迁移。
  */
-export async function saveMode(
+export async function savePermissions(
   root: string,
-  mode: string,
+  permissions: Permissions,
   file?: string,
 ): Promise<string | undefined> {
-  if (mode === 'yolo') return undefined;
+  if (isEphemeralPermissions(permissions)) return undefined;
   return updateProjectConfig(
     root,
     (config) => {
-      config.permissionMode = mode;
+      config.sandbox = permissions.sandbox;
+      config.approval = permissions.approval;
+      delete config.permissionMode;
     },
     file,
   );

@@ -15,7 +15,12 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
  */
 function setup(
   agentOverrides: Record<string, unknown> = {},
-  sessionOverrides: { permissionMode?: string; refreshEnvironment?: () => Promise<void> } = {},
+  sessionOverrides: {
+    sandbox?: string;
+    approval?: string;
+    plan?: boolean;
+    refreshEnvironment?: () => Promise<void>;
+  } = {},
 ) {
   const bus = new EventBus();
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
@@ -23,7 +28,12 @@ function setup(
   const refreshEnvironment = vi.fn(sessionOverrides.refreshEnvironment ?? (async () => {}));
   const session = {
     root: '/tmp/project',
-    config: { permissionMode: sessionOverrides.permissionMode ?? 'ask', statusBar: [] },
+    config: {
+      sandbox: sessionOverrides.sandbox ?? 'workspace-write',
+      approval: sessionOverrides.approval ?? 'untrusted',
+      plan: sessionOverrides.plan ?? false,
+      statusBar: [],
+    },
     provider,
     agent: {
       isRunning: false,
@@ -92,8 +102,9 @@ describe('/init 命令', () => {
     unmount();
   });
 
+  // 提示语按框宽折行,断言取不会被折断的片段,而不是整条消息。
   it('readonly 模式提前拦下,不白烧一轮', async () => {
-    const { stdin, run, frames, unmount } = setup({}, { permissionMode: 'readonly' });
+    const { stdin, run, frames, unmount } = setup({}, { sandbox: 'read-only', approval: 'never' });
     await tick();
 
     stdin.write('/init');
@@ -102,7 +113,23 @@ describe('/init 命令', () => {
     await tick();
 
     expect(run).not.toHaveBeenCalled();
-    expect(frames.join('\n')).toContain(t('notice.initReadonly'));
+    expect(frames.join('\n')).toContain('/init needs to write AGENTS.md');
+    expect(frames.join('\n')).toContain('refuses every write');
+    unmount();
+  });
+
+  // plan 与 readonly 一样硬拒写入,这一轮同样注定写不出 AGENTS.md。
+  it('plan 模式同样提前拦下', async () => {
+    const { stdin, run, frames, unmount } = setup({}, { plan: true });
+    await tick();
+
+    stdin.write('/init');
+    await tick();
+    stdin.write('\r');
+    await tick();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(frames.join('\n')).toContain('refuses every write');
     unmount();
   });
 

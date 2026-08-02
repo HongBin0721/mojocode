@@ -97,11 +97,12 @@ mojocode
 | 直接打字回车 | 提需求，agent 自主读代码/改文件/跑命令 |
 | `esc` | 中断正在执行的任务 |
 | `ctrl+c` 两次 | 退出 |
+| `shift+tab` | 循环切权限档位：`ask` → `auto` → `plan`（仅本会话，不落盘） |
 | `shift+enter` | 输入框内换行（需终端支持 kitty 键盘协议：iTerm2 3.5+ / kitty / WezTerm / Ghostty 等） |
 | `option+enter` / `ctrl+j` / 行尾 `\` + 回车 | 换行的兜底按键，任何终端可用 |
 | `↑`/`↓` | 翻历史输入；多行草稿内为上下移动光标 |
 | 输入 `/` | 弹出命令菜单，`↑`/`↓` 选择、回车执行、`tab` 补全 |
-| 命令菜单回车 | 带枚举参数的命令（`/model` `/provider` `/mode` `/lang`）会进入二级选择器 |
+| 命令菜单回车 | 带枚举参数的命令（`/model` `/provider` `/approvals` `/lang`）会进入二级选择器 |
 
 **斜杠命令**：
 
@@ -109,9 +110,10 @@ mojocode
 |---|---|
 | `/help` | 列出所有命令 |
 | `/init` | 分析代码库并生成/改进项目根目录的 AGENTS.md（会注入后续会话的系统提示词） |
+| `/plan [任务]` | 进入计划模式：只读调研、产出方案交你批准，批准后自动开工。带参数则顺带以该任务开跑 |
 | `/model <id>` | 切换模型；不带参数列出可用模型 |
 | `/provider <id>` | 切换服务商（kimi / deepseek / glm / …） |
-| `/mode <模式>` | 切换权限模式 |
+| `/approvals <预设>` | 切换沙箱与确认策略预设 |
 | `/lang zh-CN` | 切换界面语言 |
 | `/compact` | 手动压缩上下文 |
 | `/clear` | 开始新对话 |
@@ -130,10 +132,10 @@ mojocode -p "找出所有 TODO 注释并汇总"          # 单次执行，结果
 mojocode -p "分析这段报错" --provider deepseek  # 指定服务商
 mojocode -p "..." --json                        # stderr 输出 NDJSON 事件流
 cat error.log | mojocode -p "分析这个日志"       # 配合管道
-mojocode -p "/init" --accept-edits              # 生成 AGENTS.md
+mojocode -p "/init" --full-auto                 # 生成 AGENTS.md
 ```
 
-`-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--accept-edits` 或 `--yolo`。
+`-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--full-auto` 或 `--dangerously-bypass-approvals-and-sandbox`。
 
 ### 会话管理
 
@@ -146,7 +148,7 @@ mojocode sessions            # 列出本目录的历史会话
 mojocode sessions --all      # 所有目录的
 ```
 
-恢复会话时会完整回放时间线,并还原当时的模型、权限模式、任务列表与本会话
+恢复会话时会完整回放时间线,并还原当时的模型、两轴权限、任务列表与本会话
 批准过的规则(CLI 参数可覆盖,如 `--provider`)。会话完整记录(未压缩)保存
 在 `~/.mojocode/sessions/*.jsonl`,超过 `cleanupPeriodDays`(默认 30 天)未活动的
 会话在启动时自动清理。
@@ -155,9 +157,10 @@ mojocode sessions --all      # 所有目录的
 
 ```bash
 mojocode --provider kimi -m kimi-k2.6   # 本次指定服务商和模型
-mojocode --readonly                     # 只读分析，绝不改文件
-mojocode --accept-edits                 # 文件编辑免确认，shell 命令仍确认
-mojocode --yolo                         # 全部免确认（谨慎）
+mojocode -s read-only                   # 只读沙箱，写入逐次升级确认
+mojocode --plan                         # 计划模式启动：先给方案，批准后再动手
+mojocode --full-auto                    # auto 预设：编辑免确认，命令仍确认
+mojocode --dangerously-bypass-approvals-and-sandbox   # 全部免确认（谨慎）
 mojocode --no-mcp                       # 跳过 MCP 连接，启动更快
 mojocode -C ~/另一个项目                # 指定工作区目录
 ```
@@ -173,7 +176,8 @@ mojocode -C ~/另一个项目                # 指定工作区目录
   "provider": "glm",
   "model": "glm-4.6",
   "language": "zh-CN",
-  "permissionMode": "ask",
+  "sandbox": "workspace-write",
+  "approval": "untrusted",
   "permissions": {
     "allowBash": ["Bash(npm test:*)", "Bash(git diff:*)"],
     "allowWrite": ["src/**"]
@@ -209,14 +213,69 @@ mojocode -C ~/另一个项目                # 指定工作区目录
 
 ## 四、权限模型
 
-| 模式 | 文件编辑 | shell 命令 |
-|---|---|---|
-| `readonly` | 拒绝 | 只放行只读命令 |
-| `ask`（默认） | 确认 | 确认（安全只读命令白名单除外） |
-| `acceptEdits` | 自动放行 | 确认 |
-| `yolo` | 自动放行 | 自动放行 |
+权限是两根正交的轴，对齐 Codex：
 
-对应参数：`--readonly`、`--accept-edits`、`--yolo`；运行中用 `/mode` 切换。
+- **sandbox**（能做什么）：`read-only` / `workspace-write` / `danger-full-access`
+- **approval**（什么时候问）：`untrusted` / `on-request` / `never`
+
+平时不用直接摆弄两根轴，`/approvals` 提供四档预设：
+
+| 预设 | = sandbox + approval | 文件编辑 | shell 命令 |
+|---|---|---|---|
+| `read-only` | read-only + on-request | 逐次升级确认 | 只读白名单放行，其余升级确认 |
+| `ask`（默认） | workspace-write + untrusted | 确认 | 确认（白名单除外） |
+| `auto` | workspace-write + on-request | 自动放行 | 确认（白名单除外） |
+| `full-access` | danger-full-access + never | 自动放行 | 自动放行，含硬拒名单 |
+
+配置写 `sandbox` / `approval` 两个键（自由组合也行，比如 `read-only`+`never` 表示
+「彻底只读、连问都别问」）；启动参数 `-s/--sandbox`、`-a/--ask-for-approval`，快捷方式
+`--full-auto`（= auto）与 `--dangerously-bypass-approvals-and-sandbox`（= full-access）。
+环境变量 `MOJOCODE_SANDBOX` / `MOJOCODE_APPROVAL`。旧的单轴 `permissionMode`（配置、
+环境变量、会话记录里的）启动时自动映射到两轴并提示一次。
+
+命令白名单分两级：纯只读命令（`ls`/`grep`/`git status` 等）任何环境免确认；
+**执行项目自带代码**的命令（`npm test`/`npm run`/各家测试运行器）只在可写沙箱下免确认——
+package.json 的脚本可以写文件连网，「只读」的承诺不能取决于仓库自觉，所以 `read-only`
+沙箱与计划模式下这类命令（以及可写语境下授权的 allow 规则）一律回到逐次确认。
+`find -exec`、`fd -x`、`git branch <名字>`、`git remote add` 这类「前缀只读、参数写盘」
+的形态同样不免检。
+
+**与 Codex 的一处刻意差异**：Codex 的 sandbox 是 OS 内核强制（Seatbelt/Landlock），
+命令真的跑在沙箱里，所以 workspace-write 下任意命令都能放行。mojocode 的约束在权限门
+这一层，无法把一条 bash 命令圈在工作区里，所以 workspace-write 下非白名单命令仍视为
+「沙箱外」（要确认，`never` 下直接拒）；Codex 的 `on-failure` 策略也因此不存在。
+
+运行中 `shift+tab` 在 `ask` → `auto` → `plan` 之间循环。循环里刻意不含 `full-access`：
+它绕过硬拒名单，绝不能离一个快捷键只有一步之遥。当前档位在循环外（read-only、
+full-access、自由组合）时，按下落到 `plan`——它写不了任何东西，误触只可能收紧权限。
+`shift+tab` 的切换只在本会话生效，不写配置文件（`/approvals` 才落盘）。
+
+`full-access` 只在本次会话有效，既不写进 `.mojocode/config.json` 也不写进会话记录：
+它是「就这一次」的临时逃生口。计划模式同理（见下）。
+
+### 计划模式
+
+`plan` 不在轴上——它是协作方式，激活时压过两轴（等同只读且不可升级），出口是方案获批：
+
+1. `/plan` 或 `/plan <任务>` 进入（也可以 `mojocode --plan` 直接启动）。
+2. 模型只读调研——`read`/`glob`/`grep` 与白名单只读命令照常，写入一律被拒，
+   拒绝理由会引导它去提交方案而不是叫你重启。
+3. 调研完模型调用 `exit_plan` 工具呈交 Markdown 方案，界面弹出批准框。
+4. 选「同意」→ 自动还原进入 `/plan` 之前的两轴组合，**同一轮内**接着落地实现；
+   选「不同意，继续完善方案」→ 留在计划模式，模型据反馈修订后重新提交。
+
+`exit_plan` 是离开计划模式的唯一出口：即使模型认为「不需要改代码」，也要通过它把这个
+结论交给你，而不是自己认定后直接作答收尾。万一它没这么做，时间线会明确提示「本轮没有
+提交方案」——门禁保证了那一轮什么都没改，但「我用了 /plan 它却没问我」必须看得见。
+
+批准后忠实还原进入 `/plan` 之前的组合：进入前是 `full-access`，批准后就回到
+`full-access`，后续不再有任何确认。唯一的例外是 `read-only`+`never`——那套组合批准
+不了任何写入，「批准」就没有意义了，所以提升到 `ask`（且这次提升只在本会话有效）。
+`read-only`+`on-request` 忠实还原：实现阶段的每次写入走升级确认。
+
+非交互场景（`mojocode --plan -p "…"`）没有人可以批准，`exit_plan` 会被自动拒绝
+并告知模型「把方案作为最终答复输出即可」——即 `--plan -p` 的语义就是「只要方案，
+别动手」。
 
 与模式无关、始终生效的硬约束：
 

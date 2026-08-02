@@ -4,6 +4,7 @@ import { createFileTools } from './files.js';
 import { createSearchTools } from './search.js';
 import { createBashTool } from './bash.js';
 import { createTodoTool, TodoStore } from './todo.js';
+import { createExitPlanTool } from './plan.js';
 import type { ToolContext } from './context.js';
 
 export { TodoStore } from './todo.js';
@@ -22,6 +23,7 @@ export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet 
     grep: search.grep,
     bash: createBashTool(ctx),
     todo: createTodoTool(todos),
+    exit_plan: createExitPlanTool(ctx),
   };
 }
 
@@ -56,6 +58,11 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
       return t('sum.bashExit', { code: String(o.exitCode), time: formatMs(Number(o.durationMs)) });
     case 'todo':
       return t('sum.todo', { done: Number(o.completed), total: Number(o.total) });
+    case 'exit_plan':
+      // 非计划模式下的误调也返回 approved:false,但那不是"用户打回了方案"
+      // ——照直说成打回,时间线就在报告一次根本没发生过的审批。
+      if (o.notApplicable) return t('sum.planNotApplicable');
+      return o.approved ? t('sum.planApproved', { mode: String(o.mode) }) : t('sum.planRejected');
     default:
       return t('sum.done');
   }

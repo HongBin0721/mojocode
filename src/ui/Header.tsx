@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { theme } from './theme.js';
+import { theme, modeColor } from './theme.js';
 import { APP_NAME } from '../config/paths.js';
 import { t } from '../i18n/index.js';
 
@@ -26,7 +26,7 @@ export function Header({ providerLabel, model, root, mode, mcpSummary }: Props):
         {mode !== 'ask' ? (
           <>
             <Text color={theme.dim}> · </Text>
-            <Text color={mode === 'yolo' ? theme.warn : theme.dim}>{mode}</Text>
+            <Text color={modeColor(mode)}>{mode}</Text>
           </>
         ) : null}
       </Box>

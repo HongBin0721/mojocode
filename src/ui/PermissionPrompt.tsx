@@ -1,13 +1,48 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
+import stringWidth from 'string-width';
 import { Diff } from './Diff.js';
-import { theme, glyphs } from './theme.js';
+import { Markdown } from './Markdown.js';
+import { theme, glyphs, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import type { PermissionDecision, PermissionRequest } from '../core/events.js';
 import { t } from '../i18n/index.js';
 
 interface Props {
   request: PermissionRequest;
   onDecide: (decision: PermissionDecision) => void;
+}
+
+/** 方案正文在确认框里最多占的**屏幕行**数,超出截断——完整方案在时间线上还在。 */
+const PLAN_MAX_ROWS = 20;
+
+/**
+ * 按折行后的实际占用行数截断。
+ *
+ * 不能只数换行符:方案正文是成段的散文,80 列下一个自然段就能折成七八行,
+ * 数出来"才 24 行"的一帧真画出来能有六十多行。比视口还高的一帧会让 ink
+ * 重放整段已累积的 <Static> 输出(见 App.tsx 里 staticEpoch 的注释),
+ * 屏幕上就多出好几份历史。
+ */
+function clampRows(text: string, maxRows: number, width: number): string {
+  const lines = text.split('\n');
+  const cols = Math.max(1, width);
+  const rowsOf = (line: string) => Math.max(1, Math.ceil(stringWidth(line) / cols));
+
+  let rows = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    rows += rowsOf(lines[i]!);
+    if (rows <= maxRows) continue;
+
+    // 首行自己就超预算(一整段没有换行的长文):切掉它超出的部分,而不是
+    // 只剩一行"还有 N 行"——那等于什么都没给用户看。必须按显示宽度切:
+    // CJK 一个字占两列,按字符数切会得到两倍高度。
+    if (i === 0) {
+      const head = truncateWidth(lines[0]!, maxRows * cols);
+      return lines.length > 1 ? `${head}\n${t('ui.moreLines', { n: lines.length - 1 })}` : head;
+    }
+    return `${lines.slice(0, i).join('\n')}\n${t('ui.moreLines', { n: lines.length - i })}`;
+  }
+  return text;
 }
 
 interface Option {
@@ -25,24 +60,37 @@ interface Option {
 export function PermissionPrompt({ request, onDecide }: Props): React.ReactElement {
   const [cursor, setCursor] = useState(0);
 
-  const options: Option[] = [
-    { label: t('perm.allowOnce'), decision: { type: 'allow' } },
-    ...(request.suggestedRule
-      ? ([
-          {
-            label: t('perm.alwaysSession'),
-            note: request.suggestedRule,
-            decision: { type: 'allow-always', rule: request.suggestedRule },
-          },
-          {
-            label: t('perm.alwaysPersist'),
-            note: request.suggestedRule,
-            decision: { type: 'allow-persist', rule: request.suggestedRule },
-          },
-        ] satisfies Option[])
-      : []),
-    { label: t('perm.deny'), decision: { type: 'deny' }, danger: true },
-  ];
+  // 方案审批不是"某个工具要不要放行",而是"这个方案对不对":没有可记住的
+  // 规则(方案不产生规则),所以只有批准 / 继续完善两项,文案也另起一套。
+  const isPlan = request.kind === 'plan';
+
+  const options: Option[] = isPlan
+    ? [
+        { label: t('perm.planApprove'), decision: { type: 'allow' } },
+        {
+          label: t('perm.planKeepPlanning'),
+          // 拒绝理由会喂给模型,保持英文。
+          decision: { type: 'deny', reason: 'the user wants to keep refining the plan' },
+        },
+      ]
+    : [
+        { label: t('perm.allowOnce'), decision: { type: 'allow' } },
+        ...(request.suggestedRule
+          ? ([
+              {
+                label: t('perm.alwaysSession'),
+                note: request.suggestedRule,
+                decision: { type: 'allow-always', rule: request.suggestedRule },
+              },
+              {
+                label: t('perm.alwaysPersist'),
+                note: request.suggestedRule,
+                decision: { type: 'allow-persist', rule: request.suggestedRule },
+              },
+            ] satisfies Option[])
+          : []),
+        { label: t('perm.deny'), decision: { type: 'deny' }, danger: true },
+      ];
 
   // 换成另一个请求时组件并不卸载(只有 permission 变 undefined 才卸载),
   // cursor 会跨请求残留下来。
@@ -67,7 +115,8 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
       return;
     }
     if (key.escape) {
-      onDecide({ type: 'deny' });
+      // 方案审批下 esc 是"继续完善",不是硬拒;理由要跟着一起给模型。
+      onDecide(isPlan ? options[options.length - 1]!.decision : { type: 'deny' });
       return;
     }
     // 数字键直达对应选项。必须限定单字符:粘贴会作为一整个 input 到达,
@@ -79,7 +128,9 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
         return;
       }
     }
-    // 老习惯的快捷键。
+    // 老习惯的快捷键。方案审批不接:y/n 对"批准方案"太含糊,一个手滑就
+    // 让整份方案过了,这里只认明确的选项。
+    if (isPlan) return;
     if (input.toLowerCase() === 'y') onDecide({ type: 'allow' });
     else if (input.toLowerCase() === 'n') onDecide({ type: 'deny' });
   });
@@ -90,18 +141,30 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor={theme.warn}
+      borderColor={isPlan ? theme.accent : theme.warn}
       paddingX={1}
       marginTop={1}
     >
-      <Text bold color={theme.warn}>
-        {t('perm.title')}
+      <Text bold color={isPlan ? theme.accent : theme.warn}>
+        {isPlan ? t('perm.planTitle') : t('perm.title')}
       </Text>
-      <Text>{request.title}</Text>
+      {isPlan ? null : <Text>{request.title}</Text>}
 
       {request.detail ? (
         <Box marginTop={1} flexDirection="column">
-          {isDiff ? (
+          {isPlan ? (
+            // 方案正文是 markdown。必须限高:比视口还高的一帧会让 ink 重放
+            // 整段已累积的 <Static> 输出(见 App.tsx 里 staticEpoch 的注释)。
+            // 截断不丢东西——完整方案随后会作为 exit_plan 的工具条目进时间线。
+            <Markdown
+              text={clampRows(
+                request.detail,
+                PLAN_MAX_ROWS,
+                // 圆角边框 + paddingX 各占 2 列。
+                (process.stdout.columns ?? 80) - 4 - WIDTH_SAFETY,
+              )}
+            />
+          ) : isDiff ? (
             <Diff patch={request.detail} maxLines={20} />
           ) : (
             <Text color={theme.dim}>{clamp(request.detail, 20)}</Text>
@@ -125,7 +188,7 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
           );
         })}
         <Box marginTop={1}>
-          <Text color={theme.dim}>{t('perm.hint')}</Text>
+          <Text color={theme.dim}>{isPlan ? t('perm.planHint') : t('perm.hint')}</Text>
         </Box>
       </Box>
     </Box>

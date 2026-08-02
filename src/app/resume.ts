@@ -1,4 +1,9 @@
-import type { PartialConfig, PermissionMode } from '../config/schema.js';
+import {
+  fromLegacyMode,
+  isEphemeralPermissions,
+  type PartialConfig,
+  type Permissions,
+} from '../config/schema.js';
 import type { SessionMeta, SessionState } from '../session/store.js';
 
 /**
@@ -13,17 +18,28 @@ import type { SessionMeta, SessionState } from '../session/store.js';
 export function resumeOverrides(
   meta: SessionMeta,
   state: SessionState,
-  flags: { provider?: string; model?: string; mode?: PermissionMode },
+  flags: { provider?: string; model?: string; permissions?: Permissions },
 ): PartialConfig {
   const overrides: PartialConfig = {};
   if (!flags.provider) {
     overrides.provider = meta.provider;
     if (!flags.model) overrides.model = meta.model;
   }
-  // yolo 不该从会话记录里复活(见 bootstrap 的 snapshotState);这里再挡一道,
-  // 因为磁盘上可能留有本规则生效之前写下的会话文件。
-  if (!flags.mode && state.permissionMode && state.permissionMode !== 'yolo') {
-    overrides.permissionMode = state.permissionMode;
+
+  // 旧会话文件存的是单轴 permissionMode,一次性映射到两轴;plan/未知值映射
+  // 为 undefined,天然被丢弃。
+  const stored: Permissions | undefined =
+    state.sandbox && state.approval
+      ? { sandbox: state.sandbox, approval: state.approval }
+      : state.permissionMode
+        ? fromLegacyMode(state.permissionMode)
+        : undefined;
+
+  // full-access 不该从会话记录里复活(见 bootstrap 的 snapshotState);这里再挡
+  // 一道,因为磁盘上可能留有本规则生效之前写下的会话文件(旧 yolo 同理)。
+  if (!flags.permissions && stored && !isEphemeralPermissions(stored)) {
+    overrides.sandbox = stored.sandbox;
+    overrides.approval = stored.approval;
   }
   return overrides;
 }

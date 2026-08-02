@@ -5,6 +5,8 @@
  * 循环既驱动 Ink TUI,也驱动非交互式的 `-p` 模式。
  */
 
+import type { Permissions } from '../config/schema.js';
+
 export type PermissionDecision =
   | { type: 'allow' }
   /** 允许,并在本会话余下时间里记住这个模式。 */
@@ -16,6 +18,12 @@ export type PermissionDecision =
 export interface PermissionRequest {
   id: string;
   toolName: string;
+  /**
+   * 请求的种类。`plan` 是计划模式下呈交实现方案等待批准——它不是"某个工具
+   * 要不要放行",而是"这个方案对不对",所以标题、选项文案与正文渲染都不同
+   * (详情是 markdown 计划正文,不是 diff)。缺省视为 `tool`。
+   */
+  kind?: 'tool' | 'plan';
   /** 一行摘要,例如 `bash: npm test` 或 `write: src/index.ts`。 */
   title: string;
   /** 可选的详情正文——diff 预览、完整命令等。 */
@@ -56,6 +64,9 @@ export type AgentEvent =
     }
   | { type: 'permission-request'; request: PermissionRequest }
   | { type: 'permission-resolved'; id: string; decision: PermissionDecision }
+  // 权限变化(两轴组合和/或 plan 标志)。`exit_plan` 批准后由工具侧切换,
+  // 渲染层只能靠这条事件跟上——否则状态栏会一直停在 plan。
+  | { type: 'permission-change'; permissions: Permissions; plan: boolean }
   | { type: 'step-end'; usage: UsageSnapshot }
   | { type: 'compaction'; removedMessages: number; summaryChars: number }
   | { type: 'turn-end'; usage: UsageSnapshot; finishReason: string }

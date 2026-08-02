@@ -8,7 +8,13 @@ import { bootstrap } from './app/bootstrap.js';
 import { headlessAsker, renderHeadless } from './app/headless.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from './config/providers.js';
-import type { PartialConfig, PermissionMode } from './config/schema.js';
+import {
+  approvalPolicySchema,
+  presetById,
+  sandboxModeSchema,
+  type PartialConfig,
+  type Permissions,
+} from './config/schema.js';
 import { listModels } from './model/registry.js';
 import { AmbiguousSessionError, SessionNotFoundError, SessionStore } from './session/store.js';
 import { SessionPicker } from './ui/SessionPicker.js';
@@ -21,9 +27,11 @@ interface GlobalFlags {
   provider?: string;
   model?: string;
   cwd?: string;
-  readonly?: boolean;
-  acceptEdits?: boolean;
-  yolo?: boolean;
+  plan?: boolean;
+  sandbox?: string;
+  askForApproval?: string;
+  fullAuto?: boolean;
+  dangerouslyBypassApprovalsAndSandbox?: boolean;
   maxContext?: string;
   maxSteps?: string;
   noMcp?: boolean;
@@ -38,23 +46,67 @@ interface MainFlags extends GlobalFlags {
   forkSession?: boolean;
 }
 
-function modeFromFlags(flags: GlobalFlags): PermissionMode | undefined {
-  if (flags.yolo) return 'yolo';
-  if (flags.acceptEdits) return 'acceptEdits';
-  if (flags.readonly) return 'readonly';
-  return undefined;
+/**
+ * 两轴 flags 的合成:预设 flag 先落底,显式的 -s / -a 单独覆盖对应的轴。
+ * 与 Codex 同名同义:--full-auto = auto 预设,--dangerously-bypass-approvals-and-sandbox
+ * = full-access 预设。取值非法时直接报错退出,而不是静默落回默认。
+ */
+function permissionsFromFlags(flags: GlobalFlags): Partial<Permissions> {
+  const out: Partial<Permissions> = {};
+  if (flags.fullAuto) Object.assign(out, presetById('auto'));
+  if (flags.dangerouslyBypassApprovalsAndSandbox) Object.assign(out, presetById('full-access'));
+  if (flags.sandbox) {
+    const parsed = sandboxModeSchema.safeParse(flags.sandbox);
+    if (!parsed.success) {
+      throw new ConfigError(
+        `Invalid --sandbox "${flags.sandbox}". Valid: ${sandboxModeSchema.options.join(', ')}`,
+      );
+    }
+    out.sandbox = parsed.data;
+  }
+  if (flags.askForApproval) {
+    const parsed = approvalPolicySchema.safeParse(flags.askForApproval);
+    if (!parsed.success) {
+      throw new ConfigError(
+        `Invalid --ask-for-approval "${flags.askForApproval}". Valid: ${approvalPolicySchema.options.join(', ')}`,
+      );
+    }
+    out.approval = parsed.data;
+  }
+  return out;
 }
 
 function overridesFromFlags(flags: GlobalFlags): PartialConfig {
   const overrides: PartialConfig = {};
   if (flags.provider) overrides.provider = flags.provider;
   if (flags.model) overrides.model = flags.model;
-  const mode = modeFromFlags(flags);
-  if (mode) overrides.permissionMode = mode;
+  const perms = permissionsFromFlags(flags);
+  if (perms.sandbox) overrides.sandbox = perms.sandbox;
+  if (perms.approval) overrides.approval = perms.approval;
+  if (flags.plan) overrides.plan = true;
   if (flags.maxContext) overrides.maxContext = Number(flags.maxContext);
   if (flags.maxSteps) overrides.maxSteps = Number(flags.maxSteps);
   return overrides;
 }
+
+/**
+ * 从 argv 里手动捞 -C/--cwd:此刻 commander 还没解析,而项目级配置可能
+ * 覆盖 language。捞不到就用 process.cwd(),差错也只影响语言检测。
+ */
+function cwdFromArgv(argv: string[]): string {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg === '-C' || arg === '--cwd') return argv[i + 1] ?? process.cwd();
+    if (arg.startsWith('--cwd=')) return arg.slice('--cwd='.length);
+  }
+  return process.cwd();
+}
+
+// 语言必须在构建 commander 之前应用:所有命令/选项描述在下面构建时就用
+// t() 求值,晚了的话 `--help` 和 models/sessions 等子命令就只认环境变量,
+// `/lang` 保存的偏好在这些入口上形同虚设——"下次打开恢复默认"的观感即源于此。
+// runMain 里的再次应用仍保留:它拿的是完整解析后的配置(含 CLI 覆盖项)。
+await applyConfigLocale(cwdFromArgv(process.argv));
 
 const program = new Command();
 
@@ -67,9 +119,11 @@ program
   .option('--provider <id>', t('cli.opt.provider', { list: BUILTIN_PROVIDER_IDS.join(', ') }))
   .option('-m, --model <id>', t('cli.opt.model'))
   .option('-C, --cwd <dir>', t('cli.opt.cwd'))
-  .option('--readonly', t('cli.opt.readonly'))
-  .option('--accept-edits', t('cli.opt.acceptEdits'))
-  .option('--yolo', t('cli.opt.yolo'))
+  .option('--plan', t('cli.opt.plan'))
+  .option('-s, --sandbox <mode>', t('cli.opt.sandbox'))
+  .option('-a, --ask-for-approval <policy>', t('cli.opt.approval'))
+  .option('--full-auto', t('cli.opt.fullAuto'))
+  .option('--dangerously-bypass-approvals-and-sandbox', t('cli.opt.dangerous'))
   .option('--max-context <tokens>', t('cli.opt.maxContext'))
   .option('--max-steps <n>', t('cli.opt.maxSteps'))
   .option('--no-mcp', t('cli.opt.noMcp'))
@@ -160,8 +214,15 @@ program
   .description(t('cli.cmd.config'))
   .action(async () => {
     const root = process.cwd();
+    // 加载期提示(旧版 permissionMode 的一次性转换等)最该出现在这里:
+    // 想搞清楚"我的配置到底生效成什么样"的人就是来跑这条命令的。
+    const showWarnings = (warnings: string[]): void => {
+      for (const warning of warnings) process.stderr.write(`! ${warning}\n`);
+      if (warnings.length > 0) process.stderr.write('\n');
+    };
     try {
       const loaded = await loadConfig({ root });
+      showWarnings(loaded.warnings);
       process.stdout.write(`${t('cli.sources', { list: loaded.sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
       process.stdout.write(
         `${JSON.stringify(
@@ -175,7 +236,8 @@ program
       // 看到配置通常是修复 key 的第一步。
       if (error instanceof ConfigError) {
         process.stderr.write(`${t('cli.warning', { message: error.message })}\n\n`);
-        const { config, sources } = await loadRawConfig({ root });
+        const { config, sources, warnings } = await loadRawConfig({ root });
+        showWarnings(warnings);
         process.stdout.write(`${t('cli.sources', { list: sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
         process.stdout.write(
           `${JSON.stringify({ ...config, providers: redactKeys(config.providers) }, null, 2)}\n`,
@@ -262,8 +324,16 @@ async function runMain(flags: MainFlags): Promise<void> {
     return fail(error);
   }
 
+  // 只有两轴都被 flags 显式定死时,会话记录的权限才被完全压过。
+  const flagPerms = permissionsFromFlags(flags);
   const overrides: PartialConfig = {
-    ...(resume ? resumeOverrides(resume.meta, resume.state, { ...flags, mode: modeFromFlags(flags) }) : {}),
+    ...(resume
+      ? resumeOverrides(resume.meta, resume.state, {
+          ...flags,
+          permissions:
+            flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
+        })
+      : {}),
     ...overridesFromFlags(flags),
   };
 
@@ -295,7 +365,7 @@ async function runMain(flags: MainFlags): Promise<void> {
   const session = await bootstrap({
     root,
     loaded,
-    ask: headlessAsker(loaded.config.permissionMode),
+    ask: headlessAsker({ sandbox: loaded.config.sandbox, approval: loaded.config.approval }),
     resume,
     fork: flags.forkSession === true,
     skipMcp: flags.noMcp === true,
@@ -305,6 +375,14 @@ async function runMain(flags: MainFlags): Promise<void> {
       }
     },
   });
+
+  // 加载期提示(旧版 permissionMode 的一次性转换等)。`--json` 下不打:
+  // stderr 是纯 NDJSON 流,掺普通文本会让逐行 JSON.parse 的消费方在第一行就炸。
+  if (!(headless && flags.json === true)) {
+    for (const warning of loaded.warnings) {
+      process.stderr.write(`! ${warning}\n`);
+    }
+  }
 
   // 启动清理:超过保留期未活动的会话文件后台删除,失败不打扰。
   void SessionStore.cleanup({
@@ -323,7 +401,13 @@ async function runMain(flags: MainFlags): Promise<void> {
     // 走事件总线而不是直接写 stderr:`--json` 下 stderr 是纯 NDJSON 流,
     // 掺一行普通文本会让逐行 JSON.parse 的消费方在第一行就炸。
     const isInit = flags.print!.trim() === '/init';
-    if (isInit && !['acceptEdits', 'yolo'].includes(loaded.config.permissionMode)) {
+    // /init 要写 AGENTS.md:headless 下确认一律被拒,所以除非写入本就免确认
+    // (workspace-write 且非 untrusted),这一轮注定写不出文件,提前提示。
+    const writesFree =
+      loaded.config.sandbox !== 'read-only' &&
+      loaded.config.approval !== 'untrusted' &&
+      !loaded.config.plan;
+    if (isInit && !writesFree) {
       session.bus.emit({ type: 'notice', level: 'warn', message: t('cli.initNeedsWrite') });
     }
     await session.agent.run(

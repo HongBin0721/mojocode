@@ -18,17 +18,23 @@ import { collectRewindEntries, replayTimeline, type RewindEntry } from '../sessi
 import { RewindPicker } from './RewindPicker.js';
 import type { TodoItem } from '../tools/index.js';
 import {
+  APPROVAL_PRESETS,
   STATUS_SEGMENTS,
-  permissionModeSchema,
+  canEverWrite,
+  isEphemeralPermissions,
+  nextCycleStep,
+  permissionsLabel,
+  presetById,
   reasoningEffortSchema,
-  type PermissionMode,
+  type ApprovalPresetId,
+  type Permissions,
   type ReasoningEffort,
   type StatusSegment,
 } from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
 import {
   saveLanguage,
-  saveMode,
+  savePermissions,
   saveModelChoice,
   saveProviderChoice,
   saveReasoningEffort,
@@ -44,9 +50,10 @@ function buildCommands() {
   return [
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
+    { name: 'plan', description: t('cmd.plan') },
     { name: 'model', description: t('cmd.model') },
     { name: 'provider', description: t('cmd.provider') },
-    { name: 'mode', description: t('cmd.mode') },
+    { name: 'approvals', description: t('cmd.approvals') },
     { name: 'think', description: t('cmd.think') },
     { name: 'lang', description: t('cmd.lang') },
     { name: 'statusbar', description: t('cmd.statusbar'), multi: true },
@@ -60,11 +67,12 @@ function buildCommands() {
   ];
 }
 
-const MODE_DESCRIPTIONS: Record<PermissionMode, MessageKey> = {
-  readonly: 'modeopt.readonly',
-  ask: 'modeopt.ask',
-  acceptEdits: 'modeopt.acceptEdits',
-  yolo: 'modeopt.yolo',
+/** `/approvals` 二级选择器里各预设的说明。 */
+const PRESET_DESCRIPTIONS: Record<ApprovalPresetId, MessageKey> = {
+  'read-only': 'approvalopt.readOnly',
+  ask: 'approvalopt.ask',
+  auto: 'approvalopt.auto',
+  'full-access': 'approvalopt.fullAccess',
 };
 
 /** 思考档位的选择器说明。/think 不进 BUSY_BLOCKED_COMMANDS:改档位对进行中
@@ -168,13 +176,25 @@ export function App({ session }: Props): React.ReactElement {
   const [usage, setUsage] = useState({ used: 0, window: session.provider.contextWindow, total: 0 });
   const [providerLabel, setProviderLabel] = useState(session.provider.label);
   const [model, setModel] = useState(session.provider.model);
-  const [mode, setMode] = useState(session.config.permissionMode);
+  // 两轴权限 + plan 标志。UI 展示与判断都从这份镜像取,靠 permission-change
+  // 事件与 bootstrap 同步。
+  const [perms, setPerms] = useState<Permissions>({
+    sandbox: session.config.sandbox,
+    approval: session.config.approval,
+  });
+  const [planActive, setPlanActive] = useState(session.config.plan);
+  // 状态栏/头部显示的标签:plan 压过两轴。
+  const modeLabel = planActive ? 'plan' : permissionsLabel(perms);
   const [think, setThink] = useState<ReasoningEffort>(session.provider.reasoningEffort);
   const [ctrlCArmed, setCtrlCArmed] = useState(false);
   const [locale, setLocaleState] = useState(getLocale());
   const [statusSegments, setStatusSegments] = useState<StatusSegment[]>(session.config.statusBar);
   // esc-esc 回退:第一次 esc 预备(footer 提示),第二次打开回退选择器。
   const [escArmed, setEscArmed] = useState(false);
+  // shift+tab 切换后在状态栏短暂回显新档位:mode 段可能被 /statusbar 关掉,
+  // Header 又只在默认档时不显示且早已滚出屏幕——没有这个回显,按下去会毫无反馈。
+  const [modeFlash, setModeFlash] = useState<string | undefined>(undefined);
+  const modeFlashTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const [rewind, setRewind] = useState<RewindEntry[] | undefined>(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
@@ -197,6 +217,12 @@ export function App({ session }: Props): React.ReactElement {
 
   // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = useRef(new Map<string, unknown>());
+
+  // 本轮是否调用过 exit_plan。计划模式下收尾时没调过就要出声,见 turn-end。
+  const planSubmitted = useRef(false);
+  // 本轮**开始时**是否就在计划模式。轮中途 shift+tab 切进计划模式的那一轮
+  // 不该被追问方案——用户压根没让它规划,警告只会莫名其妙。
+  const planAtTurnStart = useRef(false);
 
   const ctrlCTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const escTimer = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -241,6 +267,8 @@ export function App({ session }: Props): React.ReactElement {
       switch (event.type) {
         case 'turn-start':
           push({ kind: 'user', text: event.display ?? event.userText });
+          planSubmitted.current = false;
+          planAtTurnStart.current = session.config.plan;
           // 新一轮从零开始计时,不沿用上一轮残留的 since。
           setWork({ phase: 'thinking', since: Date.now() });
           break;
@@ -273,6 +301,7 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'tool-start':
+          if (event.toolName === 'exit_plan') planSubmitted.current = true;
           toolInputs.current.set(event.callId, event.input);
           setActiveTools((prev) => [
             ...prev,
@@ -308,6 +337,14 @@ export function App({ session }: Props): React.ReactElement {
           beginWork('waiting');
           break;
 
+        // 权限也可能由 exit_plan 在工具侧切换(方案获批),不订阅的话顶栏/
+        // 底栏会一直停在 plan。命令侧的手动同步是同值 setState,
+        // React 视为无操作,留着不碍事。
+        case 'permission-change':
+          setPerms(event.permissions);
+          setPlanActive(event.plan);
+          break;
+
         case 'step-end':
           setUsage({
             used: event.usage.inputTokens,
@@ -318,6 +355,12 @@ export function App({ session }: Props): React.ReactElement {
 
         case 'turn-end':
           setUsage((prev) => ({ ...prev, total: event.usage.cumulativeTotalTokens }));
+          // 计划模式下这一轮没提交过方案:提示词要求模型必须走 exit_plan,但那
+          // 只是提示词——模型仍可能调研完直接作答就收尾。门禁保证了这一轮什么
+          // 都没改动,但"我明明用了 /plan,它却没问我"必须看得见,不能静悄悄。
+          if (planAtTurnStart.current && session.config.plan && !planSubmitted.current) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.planNoSubmission') });
+          }
           endWork();
           break;
 
@@ -382,6 +425,32 @@ export function App({ session }: Props): React.ReactElement {
   // 始终激活的处理器。依赖 cli.tsx 里 exitOnCtrlC: false——否则 ink 会在
   // useInput 之前吞掉这个按键,这里永远收不到。
   useInput((input, key) => {
+    // shift+tab 循环切权限档位(ask → auto → plan),与 Claude Code /
+    // Codex 的手感一致。full-access 刻意不在循环里。授权确认框开着时不接:
+    // 那会在你决定"要不要放行这一次"的中途改掉规则本身。
+    if (key.tab && key.shift && !permission) {
+      const step = nextCycleStep(
+        { sandbox: session.config.sandbox, approval: session.config.approval },
+        session.config.plan,
+      );
+      let label: string;
+      if ('plan' in step) {
+        session.setPlan(true);
+        setPlanActive(true);
+        label = 'plan';
+      } else {
+        const next = presetById(step.preset);
+        session.setPermissions(next);
+        setPerms(next);
+        setPlanActive(false);
+        label = step.preset;
+      }
+      // 只在本会话生效,不落盘:一个随手的按键不该改写工作区配置。
+      setModeFlash(label);
+      if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
+      modeFlashTimer.current = setTimeout(() => setModeFlash(undefined), 2000);
+      return;
+    }
     if (key.ctrl && input === 't') {
       setTodoPanelOpen((open) => !open);
       return;
@@ -399,9 +468,13 @@ export function App({ session }: Props): React.ReactElement {
     }
   });
 
+  // 三个定时器都要清:cli.tsx 只设 process.exitCode 而不调 process.exit(),
+  // 任何挂着的定时器都会让事件循环多活到它触发为止——按过 shift+tab 之后
+  // 两秒内连按 ctrl+c 退出,进程会僵在那里等这个回显定时器。
   useEffect(() => () => {
     if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
     if (escTimer.current) clearTimeout(escTimer.current);
+    if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
   }, []);
 
   // 清屏 + 换 <Static> 身份 + 重放:/resume 与 esc-esc 回退共用。
@@ -529,10 +602,15 @@ export function App({ session }: Props): React.ReactElement {
         // (turn-start 的 display),完整指令进历史喂模型。轮结束后刷新
         // 环境信息,让刚生成的 AGENTS.md 立刻进入系统提示词。
         case 'init': {
-          // readonly 下 assertCanMutate 会硬拒写入:这一轮注定写不出
-          // AGENTS.md,提前拦下,别白烧一轮 token。
-          if (mode === 'readonly') {
-            push({ kind: 'notice', level: 'warn', message: t('notice.initReadonly') });
+          // 写入完全不可能的组合(plan、read-only+never)下这一轮注定写不出
+          // AGENTS.md,提前拦下,别白烧一轮 token。read-only+on-request 放行:
+          // 写入可以逐次升级确认。
+          if (!canEverWrite(perms, planActive)) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.initReadonly', { mode: modeLabel }),
+            });
             break;
           }
           setRunning(true);
@@ -548,6 +626,39 @@ export function App({ session }: Props): React.ReactElement {
           break;
         }
 
+        // 计划模式:裸 /plan 只切模式,`/plan <任务>` 顺带以任务原文发起一轮。
+        // 任务原文直接进历史(不像 /init 那样套 display):用户写的就是他的
+        // 意图本身,实时时间线与 /resume 回放因此天然一致,回退重发也能重跑。
+        case 'plan': {
+          // 带参数会发起一轮,运行中禁止。不走 BUSY_BLOCKED_COMMANDS——那张表
+          // 按命令名判断,表达不了"只有带参数时才拦"。
+          if (arg && busy) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
+            break;
+          }
+          if (!planActive) {
+            // read-only+never 进来的话批准后会提升到 ask,提前说明,免得用户
+            // 以为设置被吞了。其余组合忠实还原,不必多话。
+            if (!canEverWrite(perms, false)) {
+              push({ kind: 'notice', level: 'info', message: t('notice.planReturnFromReadonly') });
+            }
+            session.setPlan(true);
+            setPlanActive(true);
+            push({ kind: 'notice', level: 'info', message: t('notice.planEntered') });
+          }
+          if (!arg) break;
+          setRunning(true);
+          void session.agent
+            .run(arg)
+            // run() 自己消化模型错误,但未捕获的 rejection 在 Node ≥20 会掀掉
+            // 整个 TUI——与 /init 同一条教训。
+            .catch((err: Error) => {
+              push({ kind: 'notice', level: 'warn', message: err.message });
+            })
+            .finally(() => setRunning(false));
+          break;
+        }
+
         case 'compact':
           setWork({ phase: 'compacting', since: Date.now() });
           setRunning(true);
@@ -558,26 +669,36 @@ export function App({ session }: Props): React.ReactElement {
           endWork();
           break;
 
-        case 'mode': {
-          const parsed = permissionModeSchema.safeParse(arg);
-          if (!parsed.success) {
+        case 'approvals': {
+          const preset = APPROVAL_PRESETS.find((p) => p.id === arg);
+          if (!preset) {
             push({
               kind: 'notice',
               level: 'warn',
-              message: t('notice.modeUsage', { mode }),
+              message: t('notice.approvalsUsage', {
+                list: APPROVAL_PRESETS.map((p) => p.id).join('|'),
+                mode: modeLabel,
+              }),
             });
             break;
           }
-          session.setMode(parsed.data);
-          setMode(parsed.data);
-          push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: parsed.data }) });
-          // 落盘范围是本工作区的 .mojocode/config.json;yolo 不保存,提示它只管这一次。
-          const saved = await saveMode(session.root, parsed.data).catch((err: Error) => {
+          const next = presetById(preset.id);
+          session.setPermissions(next);
+          setPerms(next);
+          setPlanActive(false);
+          push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: preset.id }) });
+          // 落盘范围是本工作区的 .mojocode/config.json;full-access 不保存,
+          // 提示它只管这一次。
+          const saved = await savePermissions(session.root, next).catch((err: Error) => {
             push({ kind: 'notice', level: 'warn', message: t('notice.modeSaveFailed', { message: err.message }) });
             return undefined;
           });
-          if (parsed.data === 'yolo') {
-            push({ kind: 'notice', level: 'warn', message: t('notice.modeSessionOnly') });
+          if (isEphemeralPermissions(next)) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.modeSessionOnly', { mode: preset.id }),
+            });
           } else if (saved) {
             push({ kind: 'notice', level: 'info', message: t('notice.modeSavedTo', { path: saved }) });
           }
@@ -779,9 +900,10 @@ export function App({ session }: Props): React.ReactElement {
             }
           }
           resetTimeline(buildResumeItems(session));
-          // 同步 UI 状态:mode/provider/model 可能都被恢复改写;上下文用量
+          // 同步 UI 状态:权限/provider/model 可能都被恢复改写;上下文用量
           // 归零,下一轮 step-end 会带回真实值。todos 由订阅自动更新。
-          setMode(session.config.permissionMode);
+          setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
+          setPlanActive(session.config.plan);
           setProviderLabel(session.provider.label);
           setModel(session.provider.model);
           setThink(session.provider.reasoningEffort);
@@ -801,7 +923,7 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, mode, think, usage, statusSegments, push, exit, writeStdout, resetTimeline],
+    [session, perms, planActive, modeLabel, think, usage, statusSegments, push, exit, writeStdout, resetTimeline],
   );
 
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
@@ -829,11 +951,11 @@ export function App({ session }: Props): React.ReactElement {
   // 枚举参数的取值来源:在命令菜单上回车会进入二级选择器。
   const commands = useMemo<SlashCommand[]>(() => {
     const optionSources: Record<string, SlashCommand['options']> = {
-      mode: () =>
-        permissionModeSchema.options.map((m) => ({
-          value: m,
-          label: t(MODE_DESCRIPTIONS[m]),
-          current: m === mode,
+      approvals: () =>
+        APPROVAL_PRESETS.map((p) => ({
+          value: p.id,
+          label: t(PRESET_DESCRIPTIONS[p.id]),
+          current: !planActive && p.id === permissionsLabel(perms),
         })),
       think: () =>
         supportedEfforts(session.provider).map((l) => ({
@@ -873,7 +995,7 @@ export function App({ session }: Props): React.ReactElement {
     };
     return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [locale, mode, think, model, providerLabel, statusSegments, session]);
+  }, [locale, perms, planActive, think, model, providerLabel, statusSegments, session]);
 
   const mcpSummary = useMemo(() => {
     if (session.mcpStatuses.length === 0) return undefined;
@@ -907,7 +1029,7 @@ export function App({ session }: Props): React.ReactElement {
             providerLabel={providerLabel}
             model={model}
             root={session.root}
-            mode={mode}
+            mode={modeLabel}
             mcpSummary={mcpSummary}
           />
         ) : null}
@@ -984,7 +1106,7 @@ export function App({ session }: Props): React.ReactElement {
               // 实时面板已在上方展开时,底栏不再重复一行摘要。
               todos={todoPanelVisible ? [] : todos}
               model={model}
-              mode={mode}
+              mode={modeLabel}
               think={think}
               segments={statusSegments}
               notice={
@@ -992,7 +1114,9 @@ export function App({ session }: Props): React.ReactElement {
                   ? t('status.ctrlcAgain')
                   : escArmed
                     ? t('status.escAgainRewind')
-                    : undefined
+                    : modeFlash
+                      ? t('status.modeCycled', { mode: modeFlash })
+                      : undefined
               }
             />
           </Box>

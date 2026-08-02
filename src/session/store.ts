@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { sessionsDir } from '../config/paths.js';
-import type { PermissionMode } from '../config/schema.js';
+import type { ApprovalPolicy, SandboxMode } from '../config/schema.js';
 import type { TodoItem } from '../tools/todo.js';
 
 export interface SessionMeta {
@@ -18,13 +18,16 @@ export interface SessionMeta {
   messageCount: number;
 }
 
-/** 消息之外需要跨会话恢复的东西:todos、会话级授权规则、权限模式。 */
+/** 消息之外需要跨会话恢复的东西:todos、会话级授权规则、两轴权限。 */
 export interface SessionState {
   todos: TodoItem[];
   /** 原始规则串,如 `Bash(npm test:*)`、`Mcp(name)`。 */
   allowBash: string[];
   allowWrite: string[];
-  permissionMode?: PermissionMode;
+  sandbox?: SandboxMode;
+  approval?: ApprovalPolicy;
+  /** 旧版单轴字段。只在恢复旧会话文件时读取,转换见 resume.ts,不再写入。 */
+  permissionMode?: string;
 }
 
 const EMPTY_STATE: SessionState = { todos: [], allowBash: [], allowWrite: [] };

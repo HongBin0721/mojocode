@@ -120,6 +120,44 @@ describe('replayTimeline', () => {
     const items = replayTimeline([{ role: 'user', content: INIT_PROMPT }] as ModelMessage[]);
     expect(items).toEqual([{ kind: 'user', text: '/init' }]);
   });
+
+  // 方案在**输入**里,所以回放天然带得出来;`/plan <任务>` 不套 display,
+  // 任务原文直接以普通用户消息还原,无需任何特判。
+  it('exit_plan 回放带出方案原文与批准结果', () => {
+    const items = replayTimeline([
+      { role: 'user', content: '给 list() 加缓存' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'p1',
+            toolName: 'exit_plan',
+            input: { plan: '# 方案\n\n1. 改 store.ts' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'p1',
+            toolName: 'exit_plan',
+            output: { type: 'json', value: { approved: true, mode: 'ask' } },
+          },
+        ],
+      },
+    ] as ModelMessage[]);
+
+    expect(items[0]).toEqual({ kind: 'user', text: '给 list() 加缓存' });
+    expect(items[1]).toMatchObject({
+      kind: 'tool',
+      toolName: 'exit_plan',
+      input: { plan: '# 方案\n\n1. 改 store.ts' },
+      isError: false,
+    });
+  });
 });
 
 describe('unwrapGuidance', () => {

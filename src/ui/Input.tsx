@@ -270,7 +270,9 @@ export function Input({
         return;
       }
 
-      if (key.tab && matches.length > 0) {
+      // 必须排除 shift:shift+tab 是切换权限模式的全局快捷键(App.tsx),
+      // ink 把它报成 tab + shift,不排除的话命令菜单一开就被补全吞掉。
+      if (key.tab && !key.shift && matches.length > 0) {
         const completed = `/${menuTarget()!.name} `;
         setValue(completed);
         setCursor(completed.length);

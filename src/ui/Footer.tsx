@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { theme, glyphs, formatTokens, truncateWidth } from './theme.js';
+import { theme, glyphs, formatTokens, truncateWidth, modeColor } from './theme.js';
 import type { TodoItem } from '../tools/index.js';
 import type { StatusSegment } from '../config/schema.js';
 import { t } from '../i18n/index.js';
@@ -43,9 +43,9 @@ export function Footer({
 
   const parts: React.ReactElement[] = [];
   if (show.has('mode')) {
-    // 与 Header 一致:yolo 用警示色,其余用弱化色。
+    // 与 Header 共用同一套配色,见 theme.modeColor。
     parts.push(
-      <Text key="mode" color={mode === 'yolo' ? theme.warn : theme.dim}>
+      <Text key="mode" color={modeColor(mode)}>
         {mode}
       </Text>,
     );

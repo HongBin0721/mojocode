@@ -146,3 +146,35 @@ describe('Input 多选选择器', () => {
     unmount();
   });
 });
+
+describe('tab 与 shift+tab 的分工', () => {
+  const commands: SlashCommand[] = [
+    { name: 'plan', description: '计划模式' },
+    { name: 'provider', description: '切换服务商' },
+  ];
+
+  it('tab 仍然补全命令', async () => {
+    const { stdin, lastFrame, unmount } = setup(commands);
+    await tick();
+    stdin.write('/pl');
+    await tick();
+    stdin.write('\t');
+    await tick();
+    expect(lastFrame()).toContain('/plan');
+    unmount();
+  });
+
+  // shift+tab 是全局切权限模式的快捷键,ink 把它报成 tab + shift。
+  // 不排除 shift 的话,命令菜单一开它就被补全吞掉,模式永远切不动。
+  it('shift+tab 不触发补全,留给全局快捷键', async () => {
+    const { stdin, lastFrame, unmount } = setup(commands);
+    await tick();
+    stdin.write('/pl');
+    await tick();
+    const before = lastFrame();
+    stdin.write('\x1b[Z');
+    await tick();
+    expect(lastFrame()).toBe(before);
+    unmount();
+  });
+});

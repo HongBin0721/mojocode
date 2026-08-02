@@ -471,3 +471,53 @@ describe('轮内压缩', () => {
     expect(mockCompactMessages).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('轮中途替换系统提示词', () => {
+  /** 让 mock 在流播放时驱动一次 prepareStep,并交出它的返回值。 */
+  function installPreparingStream(beforePrepare?: (agent: Agent) => void) {
+    const prepared: Array<Record<string, unknown>> = [];
+    let agentRef!: Agent;
+    mockStreamText.mockImplementation(
+      (opts: { prepareStep: (i: { messages: unknown[] }) => Promise<Record<string, unknown>> }) => ({
+        fullStream: (async function* () {
+          beforePrepare?.(agentRef);
+          prepared.push(await opts.prepareStep({ messages: [] }));
+          yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+        })(),
+        responseMessages: Promise.resolve([{ role: 'assistant', content: '回复' }]),
+        finishReason: Promise.resolve('stop'),
+      }),
+    );
+    return {
+      prepared,
+      bind: (a: Agent) => {
+        agentRef = a;
+      },
+    };
+  }
+
+  // streamText 的 system 只在开流时读一次:方案获批后不补这一下,整条流会
+  // 一直用计划模式那份提示词跑完,模型明明已经能改文件却还在拒绝动手。
+  it('轮中换过提示词时,prepareStep 下发新的 instructions', async () => {
+    const { prepared, bind } = installPreparingStream((agent) =>
+      agent.updateSystemPrompt('切到 ask 之后的新提示词'),
+    );
+    const { agent } = makeAgent();
+    bind(agent);
+
+    await agent.run('你好');
+
+    expect(prepared[0]).toEqual({ instructions: '切到 ask 之后的新提示词' });
+  });
+
+  // 这是每步都要走的最热的一段,不为计划模式一个场景给所有人加开销。
+  it('提示词没换过时保持返回 {} 的快路径', async () => {
+    const { prepared, bind } = installPreparingStream();
+    const { agent } = makeAgent();
+    bind(agent);
+
+    await agent.run('你好');
+
+    expect(prepared[0]).toEqual({});
+  });
+});

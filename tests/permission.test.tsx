@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import { PermissionPrompt } from '../src/ui/PermissionPrompt.js';
+import { t } from '../src/i18n/index.js';
 import type { PermissionDecision, PermissionRequest } from '../src/core/events.js';
 
 // Ink 会把单独的 ESC 缓冲 20ms 再分发,等待时间必须盖过它。
@@ -124,6 +125,92 @@ describe('PermissionPrompt 选项列表', () => {
     expect(out).toContain('1.');
     expect(out).toContain('4.');
     expect(out).toContain('index.js');
+    unmount();
+  });
+});
+
+describe('方案审批确认框', () => {
+  const planRequest = (detail: string): PermissionRequest => ({
+    id: 'plan-1',
+    kind: 'plan',
+    toolName: 'exit_plan',
+    title: '可以开始写了吗？',
+    detail,
+    risk: 'write',
+  });
+
+  it('只给「同意 / 继续完善」两项,不给记规则的选项', async () => {
+    const { lastFrame, unmount } = setup(planRequest('# 方案\n\n1. 改 a.ts'));
+    await tick();
+    const out = lastFrame() ?? '';
+    expect(out).toContain(t('perm.planApprove'));
+    expect(out).toContain(t('perm.planKeepPlanning'));
+    // 方案不产生规则,"始终允许"那套对它没有意义。
+    expect(out).not.toContain(t('perm.alwaysSession'));
+    expect(out).not.toContain(t('perm.alwaysPersist'));
+    unmount();
+  });
+
+  it('esc 视为继续完善,并把理由带给模型', async () => {
+    const { stdin, decisions, unmount } = setup(planRequest('# 方案'));
+    await tick();
+    stdin.write(ESC);
+    await tick();
+    expect(decisions).toEqual([{ type: 'deny', reason: 'the user wants to keep refining the plan' }]);
+    unmount();
+  });
+
+  // y/n 对"批准整份方案"太含糊,一个手滑就让方案过了。
+  it('不接 y/n 快捷键', async () => {
+    const { stdin, decisions, unmount } = setup(planRequest('# 方案'));
+    await tick();
+    stdin.write('y');
+    await tick();
+    stdin.write('n');
+    await tick();
+    expect(decisions).toEqual([]);
+    unmount();
+  });
+
+  // 只数换行符的话,散文段落折行后能把一帧撑到视口以上,触发 ink 重放
+  // 整段已累积的 <Static> 输出。
+  it('长散文按折行后的实际行数截断,而不是按换行符数', async () => {
+    const prose = Array.from({ length: 12 }, (_, i) => `第 ${i} 段。${'很长的句子。'.repeat(20)}`);
+    const { lastFrame, unmount } = setup(planRequest(prose.join('\n')));
+    await tick();
+    const rows = (lastFrame() ?? '').split('\n').length;
+    // 12 行"才 12 个换行符",但折行后远超视口;截断后整帧必须仍然可控。
+    expect(rows).toBeLessThan(40);
+    // 截断标记(ui.moreLines 两种语言都以 … 开头),证明确实截过而不是碰巧短。
+    expect(lastFrame()).toContain('…');
+    unmount();
+  });
+});
+
+describe('方案正文截断的边界', () => {
+  const planRequest = (detail: string): PermissionRequest => ({
+    id: 'plan-2',
+    kind: 'plan',
+    toolName: 'exit_plan',
+    title: 'x',
+    detail,
+    risk: 'write',
+  });
+
+  // 首行自己就超预算(整段没有换行)时,不能只剩一行"还有 N 行"。
+  it('单段超长正文仍展示内容,而不是只剩截断标记', async () => {
+    const { lastFrame, unmount } = setup(planRequest('很长的一整段。'.repeat(400)));
+    await tick();
+    const out = lastFrame() ?? '';
+    expect(out).toContain('很长的一整段');
+    expect(out.split('\n').length).toBeLessThan(40);
+    unmount();
+  });
+
+  it('短方案原样展示,不加截断标记', async () => {
+    const { lastFrame, unmount } = setup(planRequest('# 方案\n\n1. 改 a.ts'));
+    await tick();
+    expect(lastFrame()).not.toContain('…');
     unmount();
   });
 });

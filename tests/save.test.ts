@@ -2,7 +2,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { saveApiKey, saveMode, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
+import { saveApiKey, savePermissions, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
+import { presetById } from '../src/config/schema.js';
 
 let dir: string;
 let file: string;
@@ -91,35 +92,43 @@ describe('saveReasoningEffort', () => {
   });
 });
 
-describe('saveMode', () => {
+describe('savePermissions', () => {
   it('写项目配置而不是全局配置,放宽不会泄漏到其他工作区', async () => {
-    const saved = await saveMode(dir, 'acceptEdits', file);
+    const saved = await savePermissions(dir, presetById('auto'), file);
 
     expect(saved).toBe(file);
-    expect(await readConfig()).toEqual({ permissionMode: 'acceptEdits' });
+    expect(await readConfig()).toEqual({ sandbox: 'workspace-write', approval: 'on-request' });
   });
 
   it('默认落在 <root>/.mojocode/config.json', async () => {
-    const saved = await saveMode(dir, 'readonly');
+    const saved = await savePermissions(dir, presetById('read-only'));
 
     expect(saved).toBe(path.join(dir, '.mojocode', 'config.json'));
-    expect(JSON.parse(await fs.readFile(saved!, 'utf8'))).toEqual({ permissionMode: 'readonly' });
+    expect(JSON.parse(await fs.readFile(saved!, 'utf8'))).toEqual({
+      sandbox: 'read-only',
+      approval: 'on-request',
+    });
   });
 
-  it('yolo 永不落盘,连文件都不创建', async () => {
-    expect(await saveMode(dir, 'yolo', file)).toBeUndefined();
+  // full-access 绕过硬拒名单,是"就这一次"的逃生口,落盘即静默全放行。
+  it('full-access 永不落盘,连文件都不创建', async () => {
+    expect(await savePermissions(dir, presetById('full-access'), file)).toBeUndefined();
     await expect(fs.access(file)).rejects.toThrow();
   });
 
-  it('保留项目配置里已有的权限规则', async () => {
+  it('保留项目配置里已有的权限规则,并顺带清掉旧版 permissionMode', async () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify({ permissions: { allowBash: ['git status'] } }));
+    await fs.writeFile(
+      file,
+      JSON.stringify({ permissionMode: 'ask', permissions: { allowBash: ['git status'] } }),
+    );
 
-    await saveMode(dir, 'acceptEdits', file);
+    await savePermissions(dir, presetById('auto'), file);
 
     expect(await readConfig()).toEqual({
       permissions: { allowBash: ['git status'] },
-      permissionMode: 'acceptEdits',
+      sandbox: 'workspace-write',
+      approval: 'on-request',
     });
   });
 });

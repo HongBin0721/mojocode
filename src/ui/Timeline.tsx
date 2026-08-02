@@ -94,6 +94,7 @@ function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) 
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
   const todos = extractTodos(item);
+  const plan = extractPlan(item);
 
   return (
     <Box marginTop={1} flexDirection="column">
@@ -104,6 +105,16 @@ function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) 
       </Box>
       {todos ? (
         <TodoChecklist todos={todos} />
+      ) : plan ? (
+        // 方案完整展开(时间线在 <Static> 里,只画一次,不占动态区高度),
+        // 后面再跟一行批准结果。
+        <Box paddingLeft={2} flexDirection="column">
+          <Text>{renderMarkdownAnsi(plan, (process.stdout.columns ?? 80) - 2 - WIDTH_SAFETY)}</Text>
+          <Box>
+            <Text color={theme.dim}>{glyphs.branch}  </Text>
+            <Text color={item.isError ? theme.error : theme.dim}>{item.summary}</Text>
+          </Box>
+        </Box>
       ) : (
         <Box paddingLeft={2}>
           <Text color={theme.dim}>{glyphs.branch}  </Text>
@@ -181,6 +192,18 @@ function extractDiff(item: Extract<TimelineItem, { kind: 'tool' }>): string | un
   if (item.isError) return undefined;
   const output = item.output as { diff?: unknown } | undefined;
   return typeof output?.diff === 'string' ? output.diff : undefined;
+}
+
+/**
+ * exit_plan 调用里的方案正文。方案在**输入**里而不是结果里,所以无论批准
+ * 与否都取得到——被打回的那版也留在时间线上,能看清模型改了什么。
+ */
+function extractPlan(item: Extract<TimelineItem, { kind: 'tool' }>): string | undefined {
+  if (item.toolName !== 'exit_plan' || item.isError) return undefined;
+  // 非计划模式下的误调没有走过审批,把正文摊开会让它看起来像是提交过。
+  if ((item.output as { notApplicable?: unknown } | undefined)?.notApplicable) return undefined;
+  const plan = (item.input as { plan?: unknown } | undefined)?.plan;
+  return typeof plan === 'string' && plan.trim() ? plan : undefined;
 }
 
 /** 成功的 todo 调用返回其输入里的完整任务列表,用于渲染清单。 */

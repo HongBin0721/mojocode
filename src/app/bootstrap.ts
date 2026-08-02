@@ -2,7 +2,12 @@ import type { ModelMessage } from 'ai';
 import { Agent } from '../agent/loop.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
-import type { Config, PermissionMode } from '../config/schema.js';
+import {
+  isEphemeralPermissions,
+  planReturnFor,
+  type Config,
+  type Permissions,
+} from '../config/schema.js';
 import { EventBus, type PermissionAsker } from '../core/events.js';
 import { createModel } from '../model/registry.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
@@ -33,7 +38,10 @@ export interface Session {
   resumeSession: (idOrPrefix: string) => Promise<SessionStore>;
   /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
   switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
-  setMode: (mode: PermissionMode) => void;
+  /** 切换两轴权限(用户显式操作:/approvals、shift+tab)。 */
+  setPermissions: (permissions: Permissions) => void;
+  /** 进入/退出计划模式。退出即"未批准就放弃",批准走 exit_plan 的回调。 */
+  setPlan: (active: boolean) => void;
   /**
    * 重新收集环境信息并重建系统提示词,让刚写入的 AGENTS.md 不用重启就
    * 生效(`/init` 完成后调用)。
@@ -74,16 +82,28 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const bus = new EventBus();
   const todos = new TodoStore();
 
-  // 会话状态快照:todos + 会话级授权规则 + 当前权限模式。gate/store 在下方
+  // 会话状态快照:todos + 会话级授权规则 + 当前两轴权限。gate/store 在下方
   // 才创建,闭包按绑定取值,实际调用时都已就绪。
-  const snapshotState = (): SessionState => ({
-    todos: todos.get(),
-    ...gate.exportSessionRules(),
-    // yolo 永远不写进会话记录:它是"就这一次"的临时逃生口,与
-    // config/save.ts 的 saveMode 保持同一条规矩——否则 `mojocode --yolo` 一次,
-    // 之后每次 `mojocode -c` 都会在命令行没有任何标志的情况下静默全自动放行。
-    permissionMode: config.permissionMode === 'yolo' ? undefined : config.permissionMode,
-  });
+  const snapshotState = (): SessionState => {
+    // 两种情况不把权限写进会话记录:
+    // 1. full-access(danger-full-access)——"就这一次"的逃生口,复活即静默全放行;
+    // 2. permsPromoted——read-only+never 下批准方案被提升到 ask,那是"这一次
+    //    批准"换来的放宽,不该活到下一次 `mojocode -c`。
+    //
+    // 计划模式**不**在此列:SessionState 根本不存 plan 标志,恢复时不可能停在
+    // 计划模式;而进入计划模式时两轴保持不变(setPlan 原样传当前组合),所以
+    // 这里存的就是进入前的选择。漏存反而会抹掉它——状态记录是整份替换,
+    // shift+tab 切到 auto 再切进 plan,记录就被重写成没有权限,`mojocode -c`
+    // 回到配置默认的 ask,用户的选择凭空消失(shift+tab 刻意不落盘到项目
+    // 配置,会话文件是它唯一的留存处)。
+    const perms: Permissions = { sandbox: config.sandbox, approval: config.approval };
+    const omit = isEphemeralPermissions(perms) || permsPromoted;
+    return {
+      todos: todos.get(),
+      ...gate.exportSessionRules(),
+      ...(omit ? {} : { sandbox: perms.sandbox, approval: perms.approval }),
+    };
+  };
   const persistState = (): void => {
     void store.saveState(snapshotState()).catch(() => {
       // 状态是尽力而为的附属信息,失败不打扰用户(消息保存失败才提示)。
@@ -92,7 +112,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   const gate = new PermissionGate({
     root,
-    mode: config.permissionMode,
+    permissions: { sandbox: config.sandbox, approval: config.approval },
+    plan: config.plan,
     rules: config.permissions,
     ask,
     bus,
@@ -106,12 +127,30 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     else if (event.type === 'turn-start') gate.resumePending();
   });
 
+  /**
+   * 方案获批后要还原的两轴组合——即进入计划模式之前的那套。planReturnFor
+   * 决定要不要提升(只有 read-only+never 会提升到 ask,批准才有意义)。
+   * `--plan` 直接启动时没有这次转换,归宿取配置里的两轴(即启动时的组合)。
+   */
+  let planReturn = planReturnFor({ sandbox: config.sandbox, approval: config.approval });
+  /**
+   * 当前组合是否由"批准方案"提升而来。为真时不写进会话记录,见 snapshotState。
+   * 任何显式的权限切换都会把它清掉——那时是用户自己的选择,理应留存。
+   */
+  let permsPromoted = false;
+
   const toolContext = {
     root,
     gate,
     bus,
     rules: config.permissions,
     readFiles: new Set<string>(),
+    // applyPermissions 在下方才定义,但这个回调要到工具执行时才被调用,那时
+    // 早已就绪——与上面 snapshotState 闭包 gate/store 是同一手法。
+    exitPlanMode: (): Permissions => {
+      applyPermissions(planReturn.perms, { plan: false, promoted: planReturn.promoted });
+      return planReturn.perms;
+    },
   };
 
   // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
@@ -142,7 +181,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     model: createModel(provider),
     provider,
     config,
-    systemPrompt: buildSystemPrompt(env, config.permissionMode, config.systemPromptAppend),
+    systemPrompt: buildSystemPrompt(
+      env,
+      { permissions: { sandbox: config.sandbox, approval: config.approval }, plan: config.plan },
+      config.systemPromptAppend,
+    ),
     tools,
     bus,
     onHistoryChange: (messages: ModelMessage[]) => {
@@ -156,8 +199,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const restoreState = (state: SessionState): void => {
     todos.set(structuredClone(state.todos));
     gate.setSessionRules(state);
-    // permissionMode 不在此处应用:CLI 启动路径已把它并进配置层;
-    // TUI 内 /resume 则由 resumeSession 显式调用 setMode。
+    // 两轴权限不在此处应用:CLI 启动路径已把它并进配置层;
+    // TUI 内 /resume 则由 resumeSession 显式调用 setPermissions。
   };
 
   if (options.resume) {
@@ -180,11 +223,47 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     return next;
   };
 
-  const setMode = (mode: PermissionMode): void => {
-    config.permissionMode = mode;
-    gate.setMode(mode);
-    agent.updateSystemPrompt(buildSystemPrompt(env, mode, config.systemPromptAppend));
+  /**
+   * 权限变化的唯一落点。`promoted` 只有 exit_plan 从 read-only+never 提升
+   * 上来时为真,它决定这套组合要不要写进会话记录(见 snapshotState)。
+   */
+  const applyPermissions = (
+    permissions: Permissions,
+    opts: { plan: boolean; promoted: boolean },
+  ): void => {
+    // 进入计划模式时记下来路,批准后按它还原。
+    if (opts.plan && !config.plan) {
+      planReturn = planReturnFor({ sandbox: config.sandbox, approval: config.approval });
+    }
+    permsPromoted = opts.promoted;
+    config.sandbox = permissions.sandbox;
+    config.approval = permissions.approval;
+    config.plan = opts.plan;
+    gate.setPermissions(permissions);
+    gate.setPlanMode(opts.plan);
+    agent.updateSystemPrompt(
+      buildSystemPrompt(env, { permissions, plan: opts.plan }, config.systemPromptAppend),
+    );
     persistState();
+    // 权限也可能由 exit_plan 在工具侧切换,渲染层只能靠这条事件跟上。
+    bus.emit({ type: 'permission-change', permissions, plan: opts.plan });
+  };
+
+  /** 用户显式切换两轴:一律留存(受 isEphemeralPermissions 约束),并退出计划模式。 */
+  const setPermissions = (permissions: Permissions): void =>
+    applyPermissions(permissions, { plan: false, promoted: false });
+
+  /**
+   * 进入/退出计划模式,两轴始终不动。
+   *
+   * 退出 = 未批准就放弃,所以绝不能走 planReturn.perms:从 read-only+never
+   * 进来时那已经是被提升过的 ask(提升只有"用户真的批准了方案"才配得上),
+   * 放弃却拿到可写权限、还会被记进会话文件。进入时两轴原样保留,当前值
+   * 本来就是进入前的组合,原样传回即可。
+   */
+  const setPlan = (active: boolean): void => {
+    const current: Permissions = { sandbox: config.sandbox, approval: config.approval };
+    applyPermissions(current, { plan: active, promoted: false });
   };
 
   return {
@@ -218,7 +297,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 换的是另一段对话:累计用量一并归零(见 setHistory 的注释)。
       agent.setHistory([...opened.messages], { resetSpend: true });
       restoreState(opened.state);
-      if (opened.state.permissionMode) setMode(opened.state.permissionMode);
+      if (opened.state.sandbox && opened.state.approval) {
+        setPermissions({ sandbox: opened.state.sandbox, approval: opened.state.approval });
+      }
       // 会话身份包含它当时的 provider/model;不同则尽力切换。失败(缺 key、
       // provider 已删)以标记错误抛给调用方,但历史已载入。
       if (opened.meta.provider !== provider.id || opened.meta.model !== provider.model) {
@@ -231,10 +312,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return opened;
     },
     switch: switchProvider,
-    setMode,
+    setPermissions,
+    setPlan,
     refreshEnvironment: async () => {
       env = await gatherEnvironment(root);
-      agent.updateSystemPrompt(buildSystemPrompt(env, config.permissionMode, config.systemPromptAppend));
+      agent.updateSystemPrompt(
+        buildSystemPrompt(
+          env,
+          { permissions: { sandbox: config.sandbox, approval: config.approval }, plan: config.plan },
+          config.systemPromptAppend,
+        ),
+      );
     },
     dispose: async () => {
       await Promise.all(mcp.connections.map((c) => c.close()));

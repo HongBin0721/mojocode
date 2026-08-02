@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
-import type { PermissionMode } from '../config/schema.js';
+import type { Permissions, SandboxMode } from '../config/schema.js';
 
 const BASE_PROMPT = `You are mojocode, a coding agent that works inside the user's terminal.
 
@@ -31,6 +31,35 @@ rather than guessing. Prefer grep and glob to locate code over reading files at 
 - Everything is scoped to the workspace root. Paths outside it are rejected.
 - Some actions require the user's approval. If one is denied, do not retry it — ask what to do.
 - Never run destructive commands (force push, hard reset, recursive delete) on your own.`;
+
+/** 沙箱行后缀。只有受限的档位需要额外交代,其余留空。 */
+const SANDBOX_CAVEATS: Partial<Record<SandboxMode, string>> = {
+  'read-only':
+    ' — file edits and state-changing commands are outside the sandbox; each one needs the user to approve an escalation',
+};
+
+/** 仅在计划模式下附加。英文——喂给模型的文本不本地化。 */
+const PLAN_MODE_PROMPT = `## Plan mode
+
+You are planning, not implementing. Produce a plan the user approves before any code changes.
+
+- Research first. Read the files the task actually touches, grep the call sites, and check how
+  similar features are already built here. Do not plan against a guess.
+- You cannot edit files or run state-changing commands. Read, glob, grep and read-only commands
+  all work. Do not try edits to "check" — they will be refused.
+- When the plan is ready, call the exit_plan tool with it. Do not print the plan as an ordinary
+  message instead of calling the tool — only the tool asks the user to approve it.
+- Write the plan for whoever implements it: which files change and what changes in each, the
+  order to do them in, and how to verify the result. Skip preamble and restating the request.
+- If the user rejects it, you are still in plan mode. Revise it from their feedback and call
+  exit_plan again.
+- Always end the turn by calling exit_plan. It is the only way out of plan mode, and the user
+  chose plan mode precisely so that nothing happens until they approve. Even if you conclude the
+  task needs no code changes, say so *through* exit_plan — that conclusion is theirs to accept,
+  not yours to act on. Never research, answer, and stop without calling it.
+- The one exception is a direct question about the code that asks for no change at all
+  ("what does this function do?"). Answer those normally. Anything phrased as work to be done
+  goes through exit_plan.`;
 
 export interface EnvironmentInfo {
   root: string;
@@ -78,12 +107,19 @@ export async function gatherEnvironment(root: string): Promise<EnvironmentInfo> 
   };
 }
 
+export interface PromptPermissions {
+  permissions: Permissions;
+  /** 计划模式激活。压过两轴的描述——模型该看到的是"现在只能调研"。 */
+  plan: boolean;
+}
+
 export function buildSystemPrompt(
   env: EnvironmentInfo,
-  mode: PermissionMode,
+  perms: PromptPermissions,
   append?: string,
 ): string {
   const sections = [BASE_PROMPT];
+  const { sandbox, approval } = perms.permissions;
 
   sections.push(
     [
@@ -91,12 +127,20 @@ export function buildSystemPrompt(
       `- Workspace root: ${env.root}`,
       `- Platform: ${env.platform}`,
       `- Git repository: ${env.isGitRepo ? `yes (branch ${env.gitBranch})` : 'no'}`,
-      `- Permission mode: ${mode}${mode === 'readonly' ? ' — you cannot write files or run commands that change state' : ''}`,
+      perms.plan
+        ? '- Permissions: plan mode — research only; you cannot write files or run state-changing commands until the user approves your plan'
+        : `- Sandbox: ${sandbox}${SANDBOX_CAVEATS[sandbox] ?? ''}; approval policy: ${approval}${
+            approval === 'never' ? ' — nothing outside the sandbox can be escalated; it just fails' : ''
+          }`,
       env.projectFiles.length > 0 ? `- Top-level entries: ${env.projectFiles.join(', ')}` : '',
     ]
       .filter(Boolean)
       .join('\n'),
   );
+
+  if (perms.plan) {
+    sections.push(PLAN_MODE_PROMPT);
+  }
 
   if (env.projectInstructions) {
     sections.push(

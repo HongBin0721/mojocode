@@ -297,6 +297,10 @@ export class Agent {
     const { bus, model, config, tools, systemPrompt, provider } = this.options;
     const signal = this.controller!.signal;
     let finish: TurnFinish | undefined;
+    // streamText 的 system 只在开流时读一次。轮中途换了系统提示词(计划获批
+    // → setMode)时,要靠 prepareStep 的 instructions 在下一步补下去,否则整条
+    // 流会一直用计划模式那份提示词跑完——模型明明已经能改文件,却还在拒绝动手。
+    const systemAtStart = systemPrompt;
 
     // 组装 providerOptions:parallel_tool_calls 与思考强度参数都要写进同一个
     // provider 键,分开展开会整体覆盖,必须先合并再传入。provider 按引用持有,
@@ -345,7 +349,14 @@ export class Agent {
           }
         }
 
-        return next === messages ? {} : { messages: next };
+        // 系统提示词没换过时保持返回 {} 的快路径——这是每步都要走的最热的
+        // 一段,不为计划模式这一个场景给所有人加开销。
+        const changedSystem = this.options.systemPrompt !== systemAtStart;
+        if (next === messages && !changedSystem) return {};
+        return {
+          ...(next === messages ? {} : { messages: next }),
+          ...(changedSystem ? { instructions: this.options.systemPrompt } : {}),
+        };
       },
       abortSignal: signal,
       temperature: config.temperature,

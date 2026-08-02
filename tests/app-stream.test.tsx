@@ -17,7 +17,7 @@ function setup() {
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   const session = {
     root: '/tmp/project',
-    config: { permissionMode: 'ask', statusBar: [] },
+    config: { sandbox: 'workspace-write', approval: 'untrusted', plan: false, statusBar: [] },
     provider,
     agent: {
       isRunning: false,

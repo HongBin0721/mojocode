@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { configSchema } from '../src/config/schema.js';
+import {
+  configSchema,
+  fromLegacyMode,
+  isEphemeralPermissions,
+  nextCycleStep,
+  planReturnFor,
+  presetById,
+  type Permissions,
+} from '../src/config/schema.js';
 import { ConfigError, resolveProvider } from '../src/config/load.js';
 
 function makeConfig(overrides: Record<string, unknown> = {}) {
@@ -79,14 +87,16 @@ describe('resolveProvider', () => {
 describe('configSchema', () => {
   it('applies sensible defaults', () => {
     const config = makeConfig();
-    expect(config.permissionMode).toBe('ask');
+    expect(config.sandbox).toBe('workspace-write');
+    expect(config.approval).toBe('untrusted');
     expect(config.maxSteps).toBe(50);
     expect(config.compactThreshold).toBe(0.8);
     expect(config.permissions.allowBash).toEqual([]);
   });
 
-  it('rejects an invalid permission mode', () => {
-    expect(() => makeConfig({ permissionMode: 'whatever' })).toThrow();
+  it('rejects an invalid sandbox or approval value', () => {
+    expect(() => makeConfig({ sandbox: 'whatever' })).toThrow();
+    expect(() => makeConfig({ approval: 'whenever' })).toThrow();
   });
 
   it('rejects an invalid reasoning effort', () => {
@@ -114,5 +124,99 @@ describe('思考强度解析', () => {
   it('falls back to the top-level value when the provider has no override', () => {
     const config = makeConfig({ provider: 'glm', reasoningEffort: 'low' });
     expect(resolveProvider(config, { ZHIPU_API_KEY: 'k' }).reasoningEffort).toBe('low');
+  });
+});
+
+describe('两轴权限的规则', () => {
+  it('full-access 是临时组合,其余会持久化', () => {
+    expect(isEphemeralPermissions(presetById('full-access'))).toBe(true);
+    for (const id of ['read-only', 'ask', 'auto'] as const) {
+      expect(isEphemeralPermissions(presetById(id))).toBe(false);
+    }
+    // 自由组合同理:只看 sandbox 轴。
+    expect(isEphemeralPermissions({ sandbox: 'danger-full-access', approval: 'untrusted' })).toBe(
+      true,
+    );
+  });
+
+  it('方案获批后忠实还原进入计划模式之前的组合', () => {
+    for (const id of ['read-only', 'ask', 'auto', 'full-access'] as const) {
+      expect(planReturnFor(presetById(id))).toEqual({ perms: presetById(id), promoted: false });
+    }
+  });
+
+  // read-only+never 批准不了任何写入,"批准"就没有意义了——提升到 ask,
+  // 且标记 promoted:这次提升只在本会话有效,不写进会话记录(见 bootstrap)。
+  it('read-only+never 获批后提升到 ask,并标记为提升', () => {
+    expect(planReturnFor({ sandbox: 'read-only', approval: 'never' })).toEqual({
+      perms: presetById('ask'),
+      promoted: true,
+    });
+  });
+
+  it('旧单轴模式的一次性映射', () => {
+    expect(fromLegacyMode('readonly')).toEqual({ sandbox: 'read-only', approval: 'never' });
+    expect(fromLegacyMode('ask')).toEqual(presetById('ask'));
+    expect(fromLegacyMode('acceptEdits')).toEqual(presetById('auto'));
+    expect(fromLegacyMode('yolo')).toEqual(presetById('full-access'));
+    // plan 从来不落盘,落了也不该复活;未知值同样丢弃。
+    expect(fromLegacyMode('plan')).toBeUndefined();
+    expect(fromLegacyMode('whatever')).toBeUndefined();
+  });
+});
+
+describe('shift+tab 的档位循环', () => {
+  it('在 ask → auto → plan 之间循环', () => {
+    expect(nextCycleStep(presetById('ask'), false)).toEqual({ preset: 'auto' });
+    expect(nextCycleStep(presetById('auto'), false)).toEqual({ plan: true });
+    expect(nextCycleStep(presetById('auto'), true)).toEqual({ preset: 'ask' });
+  });
+
+  // 落到 plan 而不是 ask:plan 写不了任何东西,所以无论从哪起步,误触都
+  // 只可能收紧权限,不可能放宽。full-access 绕过硬拒名单,绝不能离一个
+  // 快捷键只有一步之遥。
+  it('从循环外的组合按下时落到 plan,绝不放宽权限', () => {
+    expect(nextCycleStep(presetById('read-only'), false)).toEqual({ plan: true });
+    expect(nextCycleStep(presetById('full-access'), false)).toEqual({ plan: true });
+    expect(nextCycleStep({ sandbox: 'read-only', approval: 'never' }, false)).toEqual({
+      plan: true,
+    });
+  });
+
+  it('从任意组合出发,连按给出的档位永远不是 full-access', () => {
+    for (const id of ['read-only', 'ask', 'auto', 'full-access'] as const) {
+      let perms: Permissions = presetById(id);
+      let plan = false;
+      for (let i = 0; i < 8; i += 1) {
+        const step = nextCycleStep(perms, plan);
+        if ('plan' in step) {
+          plan = true;
+        } else {
+          // 循环给出的每个预设都必须是可留存的普通档位。
+          expect(step.preset === 'ask' || step.preset === 'auto').toBe(true);
+          perms = presetById(step.preset);
+          plan = false;
+          expect(isEphemeralPermissions(perms)).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+/**
+ * 放弃计划模式(未批准)绝不能拿到批准才配得上的提升。
+ *
+ * bootstrap 的 setPlan(false) 原样传回当前两轴而不是 planReturn.perms——
+ * 后者从 read-only+never 进来时已经是被提升过的 ask。这里锁住那条前提:
+ * 进入计划模式不改动两轴,所以"当前值"始终等于"进入前的值"。
+ */
+describe('计划模式的两轴不变性', () => {
+  it('planReturnFor 只在批准语境下提升,且提升会被标记', () => {
+    const strict: Permissions = { sandbox: 'read-only', approval: 'never' };
+    const result = planReturnFor(strict);
+    expect(result.promoted).toBe(true);
+    expect(result.perms).toEqual(presetById('ask'));
+    // 原组合本身没有被就地改动——放弃时要还原成它。
+    expect(strict).toEqual({ sandbox: 'read-only', approval: 'never' });
   });
 });
