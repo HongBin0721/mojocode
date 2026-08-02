@@ -15,6 +15,7 @@ import { SessionPicker } from './ui/SessionPicker.js';
 import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
+import { INIT_PROMPT } from './agent/init.js';
 
 interface GlobalFlags {
   provider?: string;
@@ -317,7 +318,18 @@ async function runMain(flags: MainFlags): Promise<void> {
       stream: process.stdout,
       errStream: process.stderr,
     });
-    await session.agent.run(flags.print!);
+    // `-p "/init"` 与 TUI 的 /init 对齐:替换为完整指令。headless 默认拒绝
+    // 写入,提示用户带上放行 flag;仍照常运行,写入被拒时模型自会转述。
+    // 走事件总线而不是直接写 stderr:`--json` 下 stderr 是纯 NDJSON 流,
+    // 掺一行普通文本会让逐行 JSON.parse 的消费方在第一行就炸。
+    const isInit = flags.print!.trim() === '/init';
+    if (isInit && !['acceptEdits', 'yolo'].includes(loaded.config.permissionMode)) {
+      session.bus.emit({ type: 'notice', level: 'warn', message: t('cli.initNeedsWrite') });
+    }
+    await session.agent.run(
+      isInit ? INIT_PROMPT : flags.print!,
+      isInit ? { display: '/init' } : undefined,
+    );
     await session.dispose();
     process.stdout.write('\n');
     return;

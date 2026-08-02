@@ -36,11 +36,13 @@ import {
 import { listModels } from '../model/registry.js';
 import { supportedEfforts } from '../model/reasoning.js';
 import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
+import { INIT_PROMPT } from '../agent/init.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
 function buildCommands() {
   return [
     { name: 'help', description: t('cmd.help') },
+    { name: 'init', description: t('cmd.init') },
     { name: 'model', description: t('cmd.model') },
     { name: 'provider', description: t('cmd.provider') },
     { name: 'mode', description: t('cmd.mode') },
@@ -76,7 +78,7 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 };
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume']);
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'init']);
 
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   mode: 'statusopt.mode',
@@ -230,7 +232,7 @@ export function App({ session }: Props): React.ReactElement {
     const off = session.bus.on((event: AgentEvent) => {
       switch (event.type) {
         case 'turn-start':
-          push({ kind: 'user', text: event.userText });
+          push({ kind: 'user', text: event.display ?? event.userText });
           // 新一轮从零开始计时,不沿用上一轮残留的 since。
           setWork({ phase: 'thinking', since: Date.now() });
           break;
@@ -508,6 +510,29 @@ export function App({ session }: Props): React.ReactElement {
           // 同时换掉 <Static> 的身份,让 ink 丢掉已累积的静态输出。
           setStaticEpoch((epoch) => epoch + 1);
           setUsage((prev) => ({ ...prev, used: 0, total: 0 }));
+          break;
+        }
+
+        // `/init` 是唯一发起完整 agent 轮的命令:时间线上只回显 `/init`
+        // (turn-start 的 display),完整指令进历史喂模型。轮结束后刷新
+        // 环境信息,让刚生成的 AGENTS.md 立刻进入系统提示词。
+        case 'init': {
+          // readonly 下 assertCanMutate 会硬拒写入:这一轮注定写不出
+          // AGENTS.md,提前拦下,别白烧一轮 token。
+          if (mode === 'readonly') {
+            push({ kind: 'notice', level: 'warn', message: t('notice.initReadonly') });
+            break;
+          }
+          setRunning(true);
+          void session.agent
+            .run(INIT_PROMPT, { display: '/init' })
+            .then(() => session.refreshEnvironment())
+            // run() 自己消化模型错误,但 refreshEnvironment 是新的一环:
+            // 不接住的话 rejection 会掀掉整个 TUI(Node ≥20 视为致命)。
+            .catch((err: Error) => {
+              push({ kind: 'notice', level: 'warn', message: t('notice.initFailed', { message: err.message }) });
+            })
+            .finally(() => setRunning(false));
           break;
         }
 

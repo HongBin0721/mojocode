@@ -108,6 +108,7 @@ mojocode
 | 命令 | 作用 |
 |---|---|
 | `/help` | 列出所有命令 |
+| `/init` | 分析代码库并生成/改进项目根目录的 AGENTS.md（会注入后续会话的系统提示词） |
 | `/model <id>` | 切换模型；不带参数列出可用模型 |
 | `/provider <id>` | 切换服务商（kimi / deepseek / glm / …） |
 | `/mode <模式>` | 切换权限模式 |
@@ -129,6 +130,7 @@ mojocode -p "找出所有 TODO 注释并汇总"          # 单次执行，结果
 mojocode -p "分析这段报错" --provider deepseek  # 指定服务商
 mojocode -p "..." --json                        # stderr 输出 NDJSON 事件流
 cat error.log | mojocode -p "分析这个日志"       # 配合管道
+mojocode -p "/init" --accept-edits              # 生成 AGENTS.md
 ```
 
 `-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--accept-edits` 或 `--yolo`。

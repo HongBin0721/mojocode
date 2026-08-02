@@ -188,7 +188,7 @@ export class Agent {
     this.options.onHistoryChange?.(this.messages);
   }
 
-  async run(userText: string): Promise<void> {
+  async run(userText: string, options?: { display?: string }): Promise<void> {
     // 防重入兜底:已在运行时转为注入引导,绝不能并发起第二个流
     // (两个流共享 this.messages,controller 也会被覆盖)。
     if (this.isRunning) {
@@ -196,7 +196,7 @@ export class Agent {
       return;
     }
     const { bus } = this.options;
-    bus.emit({ type: 'turn-start', userText });
+    bus.emit({ type: 'turn-start', userText, display: options?.display });
 
     // controller 在任何 await 之前就位:压缩等待期间 isRunning 已为 true,
     // 此时提交的消息走 inject 排队,而不是再起一轮。

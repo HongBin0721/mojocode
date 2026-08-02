@@ -214,6 +214,34 @@ describe('并发防护', () => {
   });
 });
 
+describe('展示文本分离(/init)', () => {
+  it('display 只进 turn-start 事件,模型与历史仍拿完整指令', async () => {
+    installDefaultStream();
+    const { agent, bus } = makeAgent();
+    const starts: Array<{ userText: string; display?: string }> = [];
+    bus.on((e) => {
+      if (e.type === 'turn-start') starts.push({ userText: e.userText, display: e.display });
+    });
+    await agent.run('完整的 init 指令', { display: '/init' });
+
+    expect(starts).toEqual([{ userText: '完整的 init 指令', display: '/init' }]);
+    expect(agent.history[0]?.content).toBe('完整的 init 指令');
+    expect(sent[0]).toContain('完整的 init 指令');
+  });
+
+  it('不带 options 的 run 不设 display,回显退回 userText', async () => {
+    installDefaultStream();
+    const { agent, bus } = makeAgent();
+    const starts: Array<{ display?: string }> = [];
+    bus.on((e) => {
+      if (e.type === 'turn-start') starts.push({ display: e.display });
+    });
+    await agent.run('普通消息');
+
+    expect(starts[0]?.display).toBeUndefined();
+  });
+});
+
 describe('providerOptions 组装', () => {
   it('auto 且允许并行工具时不传 providerOptions,保持现状', async () => {
     installDefaultStream();

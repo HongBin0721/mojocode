@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai';
 import type { NewTimelineItem } from '../ui/types.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { unwrapGuidance } from '../agent/loop.js';
+import { isInitPrompt } from '../agent/init.js';
 import { t } from '../i18n/index.js';
 
 /** 压缩摘要消息的开头标记,与 src/agent/compact.ts 写入的内容保持一致。 */
@@ -28,6 +29,11 @@ export function replayTimeline(messages: ModelMessage[]): NewTimelineItem[] {
       if (!text) continue;
       if (text.startsWith(COMPACT_MARKER)) {
         items.push({ kind: 'notice', level: 'info', message: t('replay.compacted') });
+        continue;
+      }
+      // /init 的完整指令在历史里;时间线还原为当时输入的命令本身。
+      if (isInitPrompt(text)) {
+        items.push({ kind: 'user', text: '/init' });
         continue;
       }
       // 运行中插入的引导消息持久化的是包装后的版本;时间线还原为原文。
@@ -130,7 +136,12 @@ export function collectRewindEntries(messages: ModelMessage[]): RewindEntry[] {
     if (message.role !== 'user') return;
     const text = contentText(message.content);
     if (!text || text.startsWith(COMPACT_MARKER)) return;
-    entries.push({ index, ordinal: entries.length + 1, text: unwrapGuidance(text) ?? text });
+    // /init 显示为命令本身:回退到它会把 `/init` 填回输入框,重发即重跑。
+    entries.push({
+      index,
+      ordinal: entries.length + 1,
+      text: isInitPrompt(text) ? '/init' : (unwrapGuidance(text) ?? text),
+    });
   });
   return entries.reverse();
 }

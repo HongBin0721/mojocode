@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ModelMessage } from 'ai';
 import { collectRewindEntries, replayTimeline } from '../src/session/replay.js';
 import { wrapGuidance, unwrapGuidance } from '../src/agent/loop.js';
+import { INIT_PROMPT, INIT_PROMPT_MARKER } from '../src/agent/init.js';
 
 describe('replayTimeline', () => {
   it('字符串与 parts 两种形态的 user 消息都还原为 user 条目', () => {
@@ -114,6 +115,11 @@ describe('replayTimeline', () => {
     ] as ModelMessage[]);
     expect(items).toEqual([{ kind: 'user', text: '顺便修一下测试' }]);
   });
+
+  it('/init 的完整指令还原为命令本身', () => {
+    const items = replayTimeline([{ role: 'user', content: INIT_PROMPT }] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'user', text: '/init' }]);
+  });
 });
 
 describe('unwrapGuidance', () => {
@@ -139,6 +145,22 @@ describe('collectRewindEntries', () => {
       { index: 3, ordinal: 2, text: '中途引导' },
       { index: 1, ordinal: 1, text: '第一问' },
     ]);
+  });
+
+  it('/init 条目显示为命令本身,回退重发即重跑', () => {
+    const entries = collectRewindEntries([
+      { role: 'user', content: INIT_PROMPT },
+    ] as ModelMessage[]);
+    expect(entries).toEqual([{ index: 0, ordinal: 1, text: '/init' }]);
+  });
+
+  it('用户自己写的、以同一句开头但带附加要求的消息不被吞成 /init', () => {
+    const handwritten = `${INIT_PROMPT_MARKER} Also document the release process.`;
+    const entries = collectRewindEntries([
+      { role: 'user', content: handwritten },
+    ] as ModelMessage[]);
+    // 显示成 /init 的话,回退重发会把"Also document…"悄悄丢掉。
+    expect(entries).toEqual([{ index: 0, ordinal: 1, text: handwritten }]);
   });
 
   it('空历史返回空数组', () => {

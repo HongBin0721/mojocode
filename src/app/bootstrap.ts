@@ -34,6 +34,11 @@ export interface Session {
   /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
   switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
   setMode: (mode: PermissionMode) => void;
+  /**
+   * 重新收集环境信息并重建系统提示词,让刚写入的 AGENTS.md 不用重启就
+   * 生效(`/init` 完成后调用)。
+   */
+  refreshEnvironment: () => Promise<void>;
   dispose: () => Promise<void>;
 }
 
@@ -109,7 +114,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     readFiles: new Set<string>(),
   };
 
-  const [env, mcp] = await Promise.all([
+  // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
+  let [env, mcp] = await Promise.all([
     gatherEnvironment(root),
     options.skipMcp
       ? Promise.resolve({ connections: [] as McpConnection[], statuses: [] as McpStatus[] })
@@ -187,7 +193,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     get provider() {
       return provider;
     },
-    env,
+    get env() {
+      return env;
+    },
     agent,
     bus,
     gate,
@@ -224,6 +232,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
     switch: switchProvider,
     setMode,
+    refreshEnvironment: async () => {
+      env = await gatherEnvironment(root);
+      agent.updateSystemPrompt(buildSystemPrompt(env, config.permissionMode, config.systemPromptAppend));
+    },
     dispose: async () => {
       await Promise.all(mcp.connections.map((c) => c.close()));
     },

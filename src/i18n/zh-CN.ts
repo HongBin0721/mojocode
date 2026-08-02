@@ -67,6 +67,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'sum.done': '完成',
 
   'cmd.help': '显示所有命令',
+  'cmd.init': '分析项目并生成 AGENTS.md',
   'cmd.model': '切换模型 — /model <id>，不带参数则列出可用模型',
   'cmd.provider': '切换服务商 — /provider <kimi|deepseek|glm|…>',
   'cmd.mode': '设置权限模式 — /mode <readonly|ask|acceptEdits|yolo>',
@@ -115,6 +116,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.busyCommand': '任务运行中不能使用 /{name}（可先 esc 中断）。',
   'notice.compacted': '已将 {removed} 条消息压缩为 {chars} 字符的摘要。',
   'notice.compactFailed': '压缩失败：{message}',
+  'notice.initReadonly': '/init 需要写入 AGENTS.md——请先离开只读模式（/mode acceptEdits）。',
+  'notice.initFailed': '/init 未能完成：{message}',
   'notice.interrupted': '已中断。',
   'notice.providers': '可用服务商：{list}（当前 {current}）',
   'notice.modelsOn': '{label} 可用模型：',
@@ -176,6 +179,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'cli.msgs': '{n} 条消息',
   'cli.noResume': '没有可恢复的会话 — 已新建会话。',
   'cli.needsTty': 'mojocode 需要交互式终端。脚本场景请用 `mojocode -p "你的指令"`。',
+  'cli.initNeedsWrite': '提示：/init 需要写入 AGENTS.md——若写入被拒，请加 --accept-edits 或 --yolo 重试。',
   'cli.noSessions': '还没有会话。',
   'cli.mcpFailed': 'MCP 服务器 "{name}" 连接失败：{error}',
 

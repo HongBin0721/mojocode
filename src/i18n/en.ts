@@ -73,6 +73,7 @@ export const en = {
   'sum.done': 'done',
 
   'cmd.help': 'Show these commands',
+  'cmd.init': 'Analyze the project and generate AGENTS.md',
   'cmd.model': 'Switch model — /model <id>, or bare to list',
   'cmd.provider': 'Switch provider — /provider <kimi|deepseek|glm|…>',
   'cmd.mode': 'Set permission mode — /mode <readonly|ask|acceptEdits|yolo>',
@@ -122,6 +123,8 @@ export const en = {
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
   'notice.compactFailed': 'Compaction failed: {message}',
+  'notice.initReadonly': '/init needs to write AGENTS.md — switch out of readonly first (/mode acceptEdits).',
+  'notice.initFailed': '/init did not finish: {message}',
   'notice.interrupted': 'Interrupted.',
   'notice.providers': 'Providers: {list} (currently {current})',
   'notice.modelsOn': 'Models on {label}:',
@@ -184,6 +187,7 @@ export const en = {
   'cli.msgs': '{n} msgs',
   'cli.noResume': 'No session to resume — starting a new one.',
   'cli.needsTty': 'mojocode needs an interactive terminal. Use `mojocode -p "your prompt"` for scripted runs.',
+  'cli.initNeedsWrite': 'Note: /init writes AGENTS.md — re-run with --accept-edits or --yolo if the write is denied.',
   'cli.noSessions': 'No sessions yet.',
   'cli.mcpFailed': 'MCP server "{name}" failed: {error}',
 
