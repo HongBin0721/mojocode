@@ -101,6 +101,17 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * 把 home 目录前缀缩写成 `~`,Header 与 Footer 展示路径共用。
+ * 必须按路径段边界匹配:`/Users/foo` 不能把 `/Users/foobar` 缩成 `~bar`。
+ */
+export function shortenHome(p: string): string {
+  const home = process.env.HOME?.replace(/\/+$/, '');
+  if (!home) return p;
+  if (p === home) return '~';
+  return p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+}
+
+/**
  * 压成单行并按*显示宽度*(终端列数)截断,超出补 `…`。
  *
  * 不能按字符数截:CJK 每字占 2 列,按字符数截出来的行可能宽达限值的
@@ -120,6 +131,27 @@ export function truncateWidth(text: string, maxWidth: number): string {
     width += w;
   }
   return `${out}…`;
+}
+
+/**
+ * 同 truncateWidth,但保留*尾部*、在开头补 `…`——路径类文本尾部才是重点。
+ * 按字素簇而非码点截断:macOS 路径是 NFD 形式,按码点截可能把组合重音
+ * 符孤立在省略号后面,渲染成乱码。
+ */
+export function truncateWidthStart(text: string, maxWidth: number): string {
+  const single = text.replace(/\s+/g, ' ').trim();
+  if (stringWidth(single) <= maxWidth) return single;
+  const graphemes = [...new Intl.Segmenter().segment(single)].map((s) => s.segment);
+  let out = '';
+  let width = 0;
+  for (const g of graphemes.reverse()) {
+    const w = stringWidth(g);
+    // 留 1 列给省略号。
+    if (width + w > maxWidth - 1) break;
+    out = g + out;
+    width += w;
+  }
+  return `…${out}`;
 }
 
 /** 工具参数的紧凑单行摘要,显示在工具名旁边。 */

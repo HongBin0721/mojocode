@@ -94,6 +94,7 @@ const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'prov
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   mode: 'statusopt.mode',
   model: 'statusopt.model',
+  cwd: 'statusopt.cwd',
   think: 'statusopt.think',
   context: 'statusopt.context',
   total: 'statusopt.total',
@@ -1223,6 +1224,7 @@ export function App({ session }: Props): React.ReactElement {
               todos={todoPanelVisible ? [] : todos}
               model={model}
               mode={modeLabel}
+              root={session.root}
               think={think}
               segments={statusSegments}
               notice={

@@ -131,7 +131,7 @@ export function fromLegacyMode(mode: string): Permissions | undefined {
 }
 
 /** 状态栏可选的信息段。状态文字本身始终显示,不在此列。枚举顺序即展示顺序,mode 固定排第一。 */
-export const statusSegmentSchema = z.enum(['mode', 'model', 'think', 'context', 'total', 'todos']);
+export const statusSegmentSchema = z.enum(['mode', 'model', 'cwd', 'think', 'context', 'total', 'todos']);
 export type StatusSegment = z.infer<typeof statusSegmentSchema>;
 export const STATUS_SEGMENTS = statusSegmentSchema.options;
 

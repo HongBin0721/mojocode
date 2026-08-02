@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { theme, glyphs, formatTokens, truncateWidth, modeColor } from './theme.js';
+import { theme, glyphs, formatTokens, truncateWidth, truncateWidthStart, modeColor, shortenHome } from './theme.js';
 import type { TodoItem } from '../tools/index.js';
 import type { StatusSegment } from '../config/schema.js';
 import { t } from '../i18n/index.js';
@@ -13,6 +13,8 @@ interface Props {
   model: string;
   /** 当前权限模式,启用 mode 段时显示在最前。 */
   mode: string;
+  /** 当前工作区根目录,启用 cwd 段时以 `~` 缩写展示。 */
+  root: string;
   /** 当前思考强度,auto(默认)时不占位。 */
   think: string;
   /** 显示哪些信息段,由 /statusbar 配置。 */
@@ -32,6 +34,7 @@ export function Footer({
   todos,
   model,
   mode,
+  root,
   think,
   segments,
   notice,
@@ -54,6 +57,13 @@ export function Footer({
     parts.push(
       <Text key="model" color={theme.dim}>
         {model}
+      </Text>,
+    );
+  }
+  if (show.has('cwd')) {
+    parts.push(
+      <Text key="cwd" color={theme.dim}>
+        {truncateWidthStart(shortenHome(root), 40)}
       </Text>,
     );
   }

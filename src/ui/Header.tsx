@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { theme, modeColor } from './theme.js';
+import { theme, modeColor, shortenHome } from './theme.js';
 import { APP_NAME } from '../config/paths.js';
 import { t } from '../i18n/index.js';
 
@@ -31,7 +31,7 @@ export function Header({ providerLabel, model, root, mode, mcpSummary }: Props):
         ) : null}
       </Box>
       <Box>
-        <Text color={theme.dim}>{shorten(root)}</Text>
+        <Text color={theme.dim}>{shortenHome(root)}</Text>
         {mcpSummary ? <Text color={theme.dim}> · mcp: {mcpSummary}</Text> : null}
       </Box>
       <Box marginTop={1}>
@@ -39,9 +39,4 @@ export function Header({ providerLabel, model, root, mode, mcpSummary }: Props):
       </Box>
     </Box>
   );
-}
-
-function shorten(root: string): string {
-  const home = process.env.HOME;
-  return home && root.startsWith(home) ? `~${root.slice(home.length)}` : root;
 }
