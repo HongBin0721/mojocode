@@ -12,12 +12,12 @@ const catalogs: Record<Locale, Record<MessageKey, string>> = {
 };
 
 /**
- * 解析顺序:显式偏好(配置项 `language`)> KDG_LANG > LC_ALL >
+ * 解析顺序:显式偏好(配置项 `language`)> MOJOCODE_LANG > LC_ALL >
  * LC_MESSAGES > LANG。任何 `zh*` 值都映射到 zh-CN;其余一律回退到英文。
  */
 export function detectLocale(pref?: string, env: NodeJS.ProcessEnv = process.env): Locale {
   if (pref && isLocale(pref)) return pref;
-  const raw = env.KDG_LANG ?? env.LC_ALL ?? env.LC_MESSAGES ?? env.LANG ?? '';
+  const raw = env.MOJOCODE_LANG ?? env.LC_ALL ?? env.LC_MESSAGES ?? env.LANG ?? '';
   return /^zh/i.test(raw) ? 'zh-CN' : 'en';
 }
 

@@ -239,7 +239,7 @@ export class PermissionGate {
     }
   }
 
-  /** 把规则追加到 <workspace>/.kdg/config.json,文件不存在则创建。 */
+  /** 把规则追加到 <workspace>/.mojocode/config.json,文件不存在则创建。 */
   private async persist(risk: PermissionRequest['risk'], rule: string): Promise<void> {
     const file = projectConfigPath(this.options.root);
     await fs.mkdir(projectDir(this.options.root), { recursive: true });

@@ -13,7 +13,7 @@ export interface SessionMeta {
   model: string;
   createdAt: string;
   updatedAt: string;
-  /** 第一条用户消息,用作 `kdg --resume` 中的标签。 */
+  /** 第一条用户消息,用作 `mojocode --resume` 中的标签。 */
   title: string;
   messageCount: number;
 }
@@ -209,7 +209,7 @@ export class SessionStore {
    * 0 命中抛 SessionNotFoundError,多命中抛 AmbiguousSessionError。
    *
    * 给了 `root` 就只在该工作区的会话里找:恢复别处的会话会让它的 meta.root
-   * 继续指向旧项目,于是两个工作区的 `kdg sessions` 都列不到它,除非记住
+   * 继续指向旧项目,于是两个工作区的 `mojocode sessions` 都列不到它,除非记住
    * 完整 id 否则再也找不回来。
    */
   static async resolveId(

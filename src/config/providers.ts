@@ -3,7 +3,7 @@
  *
  * 三个平台的模型 ID 都变得很快(DeepSeek 用 v4 系列取代了 `deepseek-chat`,
  * GLM 已到 5.x,Kimi 已到 K2.6/K3)。所以这里的 `defaultModel` 只是一个起点——
- * 它始终可以在配置中覆盖,而且 `kdg models --provider <id>` 会请求线上的
+ * 它始终可以在配置中覆盖,而且 `mojocode models --provider <id>` 会请求线上的
  * `/models` 端点,让用户看到自己的 key 实际能访问哪些模型。
  */
 
@@ -18,7 +18,7 @@ export interface ProviderPreset {
   baseURL: string;
   /** 按顺序检查以获取 API key 的环境变量。 */
   apiKeyEnv: string[];
-  /** 用户创建 key 的控制台页面——由 `kdg auth` 展示。 */
+  /** 用户创建 key 的控制台页面——由 `mojocode auth` 展示。 */
   keyUrl: string;
   defaultModel: string;
   /** 已知的上下文窗口大小,用于 ctx 用量显示和压缩阈值。 */

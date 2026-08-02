@@ -116,9 +116,18 @@ program
 program
   .command('providers')
   .description(t('cli.cmd.providers'))
-  .action(() => {
+  .action(async () => {
+    // 密钥可能来自环境变量,也可能是 `auth` 向导写进配置文件的——两处都认,
+    // 与运行时的实际解析一致;配置读不了(损坏等)时降级为只看环境变量。
+    const configured: Record<string, { apiKey?: string } | undefined> = await loadConfig({
+      root: process.cwd(),
+      overrides: {},
+    })
+      .then(({ config }) => config.providers)
+      .catch(() => ({}));
     for (const [id, preset] of Object.entries(PROVIDER_PRESETS)) {
-      const hasKey = preset.apiKeyEnv.some((name) => process.env[name]);
+      const hasKey =
+        preset.apiKeyEnv.some((name) => process.env[name]) || Boolean(configured[id]?.apiKey);
       process.stdout.write(
         `${hasKey ? '✓' : ' '} ${id.padEnd(12)} ${preset.label}\n` +
           `    ${preset.baseURL}\n` +
@@ -198,7 +207,7 @@ async function applyConfigLocale(root: string): Promise<void> {
 async function resolveResume(flags: MainFlags, root: string): Promise<SessionStore | undefined> {
   if (typeof flags.resume === 'string') {
     // 限定本工作区:恢复别处的会话会让它的 meta.root 继续指向旧项目,
-    // 之后两边的 `kdg sessions` 都列不到它(用 -C 切到那个目录即可)。
+    // 之后两边的 `mojocode sessions` 都列不到它(用 -C 切到那个目录即可)。
     const id = await SessionStore.resolveId(flags.resume, { root });
     return SessionStore.open(id);
   }

@@ -1,10 +1,10 @@
 {
-  "name": "kdg",
+  "name": "mojocode",
   "version": "0.1.0",
-  "description": "A terminal coding agent powered by Kimi / DeepSeek / GLM",
+  "description": "A terminal coding agent that works with any LLM (Kimi / DeepSeek / GLM / ...)",
   "type": "module",
   "bin": {
-    "kdg": "./dist/cli.js"
+    "mojocode": "./dist/cli.js"
   },
   "files": [
     "dist"

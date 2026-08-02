@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execa } from 'execa';
 import type { PermissionMode } from '../config/schema.js';
 
-const BASE_PROMPT = `You are kdg, a coding agent that works inside the user's terminal.
+const BASE_PROMPT = `You are mojocode, a coding agent that works inside the user's terminal.
 
 You have tools for reading, searching, editing and running code in the user's workspace. Use them
 rather than guessing. Prefer grep and glob to locate code over reading files at random.
@@ -38,7 +38,7 @@ export interface EnvironmentInfo {
   isGitRepo: boolean;
   gitBranch?: string;
   projectFiles: string[];
-  /** AGENTS.md / KDG.md 的内容(如果存在)。 */
+  /** AGENTS.md / MOJOCODE.md 的内容(如果存在)。 */
   projectInstructions?: string;
 }
 
@@ -58,7 +58,7 @@ export async function gatherEnvironment(root: string): Promise<EnvironmentInfo> 
   const [branchResult, entries, projectInstructions] = await Promise.all([
     execa('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, reject: false, timeout: 3000 }),
     fs.readdir(root, { withFileTypes: true }).catch(() => []),
-    readFirstExisting(root, ['AGENTS.md', 'KDG.md', 'CLAUDE.md']),
+    readFirstExisting(root, ['AGENTS.md', 'MOJOCODE.md', 'CLAUDE.md']),
   ]);
 
   const isGitRepo = branchResult.exitCode === 0;

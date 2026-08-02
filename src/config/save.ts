@@ -27,7 +27,7 @@ export async function updateGlobalConfig(
 }
 
 /**
- * 对项目配置 `<root>/.kdg/config.json` 做读取-修改-写回。不强制 0600:
+ * 对项目配置 `<root>/.mojocode/config.json` 做读取-修改-写回。不强制 0600:
  * 这个文件按设计可以提交进仓库(权限 allow 规则也写在这里),不该被
  * 悄悄改成私有权限。
  */
@@ -118,10 +118,10 @@ export async function saveStatusBar(segments: string[], file?: string): Promise<
 }
 
 /**
- * 保存 `/mode` 切换的权限模式,写**项目级** `<root>/.kdg/config.json`。
+ * 保存 `/mode` 切换的权限模式,写**项目级** `<root>/.mojocode/config.json`。
  *
  * 刻意不写全局配置:权限模式是对某个工作区的信任声明,和 allow 规则同一个
- * 边界。写进 `~/.kdg/config.json` 会让一次临时放宽泄漏到之后每个目录的每次
+ * 边界。写进 `~/.mojocode/config.json` 会让一次临时放宽泄漏到之后每个目录的每次
  * 启动,而界面上除了状态栏一行小字没有任何提示。
  *
  * `yolo` 永不落盘——它是"就这一次"的临时逃生口。返回 undefined 表示未保存,

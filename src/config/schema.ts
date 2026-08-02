@@ -84,7 +84,7 @@ export const configSchema = z.object({
   maxContext: z.number().int().positive().optional(),
   /** 追加到系统提示词末尾的额外指令。 */
   systemPromptAppend: z.string().optional(),
-  /** UI 语言。`auto` 跟随 KDG_LANG / LANG。 */
+  /** UI 语言。`auto` 跟随 MOJOCODE_LANG / LANG。 */
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
   /** 状态栏显示的信息段,可用 /statusbar 调整。 */
   statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),

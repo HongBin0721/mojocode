@@ -4,7 +4,7 @@ import type { SessionMeta, SessionState } from '../session/store.js';
 /**
  * 恢复会话时并入配置层的覆盖项。
  *
- * 优先级:CLI flags > 会话 meta/state > env/配置文件。会话身份压过 KDG_* 环境
+ * 优先级:CLI flags > 会话 meta/state > env/配置文件。会话身份压过 MOJOCODE_* 环境
  * 变量——恢复一个会话就应该回到它当时的模型,这与 Claude Code 的行为一致。
  *
  * model 属于 provider:用户显式换了 provider 时,沿用会话里的模型 id 只会 404,

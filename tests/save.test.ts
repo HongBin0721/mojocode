@@ -8,7 +8,7 @@ let dir: string;
 let file: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kdg-save-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-save-'));
   file = path.join(dir, 'nested', 'config.json');
 });
 
@@ -99,10 +99,10 @@ describe('saveMode', () => {
     expect(await readConfig()).toEqual({ permissionMode: 'acceptEdits' });
   });
 
-  it('默认落在 <root>/.kdg/config.json', async () => {
+  it('默认落在 <root>/.mojocode/config.json', async () => {
     const saved = await saveMode(dir, 'readonly');
 
-    expect(saved).toBe(path.join(dir, '.kdg', 'config.json'));
+    expect(saved).toBe(path.join(dir, '.mojocode', 'config.json'));
     expect(JSON.parse(await fs.readFile(saved!, 'utf8'))).toEqual({ permissionMode: 'readonly' });
   });
 

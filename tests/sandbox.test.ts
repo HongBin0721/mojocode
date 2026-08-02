@@ -32,7 +32,7 @@ describe('resolveInsideWorkspace', () => {
   let outside: string;
 
   beforeAll(async () => {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'kdg-sandbox-'));
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-sandbox-'));
     root = path.join(base, 'workspace');
     outside = path.join(base, 'outside');
     await fs.mkdir(path.join(root, 'src'), { recursive: true });

@@ -11,7 +11,7 @@ import { globalConfigPath, projectConfigPath } from './paths.js';
 import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider } from './providers.js';
 
 export interface LoadOptions {
-  /** 工作区根目录,用于定位 `<root>/.kdg/config.json`。 */
+  /** 工作区根目录,用于定位 `<root>/.mojocode/config.json`。 */
   root: string;
   /** 来自命令行参数的值——优先级最高。 */
   overrides?: PartialConfig;
@@ -20,7 +20,7 @@ export interface LoadOptions {
 
 export class ConfigError extends Error {}
 
-/** 单独区分出来,以便 CLI 能提供交互式的 `kdg auth` 向导。 */
+/** 单独区分出来,以便 CLI 能提供交互式的 `mojocode auth` 向导。 */
 export class MissingKeyError extends ConfigError {
   constructor(
     message: string,
@@ -61,10 +61,10 @@ async function readLayer(file: string): Promise<PartialConfig> {
 /** 映射到顶层配置键的环境变量。provider 的 API key 另行单独处理。 */
 function envLayer(env: NodeJS.ProcessEnv): PartialConfig {
   const layer: PartialConfig = {};
-  if (env.KDG_PROVIDER) layer.provider = env.KDG_PROVIDER;
-  if (env.KDG_MODEL) layer.model = env.KDG_MODEL;
-  if (env.KDG_PERMISSION_MODE) {
-    const parsed = configSchema.shape.permissionMode.safeParse(env.KDG_PERMISSION_MODE);
+  if (env.MOJOCODE_PROVIDER) layer.provider = env.MOJOCODE_PROVIDER;
+  if (env.MOJOCODE_MODEL) layer.model = env.MOJOCODE_MODEL;
+  if (env.MOJOCODE_PERMISSION_MODE) {
+    const parsed = configSchema.shape.permissionMode.safeParse(env.MOJOCODE_PERMISSION_MODE);
     if (parsed.success) layer.permissionMode = parsed.data;
   }
   return layer;
@@ -111,7 +111,7 @@ export interface ResolvedProvider {
 export interface LoadedConfig {
   config: Config;
   provider: ResolvedProvider;
-  /** 实际生效的配置文件,按优先级排序。供 `kdg config` 使用。 */
+  /** 实际生效的配置文件,按优先级排序。供 `mojocode config` 使用。 */
   sources: string[];
 }
 
@@ -138,7 +138,7 @@ export function resolveProvider(
   if (!apiKey) {
     const hint = override.apiKeyEnv ?? preset?.apiKeyEnv.join(' or ') ?? `providers.${id}.apiKey`;
     throw new MissingKeyError(
-      `No API key for provider "${id}". Run \`kdg auth\`, or set ${hint}, or providers.${id}.apiKey.`,
+      `No API key for provider "${id}". Run \`mojocode auth\`, or set ${hint}, or providers.${id}.apiKey.`,
       id,
     );
   }
@@ -171,7 +171,7 @@ export function resolveProvider(
 
 /**
  * 只做分层合并——不解析 provider,因此即使没有设置 API key 也能成功。
- * `kdg config` 用它来展示配置,帮助用户定位如何修复缺失的 key。
+ * `mojocode config` 用它来展示配置,帮助用户定位如何修复缺失的 key。
  */
 export async function loadRawConfig(
   options: LoadOptions,
@@ -200,7 +200,7 @@ export async function loadRawConfig(
   return { config, sources };
 }
 
-/** 分层加载:默认值 < ~/.kdg/config.json < <root>/.kdg/config.json < 环境变量 < 命令行参数。 */
+/** 分层加载:默认值 < ~/.mojocode/config.json < <root>/.mojocode/config.json < 环境变量 < 命令行参数。 */
 export async function loadConfig(options: LoadOptions): Promise<LoadedConfig> {
   const { config, sources } = await loadRawConfig(options);
   return { config, provider: resolveProvider(config, options.env ?? process.env), sources };

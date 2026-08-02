@@ -3,4 +3,4 @@ dist/
 dist-test/
 *.tsbuildinfo
 .DS_Store
-.kdg/
+.mojocode/

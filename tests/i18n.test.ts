@@ -37,11 +37,11 @@ describe('detectLocale', () => {
   it('maps any zh* environment locale to zh-CN', () => {
     expect(detectLocale(undefined, { LANG: 'zh_CN.UTF-8' })).toBe('zh-CN');
     expect(detectLocale(undefined, { LANG: 'zh_TW.UTF-8' })).toBe('zh-CN');
-    expect(detectLocale(undefined, { KDG_LANG: 'zh-CN' })).toBe('zh-CN');
+    expect(detectLocale(undefined, { MOJOCODE_LANG: 'zh-CN' })).toBe('zh-CN');
   });
 
-  it('KDG_LANG beats LANG', () => {
-    expect(detectLocale(undefined, { KDG_LANG: 'en', LANG: 'zh_CN.UTF-8' })).toBe('en');
+  it('MOJOCODE_LANG beats LANG', () => {
+    expect(detectLocale(undefined, { MOJOCODE_LANG: 'en', LANG: 'zh_CN.UTF-8' })).toBe('en');
   });
 
   it('falls back to English for anything else', () => {

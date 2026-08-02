@@ -75,8 +75,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     todos: todos.get(),
     ...gate.exportSessionRules(),
     // yolo 永远不写进会话记录:它是"就这一次"的临时逃生口,与
-    // config/save.ts 的 saveMode 保持同一条规矩——否则 `kdg --yolo` 一次,
-    // 之后每次 `kdg -c` 都会在命令行没有任何标志的情况下静默全自动放行。
+    // config/save.ts 的 saveMode 保持同一条规矩——否则 `mojocode --yolo` 一次,
+    // 之后每次 `mojocode -c` 都会在命令行没有任何标志的情况下静默全自动放行。
     permissionMode: config.permissionMode === 'yolo' ? undefined : config.permissionMode,
   });
   const persistState = (): void => {

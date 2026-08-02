@@ -12,9 +12,9 @@ export interface HeadlessOptions {
 }
 
 /**
- * `kdg -p "..."` 的非交互式渲染。
+ * `mojocode -p "..."` 的非交互式渲染。
  *
- * assistant 文本输出到 stdout,保证 `kdg -p ... | less` 可用;其他内容
+ * assistant 文本输出到 stdout,保证 `mojocode -p ... | less` 可用;其他内容
  * (工具调用、通知、错误)都输出到 stderr。
  */
 export function renderHeadless(session: Session, options: HeadlessOptions): void {

@@ -23,9 +23,9 @@ type Step =
 
 /**
  * 交互式 API key 配置:选择 provider,粘贴 key(掩码显示),对线上
- * /models 端点验证,保存到 ~/.kdg/config.json。
+ * /models 端点验证,保存到 ~/.mojocode/config.json。
  *
- * 可通过 `kdg auth` 独立运行;当任何地方都没有配置 key 时,`kdg` 会
+ * 可通过 `mojocode auth` 独立运行;当任何地方都没有配置 key 时,`mojocode` 会
  * 自动启动它。
  */
 export function AuthWizard(): React.ReactElement {

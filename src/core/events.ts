@@ -9,7 +9,7 @@ export type PermissionDecision =
   | { type: 'allow' }
   /** 允许,并在本会话余下时间里记住这个模式。 */
   | { type: 'allow-always'; rule: string }
-  /** 允许,并把规则持久化到 <workspace>/.kdg/config.json。 */
+  /** 允许,并把规则持久化到 <workspace>/.mojocode/config.json。 */
   | { type: 'allow-persist'; rule: string }
   | { type: 'deny'; reason?: string };
 

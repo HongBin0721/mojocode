@@ -2,7 +2,14 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { Diff } from './Diff.js';
 import { renderMarkdownAnsi } from './markdown-ansi.js';
-import { theme, glyphs, formatDuration, formatToolInput } from './theme.js';
+import {
+  theme,
+  glyphs,
+  formatDuration,
+  formatToolInput,
+  truncateWidth,
+  WIDTH_SAFETY,
+} from './theme.js';
 import type { TimelineItem } from './types.js';
 import { t } from '../i18n/index.js';
 
@@ -30,7 +37,10 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
         <Box marginTop={1}>
           <Text color={theme.assistant}>{item.continuation ? '  ' : `${glyphs.bullet} `}</Text>
           <Box flexDirection="column" flexGrow={1}>
-            <Text>{renderMarkdownAnsi(item.text, (process.stdout.columns ?? 80) - 2)}</Text>
+            {/* 前缀 2 列 + WIDTH_SAFETY 边距:与流式预览同宽,定稿前后折行一致。 */}
+            <Text>
+              {renderMarkdownAnsi(item.text, (process.stdout.columns ?? 80) - 2 - WIDTH_SAFETY)}
+            </Text>
           </Box>
         </Box>
       );
@@ -87,12 +97,12 @@ function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) 
       <Box>
         <Text color={item.isError ? theme.error : theme.tool}>{glyphs.bullet} </Text>
         <Text bold>{item.toolName}</Text>
-        {args ? <Text color={theme.dim}>({truncateInline(args, 100)})</Text> : null}
+        {args ? <Text color={theme.dim}>({truncateWidth(args, 100)})</Text> : null}
       </Box>
       <Box paddingLeft={2}>
         <Text color={theme.dim}>{glyphs.branch} </Text>
         <Text color={item.isError ? theme.error : theme.dim}>
-          {truncateInline(item.summary, 160)}
+          {truncateWidth(item.summary, 160)}
           {/* bash 已经在摘要里报告了自己的耗时。 */}
           {!item.isError && item.toolName !== 'bash' && item.durationMs > 1500
             ? ` · ${formatDuration(item.durationMs)}`
@@ -135,11 +145,6 @@ function extractDiff(item: Extract<TimelineItem, { kind: 'tool' }>): string | un
   if (item.isError) return undefined;
   const output = item.output as { diff?: unknown } | undefined;
   return typeof output?.diff === 'string' ? output.diff : undefined;
-}
-
-function truncateInline(text: string, limit: number): string {
-  const single = text.replace(/\s+/g, ' ').trim();
-  return single.length > limit ? `${single.slice(0, limit)}…` : single;
 }
 
 function truncateLines(text: string, limit: number): string {

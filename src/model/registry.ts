@@ -38,7 +38,7 @@ export interface ModelInfo {
 }
 
 /**
- * 请求 `GET {baseURL}/models`。供 `kdg models` 使用,让用户能查到自己的
+ * 请求 `GET {baseURL}/models`。供 `mojocode models` 使用,让用户能查到自己的
  * key 实际拥有的模型 id,而不是去猜那些变化频繁的名字。
  */
 export async function listModels(provider: ResolvedProvider): Promise<ModelInfo[]> {

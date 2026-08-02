@@ -6,7 +6,7 @@ import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
-import { theme, glyphs, formatToolInput } from './theme.js';
+import { theme, glyphs, formatToolInput, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import { Markdown } from './Markdown.js';
 import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
@@ -103,6 +103,7 @@ const REASONING_PREVIEW_ROWS = 3;
 /** 留给状态行、输入框、信息栏、进行中的工具行和各处 marginTop 的余量。 */
 const RESERVED_ROWS = 13;
 
+
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
 
@@ -131,7 +132,7 @@ export function App({ session }: Props): React.ReactElement {
   const { exit } = useApp();
   const { stdout, write: writeStdout } = useStdout();
 
-  // 惰性初始化:`kdg -r` 恢复的会话在首帧就带着回放的历史时间线。
+  // 惰性初始化:`mojocode -r` 恢复的会话在首帧就带着回放的历史时间线。
   const [items, setItems] = useState<TimelineItem[]>(() => buildResumeItems(session));
   /**
    * 每次清空时间线时递增,作为 <Static> 的 key 强制重挂载。
@@ -533,7 +534,7 @@ export function App({ session }: Props): React.ReactElement {
           session.setMode(parsed.data);
           setMode(parsed.data);
           push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: parsed.data }) });
-          // 落盘范围是本工作区的 .kdg/config.json;yolo 不保存,提示它只管这一次。
+          // 落盘范围是本工作区的 .mojocode/config.json;yolo 不保存,提示它只管这一次。
           const saved = await saveMode(session.root, parsed.data).catch((err: Error) => {
             push({ kind: 'notice', level: 'warn', message: t('notice.modeSaveFailed', { message: err.message }) });
             return undefined;
@@ -714,7 +715,7 @@ export function App({ session }: Props): React.ReactElement {
             message:
               `${t('notice.costSession', { total: usage.total })}\n` +
               `${t('notice.costContext', { used: usage.used, window: usage.window })}\n` +
-              t('notice.costTranscript', { path: `~/.kdg/sessions/${session.store.id}.jsonl` }),
+              t('notice.costTranscript', { path: `~/.mojocode/sessions/${session.store.id}.jsonl` }),
           });
           break;
 
@@ -868,9 +869,9 @@ export function App({ session }: Props): React.ReactElement {
         ) : null}
 
         {activeReasoning.trim() ? (
-          <Box marginTop={1}>
+          <Box marginTop={1} paddingRight={WIDTH_SAFETY}>
             <Text color={theme.dim} italic>
-              {tailWithinRows(activeReasoning, reasoningRows, columns)}
+              {tailWithinRows(activeReasoning, reasoningRows, columns - WIDTH_SAFETY)}
             </Text>
           </Box>
         ) : null}
@@ -878,18 +879,26 @@ export function App({ session }: Props): React.ReactElement {
         {activeText.trim() ? (
           <Box marginTop={1}>
             <Text color={theme.assistant}>{glyphs.bullet} </Text>
-            <Box flexDirection="column" flexGrow={1}>
+            <Box flexDirection="column" flexGrow={1} paddingRight={WIDTH_SAFETY}>
               {/* 前缀 ● 占两列,预览宽度相应收窄。 */}
-              <Markdown text={tailWithinRows(activeText, textRows, columns - 2)} />
+              <Markdown text={tailWithinRows(activeText, textRows, columns - 2 - WIDTH_SAFETY)} />
             </Box>
           </Box>
         ) : null}
 
         {activeTools.map((call) => (
-          <Box key={call.callId} marginTop={1}>
+          <Box key={call.callId} marginTop={1} paddingRight={WIDTH_SAFETY}>
             <Text color={theme.tool}>{glyphs.running} </Text>
             <Text bold>{call.toolName}</Text>
-            <Text color={theme.dim}>({formatToolInput(call.toolName, call.input)})</Text>
+            <Text color={theme.dim}>
+              (
+              {truncateWidth(
+                formatToolInput(call.toolName, call.input),
+                // 前缀 2 列 + 工具名 + 括号 2 列,截到单行以内。
+                Math.max(20, columns - WIDTH_SAFETY - call.toolName.length - 6),
+              )}
+              )
+            </Text>
           </Box>
         ))}
 

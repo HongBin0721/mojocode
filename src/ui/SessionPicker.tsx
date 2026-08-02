@@ -13,7 +13,7 @@ interface Props {
 }
 
 /**
- * 启动期的会话选择器:`kdg -r` 不带参数时先渲染它,选完再进入正式 App。
+ * 启动期的会话选择器:`mojocode -r` 不带参数时先渲染它,选完再进入正式 App。
  * 独立于 Input 的二级选择器——那个由斜杠命令文本触发,这里是启动流程。
  */
 export function SessionPicker({ sessions, onSelect }: Props): React.JSX.Element {

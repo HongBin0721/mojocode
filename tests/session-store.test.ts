@@ -12,7 +12,7 @@ import {
 let dir: string;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kdg-sessions-'));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-sessions-'));
 });
 
 afterEach(async () => {

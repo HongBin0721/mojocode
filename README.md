@@ -1,6 +1,6 @@
-# kdg
+# mojocode
 
-一个运行在终端里的编程 agent，支持 **Kimi**、**DeepSeek**、**GLM** 三家大模型。
+一个运行在终端里的通用编程 agent，可接入任意大模型——内置 **Kimi**、**DeepSeek**、**GLM** 预设，也支持任何 OpenAI 兼容接口。
 
 全屏 TUI 交互、真实的文件/shell/搜索工具、所有改动前置权限确认、会话持久化与上下文自动压缩、MCP 扩展支持。
 
@@ -22,30 +22,30 @@
 cd agent_dev        # 项目目录
 npm install         # 安装依赖
 npm run build       # 打包到 dist/
-npm link            # 把 kdg 命令挂到 PATH
+npm link            # 把 mojocode 命令挂到 PATH
 ```
 
 验证安装：
 
 ```bash
-kdg --version       # 输出 0.1.0 即成功
+mojocode --version       # 输出 0.1.0 即成功
 ```
 
-> 卸载：`npm unlink -g kdg`。
+> 卸载：`npm unlink -g mojocode`。
 
 ### 2. 配置 API 密钥（三选一即可）
 
 **方式 A：交互式向导（推荐）**
 
 ```bash
-kdg auth            # 别名：kdg login
+mojocode auth            # 别名：mojocode login
 ```
 
 流程：↑/↓ 选服务商 → 粘贴密钥（掩码显示，界面上有各平台申请密钥的网址）→
-自动调用该平台 `/models` 接口验证 → 保存到 `~/.kdg/config.json`（文件权限 0600）→
+自动调用该平台 `/models` 接口验证 → 保存到 `~/.mojocode/config.json`（文件权限 0600）→
 可选设为默认服务商 → 可继续配置下一家。
 
-没配置任何密钥时直接运行 `kdg` 也会自动进入这个向导。
+没配置任何密钥时直接运行 `mojocode` 也会自动进入这个向导。
 
 **方式 B：环境变量**（共用机器上更安全，写进 `~/.zshrc`）：
 
@@ -60,7 +60,7 @@ export ZHIPU_API_KEY=...            # GLM:           open.bigmodel.cn
 > Kimi Code 订阅（`kimi-coding` 预设，api.kimi.com/coding/v1，包月）。
 > 两边密钥互不通用，按你买的是哪种选对应预设。
 
-**方式 C：直接写配置文件** `~/.kdg/config.json`：
+**方式 C：直接写配置文件** `~/.mojocode/config.json`：
 
 ```json
 { "providers": { "glm": { "apiKey": "..." } } }
@@ -69,15 +69,15 @@ export ZHIPU_API_KEY=...            # GLM:           open.bigmodel.cn
 ### 3. 验证连通
 
 ```bash
-kdg providers                  # 列出内置服务商，✓ 表示密钥已就位
-kdg models --provider glm      # 拉取你的密钥实际可用的模型列表
+mojocode providers                  # 列出内置服务商，✓ 表示密钥已就位
+mojocode models --provider glm      # 拉取你的密钥实际可用的模型列表
 ```
 
 ### 4. 开始使用
 
 ```bash
 cd ~/你的项目
-kdg                            # 进入全屏 TUI，直接打字提需求
+mojocode                            # 进入全屏 TUI，直接打字提需求
 ```
 
 第一次建议在不重要的目录跑一圈，感受默认 `ask` 模式的权限确认节奏。
@@ -89,7 +89,7 @@ kdg                            # 进入全屏 TUI，直接打字提需求
 ### 交互模式（TUI）
 
 ```bash
-kdg
+mojocode
 ```
 
 | 操作 | 说明 |
@@ -125,10 +125,10 @@ kdg
 ### 非交互模式（脚本 / 管道 / CI）
 
 ```bash
-kdg -p "找出所有 TODO 注释并汇总"          # 单次执行，结果输出到 stdout
-kdg -p "分析这段报错" --provider deepseek  # 指定服务商
-kdg -p "..." --json                        # stderr 输出 NDJSON 事件流
-cat error.log | kdg -p "分析这个日志"       # 配合管道
+mojocode -p "找出所有 TODO 注释并汇总"          # 单次执行，结果输出到 stdout
+mojocode -p "分析这段报错" --provider deepseek  # 指定服务商
+mojocode -p "..." --json                        # stderr 输出 NDJSON 事件流
+cat error.log | mojocode -p "分析这个日志"       # 配合管道
 ```
 
 `-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--accept-edits` 或 `--yolo`。
@@ -136,35 +136,35 @@ cat error.log | kdg -p "分析这个日志"       # 配合管道
 ### 会话管理
 
 ```bash
-kdg -c                  # 继续本目录最近一次会话（--continue）
-kdg -r                  # 交互式选择要恢复的会话（--resume）
-kdg -r <id前缀>          # 恢复指定会话；`kdg sessions` 列出的 8 位前缀即可
-kdg -r <id前缀> --fork-session   # 载入历史但写入全新会话（原会话不再变动）
-kdg sessions            # 列出本目录的历史会话
-kdg sessions --all      # 所有目录的
+mojocode -c                  # 继续本目录最近一次会话（--continue）
+mojocode -r                  # 交互式选择要恢复的会话（--resume）
+mojocode -r <id前缀>          # 恢复指定会话；`mojocode sessions` 列出的 8 位前缀即可
+mojocode -r <id前缀> --fork-session   # 载入历史但写入全新会话（原会话不再变动）
+mojocode sessions            # 列出本目录的历史会话
+mojocode sessions --all      # 所有目录的
 ```
 
 恢复会话时会完整回放时间线,并还原当时的模型、权限模式、任务列表与本会话
 批准过的规则(CLI 参数可覆盖,如 `--provider`)。会话完整记录(未压缩)保存
-在 `~/.kdg/sessions/*.jsonl`,超过 `cleanupPeriodDays`(默认 30 天)未活动的
+在 `~/.mojocode/sessions/*.jsonl`,超过 `cleanupPeriodDays`(默认 30 天)未活动的
 会话在启动时自动清理。
 
 ### 常用启动参数
 
 ```bash
-kdg --provider kimi -m kimi-k2.6   # 本次指定服务商和模型
-kdg --readonly                     # 只读分析，绝不改文件
-kdg --accept-edits                 # 文件编辑免确认，shell 命令仍确认
-kdg --yolo                         # 全部免确认（谨慎）
-kdg --no-mcp                       # 跳过 MCP 连接，启动更快
-kdg -C ~/另一个项目                # 指定工作区目录
+mojocode --provider kimi -m kimi-k2.6   # 本次指定服务商和模型
+mojocode --readonly                     # 只读分析，绝不改文件
+mojocode --accept-edits                 # 文件编辑免确认，shell 命令仍确认
+mojocode --yolo                         # 全部免确认（谨慎）
+mojocode --no-mcp                       # 跳过 MCP 连接，启动更快
+mojocode -C ~/另一个项目                # 指定工作区目录
 ```
 
 ---
 
 ## 三、配置
 
-配置文件分两层：`~/.kdg/config.json`（全局）和 `<项目>/.kdg/config.json`（项目级，可提交进仓库）。完整示例：
+配置文件分两层：`~/.mojocode/config.json`（全局）和 `<项目>/.mojocode/config.json`（项目级，可提交进仓库）。完整示例：
 
 ```json
 {
@@ -186,12 +186,12 @@ kdg -C ~/另一个项目                # 指定工作区目录
 }
 ```
 
-优先级从低到高：内置默认 → 全局配置 → 项目配置 → `KDG_*` 环境变量 → 命令行参数。
-`kdg config` 可查看最终生效的配置及来源（密钥自动打码）。
+优先级从低到高：内置默认 → 全局配置 → 项目配置 → `MOJOCODE_*` 环境变量 → 命令行参数。
+`mojocode config` 可查看最终生效的配置及来源（密钥自动打码）。
 
 ### 界面语言
 
-界面内置英文和简体中文。解析顺序：配置 `language` → `KDG_LANG` → 系统 `LANG`/`LC_ALL`
+界面内置英文和简体中文。解析顺序：配置 `language` → `MOJOCODE_LANG` → 系统 `LANG`/`LC_ALL`
 （任何 `zh*` 都映射到 zh-CN）。运行中可用 `/lang zh-CN` / `/lang en` 即时切换。
 
 回喂给模型的文本（工具报错、拒绝原因）刻意保持英文——那是 prompt 的一部分，
@@ -200,7 +200,7 @@ kdg -C ~/另一个项目                # 指定工作区目录
 
 ### 项目指令
 
-在项目根放 `AGENTS.md`（或 `KDG.md`），内容会注入系统提示，用来声明项目规范
+在项目根放 `AGENTS.md`（或 `MOJOCODE.md`），内容会注入系统提示，用来声明项目规范
 （构建命令、代码风格、禁改目录等）。
 
 ---
@@ -246,11 +246,15 @@ src/
 容易踩的坑（都已处理，改代码时注意别退化）：
 
 - **GLM 的 baseURL 是 `/api/paas/v4`**，绝不能再拼 `/v1`，否则 404。
-- **模型 ID 一律不硬编码。** 三家迭代都快，预设只是起始默认值，`kdg models` 看实时列表。
+- **模型 ID 一律不硬编码。** 三家迭代都快，预设只是起始默认值，`mojocode models` 看实时列表。
 - **已完成的时间线条目放在 Ink 的 `<Static>` 里**，只渲染一次进终端回滚缓冲区，
   长会话不卡顿、滚动回看正常。
 - **历史用 `result.responseMessages`**，不是 `result.response.messages`——
   后者只含最后一步，会悄悄丢掉前面的工具调用。
+- **动态区（流式预览、进行中的工具行）的文本必须留折行安全边距、按显示宽度截断**
+  （`App.tsx` 的 `WIDTH_SAFETY`、`theme.ts` 的 `truncateWidth`）。string-width 与
+  终端对个别字符（emoji、CJK 标点）的宽度判定有 ±1 列分歧，顶满最后一列的行会被
+  终端自动折行，Ink 的擦除记账随之逐帧向下漂移，在回滚区留下成片空白。
 
 ---
 
@@ -267,13 +271,13 @@ npm run dev         # 监听改动自动重新打包
 ## 常见问题
 
 **Q：报 "No API key for provider ..."**
-运行 `kdg auth` 配置，或检查环境变量名是否正确（`kdg providers` 会列出每家认哪些变量）。
+运行 `mojocode auth` 配置，或检查环境变量名是否正确（`mojocode providers` 会列出每家认哪些变量）。
 
 **Q：GLM 返回 404**
 检查 baseURL 是否被改动过——必须是 `https://open.bigmodel.cn/api/paas/v4`，不带 `/v1`。
 
 **Q：`/model` 里没有我想要的模型**
-模型列表来自你的密钥实际权限。`kdg models --provider <id>` 确认后用 `/model <id>` 或配置 `model` 字段指定。
+模型列表来自你的密钥实际权限。`mojocode models --provider <id>` 确认后用 `/model <id>` 或配置 `model` 字段指定。
 
 **Q：上下文满了怎么办**
 超过窗口 80% 会自动压缩成摘要继续；也可随时 `/compact`。磁盘上的会话记录始终是完整的。
