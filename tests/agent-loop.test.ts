@@ -322,6 +322,34 @@ describe('轮末事件', () => {
     expect(events).toContain('aborted');
     expect(events.filter((e) => e === 'turn-end')).toHaveLength(0);
   });
+
+  it('一轮只播报一次 aborted,下一轮仍会播报', async () => {
+    // 真实 SDK 的中断形态:fullStream 补一个 abort 事件后正常收束,而首步
+    // 未完成时收尾 Promise 以 AbortError 拒绝——两条路都会走到。
+    let agentRef!: Agent;
+    // 中断后收尾 Promise 只会被 await 到第一个,其余的拒绝由 SDK 标记为已处理。
+    const rejected = () => {
+      const p = Promise.reject(new Error('AbortError'));
+      p.catch(() => undefined);
+      return p;
+    };
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        agentRef.abort();
+        yield { type: 'abort' };
+      })(),
+      responseMessages: rejected(),
+      finishReason: rejected(),
+    }));
+    const { agent, events } = makeAgent();
+    agentRef = agent;
+    await agent.run('你好');
+
+    expect(events.filter((e) => e === 'aborted')).toHaveLength(1);
+
+    await agent.run('再来');
+    expect(events.filter((e) => e === 'aborted')).toHaveLength(2);
+  });
 });
 
 describe('会话清空', () => {

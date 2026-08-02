@@ -80,6 +80,13 @@ export class Agent {
    */
   private contextNoticeSent = false;
   /**
+   * 本轮是否已发过 aborted。中断会走两条路各报一次:fullStream 的 abort
+   * 事件,以及首步未完成时 result 的收尾 Promise 以 AbortError 拒绝、被
+   * run() 的 catch 接住。两处都得留着(某一步已完成时收尾 Promise 正常
+   * 兑现,只剩前者;流开始之前中断则只剩后者),所以在这里去重。
+   */
+  private abortEmitted = false;
+  /**
    * 历史的代数。`clear()`/`setHistory()` 会递增它,压缩在 await 期间若跨了
    * 代,结果就作废——否则 `/compact` 未完成时执行 `/clear`,压缩返回后会把
    * 被丢弃的对话整体写回内存,并存进那个全新的会话文件。
@@ -144,6 +151,13 @@ export class Agent {
     this.controller?.abort();
   }
 
+  /** 一轮至多播报一次中断,详见 abortEmitted。 */
+  private emitAborted(): void {
+    if (this.abortEmitted) return;
+    this.abortEmitted = true;
+    this.options.bus.emit({ type: 'aborted' });
+  }
+
   /**
    * 运行中插入一条引导消息,在下一个步骤边界(当前模型输出/工具调用
    * 完成后)注入对话。空闲时调用返回 false——调用方应转为发起新一轮。
@@ -203,6 +217,7 @@ export class Agent {
     this.pendingGuidance = [];
     this.injectedThisTurn = [];
     this.contextNoticeSent = false;
+    this.abortEmitted = false;
     this.controller = new AbortController();
 
     try {
@@ -229,7 +244,7 @@ export class Agent {
       }
     } catch (error) {
       if (this.controller.signal.aborted) {
-        bus.emit({ type: 'aborted' });
+        this.emitAborted();
       } else {
         bus.emit({
           type: 'error',
@@ -412,7 +427,7 @@ export class Agent {
           };
           break;
         case 'abort':
-          bus.emit({ type: 'aborted' });
+          this.emitAborted();
           break;
         default:
           break;
