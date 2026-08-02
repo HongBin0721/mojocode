@@ -13,7 +13,7 @@
   ],
   "type": "module",
   "bin": {
-    "mojocode": "./dist/cli.js"
+    "mojocode": "dist/cli.js"
   },
   "files": [
     "dist"
