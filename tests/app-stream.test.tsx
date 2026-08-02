@@ -55,17 +55,21 @@ describe('流式中断/出错时的收尾', () => {
     unmount();
   });
 
-  it('error 把未定稿的文本和思考推入时间线', async () => {
+  it('error 把未定稿的文本推入时间线,思考只留一行标记', async () => {
     const { bus, frames, unmount } = setup();
     await tick();
 
+    // 三条事件同步发出,中间没有渲染机会,因此思考正文连预览都没画过——
+    // 这里的"不含正文"断言检验的正是定稿逻辑,而不是预览恰好没出现。
     bus.emit({ type: 'reasoning-delta', id: 'r0', text: '思考到一半' });
     bus.emit({ type: 'text-delta', id: '0', text: '答到一半' });
     bus.emit({ type: 'error', error: new Error('connection reset'), recoverable: true });
     await tick();
 
     const out = frames.join('\n');
-    expect(out).toContain('思考到一半');
+    // 断言字形而不是文案:测试进程的语言取自环境变量,两种目录都要能过。
+    expect(out).toContain('✻');
+    expect(out).not.toContain('思考到一半');
     expect(out).toContain('答到一半');
     expect(out).toContain('connection reset');
     unmount();

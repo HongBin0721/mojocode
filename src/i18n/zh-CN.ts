@@ -59,6 +59,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'ui.moreDiffLines': '… 还有 {n} 行 diff',
   'ui.truncated': '…（已截断）',
   'ui.unknownTime': '未知耗时',
+  'ui.thought': '已思考',
+  'ui.thoughtFor': '已思考 {duration}',
   'ui.todoDone': '已完成 {n} 项',
   'ui.moreTodos': '… 还有 {n} 项任务',
 

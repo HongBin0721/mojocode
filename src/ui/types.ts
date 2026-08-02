@@ -7,7 +7,12 @@ export type TimelineItem =
       /** 同一条流式回复的后续片段(段落增量提交):渲染时不再带 ● 前缀。 */
       continuation?: boolean;
     }
-  | { key: string; kind: 'reasoning'; text: string }
+  /**
+   * 一次思考的收尾标记。正文只在流式期间的动态区实时可见,定稿进时间线的
+   * 只有这一行——<Static> 一旦画出就写进终端回滚缓冲区,再也擦不掉,整段
+   * 思考留在那里会淹没真正的回复和工具记录。
+   */
+  | { key: string; kind: 'reasoning'; durationMs?: number }
   | {
       key: string;
       kind: 'tool';

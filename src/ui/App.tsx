@@ -110,9 +110,12 @@ const LOCALE_LABELS: Record<Locale, string> = {
  * 流式预览占用的终端行数上限。动态区域(预览 + 输入框 + 状态栏)的总高度
  * 一旦超过终端窗口高度,Ink 就擦不掉上一帧,每次重绘都会往回滚区漏一份
  * 旧帧。完整文本在 text-end 时会进入 <Static> 时间线,预览截断不丢内容。
+ *
+ * 思考不同:定稿只留一行"已思考 8.2s",正文**只在这个预览里出现过一次**,
+ * 之后再无回看途径,所以行数给得比正文预览的道理更足——它是唯一的窗口。
  */
 const STREAM_PREVIEW_ROWS = 5;
-const REASONING_PREVIEW_ROWS = 3;
+const REASONING_PREVIEW_ROWS = 5;
 /** 留给状态行、输入框、信息栏、进行中的工具行和各处 marginTop 的余量。 */
 const RESERVED_ROWS = 13;
 
@@ -236,6 +239,9 @@ export function App({ session }: Props): React.ReactElement {
   // 中断/出错时也要靠它把残留内容定稿。
   const activeTextRef = useRef('');
   const activeReasoningRef = useRef('');
+  // 本段思考的起始时刻,定稿那一行的耗时由它算出。undefined 表示当前没有
+  // 进行中的思考块。
+  const reasoningStartedAt = useRef<number | undefined>(undefined);
 
   // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段渲染时
   // 不再带 ● 前缀,只缩进对齐。
@@ -280,11 +286,16 @@ export function App({ session }: Props): React.ReactElement {
         push({ kind: 'assistant', text: text.trimEnd(), continuation: textCommitted.current });
       textCommitted.current = false;
     };
+    // 定稿的只是一行"已思考 8.2s":正文在流式期间实时可见,进了 <Static>
+    // 就再也擦不掉,整段留在回滚区只会淹没回复和工具记录。
     const flushReasoning = () => {
       const text = activeReasoningRef.current;
+      const startedAt = reasoningStartedAt.current;
       activeReasoningRef.current = '';
+      reasoningStartedAt.current = undefined;
       setActiveReasoning('');
-      if (text.trim()) push({ kind: 'reasoning', text: text.trim() });
+      if (text.trim())
+        push({ kind: 'reasoning', durationMs: startedAt ? Date.now() - startedAt : undefined });
     };
     // 中断(Esc)和流级异常不会给进行中的文本块补发 text-end/reasoning-end
     // (SDK 直接关闭流),已生成的部分回答必须在这里定稿,否则它永远进不了
@@ -325,6 +336,9 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'reasoning-delta':
+          // 计时从第一个增量起,而不是订阅 reasoning-start:后者未必所有
+          // provider 都发,且首个增量到达前屏幕上本来也没有思考在显示。
+          reasoningStartedAt.current ??= Date.now();
           activeReasoningRef.current += event.text;
           setActiveReasoning(activeReasoningRef.current);
           beginWork('thinking');

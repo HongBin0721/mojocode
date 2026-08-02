@@ -54,6 +54,7 @@ export const glyphs = {
   pointer: '❯',
   checked: '☒',
   unchecked: '☐',
+  thinking: '✻',
 } as const;
 
 /**

@@ -65,6 +65,8 @@ export const en = {
   'ui.moreDiffLines': '… {n} more diff lines',
   'ui.truncated': '… (truncated)',
   'ui.unknownTime': 'unknown time',
+  'ui.thought': 'Thought',
+  'ui.thoughtFor': 'Thought for {duration}',
   'ui.todoDone': '{n} done',
   'ui.moreTodos': '… {n} more tasks',
 

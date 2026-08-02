@@ -47,12 +47,16 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
       );
 
     case 'reasoning':
-      // 不加"思考中"标题:输入框上方的状态行已实时显示工作阶段,这里只
-      // 保留内容本身,灰色斜体已足够和正式回复区分。
+      // 只留一行痕迹:思考正文在流式期间已经实时显示过,定稿再摊开一遍
+      // 既是重复,又会把回复和工具记录挤出屏幕(见 types.ts 的说明)。
+      // 耗时从历史回放不出来,那时只写"已思考"。
       return (
-        <Box marginTop={1} flexDirection="column">
+        <Box marginTop={1}>
           <Text color={theme.dim} italic>
-            {truncateLines(item.text, 8)}
+            {glyphs.thinking}{' '}
+            {item.durationMs
+              ? t('ui.thoughtFor', { duration: formatDuration(item.durationMs) })
+              : t('ui.thought')}
           </Text>
         </Box>
       );
@@ -230,10 +234,4 @@ function extractTodos(item: Extract<TimelineItem, { kind: 'tool' }>): TodoItem[]
       typeof (todo as TodoItem | undefined)?.status === 'string',
   );
   return valid.length > 0 ? valid : undefined;
-}
-
-function truncateLines(text: string, limit: number): string {
-  const lines = text.trim().split('\n');
-  if (lines.length <= limit) return text.trim();
-  return `${lines.slice(0, limit).join('\n')}\n${t('ui.moreLines', { n: lines.length - limit })}`;
 }
