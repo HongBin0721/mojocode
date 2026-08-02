@@ -10,7 +10,9 @@ export type WorkPhase =
   | 'tool'
   | 'waiting'
   | 'compacting'
-  | 'listingModels';
+  | 'listingModels'
+  /** 一轮收尾后,评估器正在判断 `/goal` 的条件达成没有。 */
+  | 'evaluating';
 
 export interface WorkState {
   phase: WorkPhase;
@@ -36,6 +38,7 @@ const PHASE_COLORS: Record<WorkPhase, string> = {
   waiting: theme.warn,
   compacting: theme.accent,
   listingModels: theme.accent,
+  evaluating: 'magenta',
 };
 
 const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
@@ -44,6 +47,7 @@ const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
   waiting: 'status.waiting',
   compacting: 'status.compacting',
   listingModels: 'status.listingModels',
+  evaluating: 'status.evaluating',
 };
 
 /**

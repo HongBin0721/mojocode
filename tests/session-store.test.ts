@@ -279,6 +279,24 @@ describe('state 记录', () => {
     const reopened = await SessionStore.open(store.id, dir);
     expect(reopened.state).toEqual(state);
   });
+
+  it('未完成的目标随状态往返;没有目标时字段整个不出现', async () => {
+    // 无目标时必须一字不差地还是老样子:多写一个 `goal: undefined` 会让
+    // JSON.stringify 变样,脏检查便会给每个老会话平白追加一条 state 记录。
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    // 用非空的 base:全空等于 EMPTY_STATE,脏检查会直接跳过,第一条记录根本不会写。
+    const base = { todos: [{ content: '任务', status: 'pending' as const }], allowBash: [], allowWrite: [] };
+    await store.saveState(base);
+    let records = await readRecords(store.id);
+    expect(JSON.stringify(records.at(-1))).not.toContain('goal');
+
+    await store.saveState({ ...base, goal: { condition: '让 npm test 全绿' } });
+    records = await readRecords(store.id);
+    expect(records.filter((r) => r.kind === 'state')).toHaveLength(2);
+
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.state.goal).toEqual({ condition: '让 npm test 全绿' });
+  });
 });
 
 describe('fork', () => {

@@ -109,6 +109,7 @@ function envLayer(env: NodeJS.ProcessEnv, warnings: string[]): PartialConfig {
   const layer: PartialConfig = {};
   if (env.MOJOCODE_PROVIDER) layer.provider = env.MOJOCODE_PROVIDER;
   if (env.MOJOCODE_MODEL) layer.model = env.MOJOCODE_MODEL;
+  if (env.MOJOCODE_GOAL_MODEL) layer.goalModel = env.MOJOCODE_GOAL_MODEL;
   if (env.MOJOCODE_SANDBOX) {
     const parsed = sandboxModeSchema.safeParse(env.MOJOCODE_SANDBOX);
     if (parsed.success) layer.sandbox = parsed.data;

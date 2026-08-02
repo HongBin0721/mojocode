@@ -33,6 +33,30 @@ export interface PermissionRequest {
   risk: 'read' | 'write' | 'execute';
 }
 
+/**
+ * 目标循环(`/goal`)停下来的原因。任何一种都会解除目标——留着的话,用户
+ * 中断之后随口发的下一条消息会把自动循环又悄悄点着,而那正是最该避免的意外。
+ *
+ * 核心只报事实,文案由渲染层按各自的语言映射(与 permission-change 同理)。
+ */
+export type GoalStopReason =
+  /** 评估器判定条件已达成。 */
+  | 'met'
+  /** 用户 `/goal clear`,或 `/new`、`/resume` 换掉了会话。 */
+  | 'cleared'
+  /** 被新设定的目标取代。 */
+  | 'replaced'
+  /** 触及自动续跑的轮数上限。 */
+  | 'max-turns'
+  /** 这一轮被 esc 中断(没有 turn-end)。 */
+  | 'aborted'
+  /** 这一轮以错误收尾(同样没有 turn-end)。 */
+  | 'error'
+  /** 评估器连续给不出可解析的判词——不能靠猜继续烧 token。 */
+  | 'check-failed'
+  /** 进入了计划模式:它的要义是停下来等批准,与自动续跑正相反。 */
+  | 'plan-mode';
+
 export interface UsageSnapshot {
   inputTokens: number;
   outputTokens: number;
@@ -67,6 +91,28 @@ export type AgentEvent =
   // 权限变化(两轴组合和/或 plan 标志)。`exit_plan` 批准后由工具侧切换,
   // 渲染层只能靠这条事件跟上——否则状态栏会一直停在 plan。
   | { type: 'permission-change'; permissions: Permissions; plan: boolean }
+  // `/goal` 的自动续跑循环。核心只发事件,渲染层(TUI / headless)自己决定
+  // 怎么呈现——GoalController 因此和 Ink 一样互不相识。
+  //
+  // 目标已设定(`/goal <条件>`),或从会话记录中恢复(restored 为真时不自动开跑)。
+  | { type: 'goal-start'; condition: string; restored: boolean }
+  /** 一轮收尾后评估器开始判定。turn 是本目标已跑完的轮数。 */
+  | { type: 'goal-evaluating'; turn: number }
+  // 一次评估的结论。met 为假时 reason 会原样成为下一轮的指令,所以它既是
+  // 给用户看的解释,也是给模型的指示。
+  | { type: 'goal-verdict'; met: boolean; reason: string; turn: number; maxTurns: number }
+  // 目标循环终止。统计随事件带出,渲染层不必自己记账。
+  | {
+      type: 'goal-stop';
+      reason: GoalStopReason;
+      condition: string;
+      /** 评估器最后一次的判词;从未评估过时为空串。 */
+      detail: string;
+      turns: number;
+      elapsedMs: number;
+      /** 本次目标消耗的 token,含评估器自身的开销。 */
+      tokens: number;
+    }
   | { type: 'step-end'; usage: UsageSnapshot }
   | { type: 'compaction'; removedMessages: number; summaryChars: number }
   | { type: 'turn-end'; usage: UsageSnapshot; finishReason: string }

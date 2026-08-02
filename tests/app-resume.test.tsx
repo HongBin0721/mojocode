@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { App } from '../src/ui/App.js';
+import { stubGoal } from './support/goal.js';
 import { RewindPicker } from '../src/ui/RewindPicker.js';
 import { EventBus } from '../src/core/events.js';
 import type { Session } from '../src/app/bootstrap.js';
@@ -28,6 +29,7 @@ function makeSession(messages: ModelMessage[]): Session {
     bus: new EventBus(),
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
+    goal: stubGoal(async () => {}),
     mcpStatuses: [],
     store: { id: 'resumed-session-id', messages },
     switch: () => provider,

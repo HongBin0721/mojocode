@@ -206,6 +206,18 @@ export const configSchema = z.object({
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
   maxSteps: z.number().int().positive().default(50),
+  /**
+   * `/goal` 评估器用的模型 id(与会话同一个 provider)。不填则复用会话当前
+   * 模型。评估只是判一次"条件达成没有",用便宜的小模型足够,但绝不预置任何
+   * 具体 id——模型名变动频繁,猜错就是 404(见 README 的约定)。
+   */
+  goalModel: z.string().optional(),
+  /**
+   * 一个目标最多自动续跑多少轮。默认给得保守:10 轮无人看管的 agent 轮次在
+   * 真实代码库上已经是几十万 token,宁可让用户重设一次目标,也不要一觉醒来
+   * 发现额度没了。想跑长任务的人抬高它是一行配置的事。
+   */
+  goalMaxTurns: z.number().int().positive().max(100).default(10),
   temperature: z.number().min(0).max(2).optional(),
   /** 思考强度的全局默认值,可被 providers.<id>.reasoningEffort 覆盖,用 /think 调整。 */
   reasoningEffort: reasoningEffortSchema.default('auto'),

@@ -6,11 +6,25 @@ import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
 import { TodoPanel, todoPanelRows } from './TodoPanel.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
-import { theme, glyphs, formatToolInput, toolDisplayName, truncateWidth, WIDTH_SAFETY } from './theme.js';
+import {
+  theme,
+  glyphs,
+  formatDuration,
+  formatToolInput,
+  formatTokens,
+  toolDisplayName,
+  truncateWidth,
+  WIDTH_SAFETY,
+} from './theme.js';
 import { Markdown } from './Markdown.js';
 import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
-import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
+import type {
+  AgentEvent,
+  GoalStopReason,
+  PermissionDecision,
+  PermissionRequest,
+} from '../core/events.js';
 import { ProviderSwitchError, type Session } from '../app/bootstrap.js';
 import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
@@ -53,6 +67,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
     { name: 'plan', description: t('cmd.plan') },
+    { name: 'goal', description: t('cmd.goal') },
     { name: 'model', description: t('cmd.model') },
     { name: 'provider', description: t('cmd.provider') },
     { name: 'approvals', description: t('cmd.approvals') },
@@ -90,6 +105,24 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
 const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'init']);
+
+/**
+ * `/goal` 的取消词。它们是**参数**而不是命令别名(命令别名会进补全菜单,
+ * 而 `/stop`、`/off` 单独成命令毫无意义),与 Claude Code 对齐。
+ */
+const GOAL_CLEAR_WORDS = new Set(['clear', 'stop', 'off', 'reset', 'none', 'cancel']);
+
+/** goal-stop 的原因 → 文案。穷尽 Record:新增停止原因时编译期就会提醒补文案。 */
+const GOAL_STOP_MESSAGES: Record<GoalStopReason, MessageKey> = {
+  met: 'notice.goalStopMet',
+  cleared: 'notice.goalStopCleared',
+  replaced: 'notice.goalStopReplaced',
+  'max-turns': 'notice.goalStopMaxTurns',
+  aborted: 'notice.goalStopAborted',
+  error: 'notice.goalStopError',
+  'check-failed': 'notice.goalStopCheckFailed',
+  'plan-mode': 'notice.goalStopPlanMode',
+};
 
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   mode: 'statusopt.mode',
@@ -409,7 +442,63 @@ export function App({ session }: Props): React.ReactElement {
           if (planAtTurnStart.current && session.config.plan && !planSubmitted.current) {
             push({ kind: 'notice', level: 'warn', message: t('notice.planNoSubmission') });
           }
-          endWork();
+          // 目标循环**还会接着跑**时才留着状态行,交给紧随其后的 goal-evaluating
+          // 接手;在这里熄灯的话,自动循环会每两轮闪一次"已空闲",像卡住了。
+          //
+          // 必须同时看 active:轮子还在流的时候 `/goal clear`(或 shift+tab 切进
+          // 计划模式)已经把目标解除了,此刻 goal-stop 因为 isRunning 为真没敢
+          // 熄灯,而这里 busy 仍是真(循环正停在 `await agent.run` 上),两处
+          // 都放过去就再没人熄灯,状态行会一直转到用户开下一轮为止。
+          if (!(session.goal.busy && session.goal.active)) endWork();
+          break;
+
+        case 'goal-start':
+          push({
+            kind: 'notice',
+            level: 'info',
+            message: event.restored
+              ? t('notice.goalRestored', { condition: event.condition })
+              : t('notice.goalSet', {
+                  condition: event.condition,
+                  max: session.config.goalMaxTurns,
+                }),
+          });
+          break;
+
+        case 'goal-evaluating':
+          beginWork('evaluating');
+          break;
+
+        case 'goal-verdict':
+          // 达成时的收尾文案由 goal-stop 给,这里不重复推第二条。
+          if (!event.met) {
+            push({
+              kind: 'notice',
+              level: 'info',
+              message: t('notice.goalNotMet', {
+                reason: event.reason,
+                turn: event.turn,
+                max: event.maxTurns,
+              }),
+            });
+          }
+          break;
+
+        case 'goal-stop':
+          push({
+            kind: 'notice',
+            level: event.reason === 'met' ? 'info' : 'warn',
+            // 八条文案共用一个参数袋:t() 忽略多余参数,各条只取自己关心的。
+            message: t(GOAL_STOP_MESSAGES[event.reason], {
+              condition: event.condition,
+              detail: event.detail,
+              turns: event.turns,
+              elapsed: formatDuration(event.elapsedMs),
+              tokens: formatTokens(event.tokens),
+            }),
+          });
+          // `/goal clear` 可能是在一轮进行中发出的:那一轮还在流,别把状态行掐了。
+          if (!session.agent.isRunning) endWork();
           break;
 
         case 'compaction':
@@ -448,6 +537,21 @@ export function App({ session }: Props): React.ReactElement {
   }, [session.bus, push, beginWork, endWork]);
 
   useEffect(() => session.todos.subscribe(setTodos), [session.todos]);
+
+  // 启动时就带着目标(`mojocode -c` 恢复的会话):bootstrap 在 App 挂载之前
+  // 就 restore 过了,那条 goal-start 没人听见。这里补一次提示。只在挂载时跑
+  // 一次,所以 TUI 内 /resume 恢复的目标仍由实时事件呈现,不会重复两条。
+  useEffect(() => {
+    const restored = session.goal.state;
+    if (restored?.restored) {
+      push({
+        kind: 'notice',
+        level: 'info',
+        message: t('notice.goalRestored', { condition: restored.condition }),
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 把权限门禁的询问回调桥接到确认提示组件。
   useEffect(() => {
@@ -563,13 +667,21 @@ export function App({ session }: Props): React.ReactElement {
     if (submitPending.current) {
       submitGen.current++;
       submitPending.current = false;
-      if (!session.agent.isRunning) {
+      if (!session.agent.isRunning && !session.goal.busy) {
         setRunning(false);
         return;
       }
     }
     if (session.agent.isRunning) {
+      // 目标循环进行中时,中断这一轮就够了:那一轮收不到 turn-end,
+      // GoalController 据此停下整个循环(见它的 run())。
       session.agent.abort();
+      return;
+    }
+    // 评估窗口:agent 是空闲的,但用户按 esc 要停的是整个循环。不拦下的话
+    // 这次 esc 会去武装回退选择器,而循环转头又若无其事地开了下一轮。
+    if (session.goal.busy) {
+      session.goal.clear('aborted');
       return;
     }
     // 压缩期间历史随时会被替换,回退下标不可靠,不开选择器。
@@ -623,7 +735,14 @@ export function App({ session }: Props): React.ReactElement {
       // 压缩没有 controller,isRunning 期间为 false——不把它算进来的话,
       // /compact 等待摘要返回时还能执行 /clear,压缩随后会把已丢弃的对话
       // 写回内存,并存进那个全新的会话文件。
-      const busy = session.agent.isRunning || session.agent.isCompacting || submitPending.current;
+      // goal.busy 必须并进来:目标循环两轮之间的评估窗口里 agent 是空闲的,
+      // 但历史随时会被下一轮接着写——不算作忙的话,`/clear`、`/model`、
+      // `/resume` 会从这个缝里溜进去把历史或模型换掉。
+      const busy =
+        session.agent.isRunning ||
+        session.agent.isCompacting ||
+        submitPending.current ||
+        session.goal.busy;
       if (name && BUSY_BLOCKED_COMMANDS.has(name) && busy) {
         push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
         return;
@@ -729,6 +848,60 @@ export function App({ session }: Props): React.ReactElement {
             .run(arg)
             // run() 自己消化模型错误,但未捕获的 rejection 在 Node ≥20 会掀掉
             // 整个 TUI——与 /init 同一条教训。
+            .catch((err: Error) => {
+              push({ kind: 'notice', level: 'warn', message: err.message });
+            })
+            .finally(() => setRunning(false));
+          break;
+        }
+
+        // 目标模式:给一个完成条件,每轮收尾后由评估器判断达成没有,没达成
+        // 就以评估理由为指令自动续跑。裸 /goal 报状态、`/goal clear` 取消,
+        // 这两支任何时候都可用——clear 正是停下循环的手段,拦忙就没法停了。
+        case 'goal': {
+          const status = session.goal.snapshot();
+          if (!arg) {
+            push({
+              kind: 'notice',
+              level: 'info',
+              message: !status
+                ? t('notice.goalNone')
+                : status.restored
+                  ? t('notice.goalStatusIdle', { condition: status.condition })
+                  : t('notice.goalStatus', {
+                      condition: status.condition,
+                      turns: status.turns,
+                      max: status.maxTurns,
+                      elapsed: formatDuration(status.elapsedMs),
+                      tokens: formatTokens(status.tokens),
+                      reason: status.lastReason || '—',
+                    }),
+            });
+            break;
+          }
+          if (GOAL_CLEAR_WORDS.has(arg.toLowerCase())) {
+            // 提示统一由 goal-stop 事件给出,这里不再推一条。
+            if (status) session.goal.clear('cleared');
+            else push({ kind: 'notice', level: 'info', message: t('notice.goalNone') });
+            break;
+          }
+          // 以下这支会发起一轮,所以要拦忙——和 `/plan <任务>` 同一个理由,
+          // 同样不进 BUSY_BLOCKED_COMMANDS(那张表按命令名判断,表达不了
+          // "只有这种参数形式才拦")。
+          if (busy) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
+            break;
+          }
+          if (planActive) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.goalPlanMode') });
+            break;
+          }
+          session.goal.set(arg);
+          setRunning(true);
+          void session.goal
+            .run(arg)
+            // goal.run 和 agent.run 一样不会 reject,但未捕获的 rejection 在
+            // Node ≥20 会掀掉整个 TUI——与 /init、/plan 同一条教训,照旧兜住。
             .catch((err: Error) => {
               push({ kind: 'notice', level: 'warn', message: err.message });
             })
@@ -1018,7 +1191,7 @@ export function App({ session }: Props): React.ReactElement {
       }
       // 以 agent 的真实运行状态为准,不依赖可能滞后的 React state。展开
       // @ 引用是异步的,空闲时先亮起运行态保住提交的即时反馈。
-      if (!session.agent.isRunning) setRunning(true);
+      if (!session.agent.isRunning && !session.goal.busy) setRunning(true);
       // 回车之后、run() 之前有一段 agent 仍是 idle 的窗口。不标记的话,
       // 这期间 esc 会去武装回退选择器而不是取消,/clear 之类命令也会绕过
       // busy 拦截把历史换掉,随后排队的这一轮再往新会话里写。
@@ -1049,7 +1222,7 @@ export function App({ session }: Props): React.ReactElement {
         }
         // 展开期间按了 esc(或又提交了一次):这一轮作废,不再发起。
         if (submitGen.current !== gen) {
-          if (!session.agent.isRunning) setRunning(false);
+          if (!session.agent.isRunning && !session.goal.busy) setRunning(false);
           return;
         }
         submitPending.current = false;
@@ -1065,12 +1238,26 @@ export function App({ session }: Props): React.ReactElement {
           push({ kind: 'notice', level: 'info', message: t('notice.guidanceQueued') });
           return;
         }
-        setRunning(true);
+        // 目标循环的评估窗口里 agent 是空闲的,inject 会落空。这条消息不能
+        // 另起一轮去和循环抢 agent(那会让循环随后的 run 退化成 inject 立刻
+        // 返回,循环把它当成"一轮 0 毫秒跑完了",一边流式输出一边空转评估)。
+        // 交给目标控制器,作为下一轮的指令取代评估器的引导。
         const runOptions = {
           ...(expanded !== text ? { display: text } : {}),
           ...(images.length > 0 ? { images } : {}),
         };
-        await session.agent
+        if (session.goal.steer(expanded, runOptions)) {
+          // 这里**不**回显用户消息:与 inject 那条路不同,这条最终是经
+          // agent.run 发出去的,会发 turn-start,时间线届时自己回显一次。
+          // 两边都推的话会出现两条用户气泡。
+          push({ kind: 'notice', level: 'info', message: t('notice.goalSteered') });
+          return;
+        }
+        setRunning(true);
+        // 经 goal.run 而不是 agent.run:没有目标时它就是原样透传,有目标时
+        // 由它接管后续的评估与自动续跑,setRunning(false) 也因此只在整个
+        // 循环结束时才触发,状态行在自动续跑期间保持常亮。
+        await session.goal
           .run(expanded, Object.keys(runOptions).length > 0 ? runOptions : undefined)
           .finally(() => setRunning(false));
       })();

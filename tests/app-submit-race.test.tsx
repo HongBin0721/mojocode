@@ -27,6 +27,7 @@ vi.mock('../src/app/attachments.js', () => ({
 }));
 
 import { App } from '../src/ui/App.js';
+import { stubGoal } from './support/goal.js';
 import { EventBus } from '../src/core/events.js';
 import type { Session } from '../src/app/bootstrap.js';
 
@@ -41,6 +42,11 @@ function setup(options?: { isRunning?: boolean }) {
   let aborts = 0;
   // /clear 走的是 session.newSession(),不是 agent.clear()。
   let newSessions = 0;
+  // App 的提交路径经 goal.run,目标未激活时它原样透传到 agent.run——桩里
+  // 两处共用同一个实现,断言 runCalls 与真实链路一致。
+  const run = async (text: string) => {
+    runCalls.push(text);
+  };
   const session = {
     root: '/tmp/project',
     config: {
@@ -60,9 +66,7 @@ function setup(options?: { isRunning?: boolean }) {
         injected.push(text);
         return true;
       },
-      run: async (text: string) => {
-        runCalls.push(text);
-      },
+      run,
       abort: () => {
         aborts++;
       },
@@ -72,6 +76,7 @@ function setup(options?: { isRunning?: boolean }) {
     bus,
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
+    goal: stubGoal(run),
     mcpStatuses: [],
     store: { id: 'test-session', messages: [] },
     newSession: async () => {

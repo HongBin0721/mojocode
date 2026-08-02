@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { App } from '../src/ui/App.js';
+import { stubGoal } from './support/goal.js';
 import { EventBus } from '../src/core/events.js';
 import { t } from '../src/i18n/index.js';
 import { presetById, type Permissions } from '../src/config/schema.js';
@@ -52,6 +53,7 @@ function setup(
     bus,
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
+    goal: stubGoal(run),
     mcpStatuses: [],
     store: { id: 'test-session', messages: [] },
     switch: () => provider,

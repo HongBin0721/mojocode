@@ -28,6 +28,12 @@ export interface SessionState {
   approval?: ApprovalPolicy;
   /** 旧版单轴字段。只在恢复旧会话文件时读取,转换见 resume.ts,不再写入。 */
   permissionMode?: string;
+  /**
+   * 未完成的目标(`/goal`)。只存条件本身:轮数、计时与 token 基线都是
+   * "这一次监管"的统计,换个时间接着干本来就该从头算。恢复回来的目标是
+   * 「已设定但不自动开跑」——打开一个旧会话不该凭空烧掉一轮 token。
+   */
+  goal?: { condition: string };
 }
 
 const EMPTY_STATE: SessionState = { todos: [], allowBash: [], allowWrite: [] };

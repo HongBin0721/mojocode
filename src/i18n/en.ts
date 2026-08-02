@@ -16,6 +16,7 @@ export const en = {
   'status.waiting': 'waiting for you',
   'status.compacting': 'compacting',
   'status.listingModels': 'listing models',
+  'status.evaluating': 'checking the goal',
   'status.ctrlcAgain': 'press ctrl+c again to exit',
   'status.meta': '({s}s · esc to interrupt{extra})',
   'status.todoHide': 'ctrl+t to hide todos',
@@ -92,6 +93,7 @@ export const en = {
   'cmd.help': 'Show these commands',
   'cmd.init': 'Analyze the project and generate AGENTS.md',
   'cmd.plan': 'Plan before coding — /plan, or /plan <task> to start right away',
+  'cmd.goal': 'Keep working until a condition is met — /goal <condition>, /goal, /goal clear',
   'cmd.model': 'Switch model — /model <id>, or bare to list',
   'cmd.provider': 'Switch provider — /provider <kimi|deepseek|glm|…>',
   'cmd.approvals': 'Set sandbox & approval preset — /approvals <read-only|ask|auto|full-access>',
@@ -157,6 +159,27 @@ export const en = {
     'This turn ended without submitting a plan, so nothing was approved — and nothing was changed. Still in plan mode.',
   'notice.planReturnFromReadonly':
     'Approving the plan will switch to ask (the current permissions cannot approve any write).',
+  'notice.goalSet': 'Goal set: {condition}\nI will keep going until it is met, up to {max} turns. /goal clear to stop.',
+  'notice.goalRestored':
+    'Goal restored from this session: {condition}\nSend a message to carry on toward it, or /goal clear to drop it.',
+  'notice.goalNone': 'No goal is set. /goal <condition> to set one.',
+  'notice.goalStatus':
+    'Goal: {condition}\nTurn {turns}/{max} · {elapsed} · {tokens} tokens\nLast check: {reason}',
+  'notice.goalStatusIdle': 'Goal: {condition}\nNot started yet — send a message to carry on toward it.',
+  'notice.goalSteered': 'Noted — that becomes the next turn instead of the goal check.',
+  'notice.goalPlanMode':
+    'Leave plan mode first (shift+tab): plan mode stops for your approval, which is the opposite of running to a goal.',
+  'notice.goalNotMet': 'Goal not met yet ({turn}/{max}): {reason}',
+  'notice.goalStopMet': 'Goal met in {turns} turns · {elapsed} · {tokens} tokens. {detail}',
+  'notice.goalStopCleared': 'Goal cleared.',
+  'notice.goalStopReplaced': 'Previous goal replaced.',
+  'notice.goalStopMaxTurns':
+    'Stopped after {turns} turns without meeting the goal. Last check: {detail} — /goal <condition> to keep going.',
+  'notice.goalStopAborted': 'Goal cleared — that turn was interrupted.',
+  'notice.goalStopError': 'Goal cleared — that turn ended with an error.',
+  'notice.goalStopCheckFailed':
+    'Goal cleared — the goal check kept returning something unreadable. Try a different goalModel.',
+  'notice.goalStopPlanMode': 'Goal cleared — plan mode does not run unattended.',
   'notice.initFailed': '/init did not finish: {message}',
   'notice.interrupted': 'Interrupted.',
   'notice.providers': 'Providers: {list} (currently {current})',

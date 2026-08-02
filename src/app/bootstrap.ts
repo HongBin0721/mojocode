@@ -1,5 +1,6 @@
 import type { ModelMessage } from 'ai';
 import { Agent } from '../agent/loop.js';
+import { GoalController } from '../agent/goal.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
 import {
@@ -26,6 +27,8 @@ export interface Session {
   bus: EventBus;
   gate: PermissionGate;
   todos: TodoStore;
+  /** `/goal` 的目标监管器:发起轮次时经它走,由它决定要不要自动续跑。 */
+  goal: GoalController;
   mcpStatuses: McpStatus[];
   store: SessionStore;
   /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
@@ -98,10 +101,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 配置,会话文件是它唯一的留存处)。
     const perms: Permissions = { sandbox: config.sandbox, approval: config.approval };
     const omit = isEphemeralPermissions(perms) || permsPromoted;
+    const activeGoal = goal.state;
     return {
       todos: todos.get(),
       ...gate.exportSessionRules(),
       ...(omit ? {} : { sandbox: perms.sandbox, approval: perms.approval }),
+      // 无目标时整个字段不出现:JSON.stringify 的结果与加这个功能之前一字
+      // 不差,saveState 的脏检查因此不会为老会话平白多写一条 state 记录。
+      ...(activeGoal ? { goal: { condition: activeGoal.condition } } : {}),
     };
   };
   const persistState = (): void => {
@@ -196,9 +203,25 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
   });
 
+  const goal = new GoalController({
+    agent,
+    bus,
+    config,
+    // 现取而不是提前建好:`/model`、`/provider` 换过之后 provider 是个新对象,
+    // 提前建的模型会一直打向已经被换掉的那个服务端。createModel 只是本地
+    // 构造(registry.ts:13),没有网络往返,每次评估现建一个不值一提。
+    evaluatorModel: () =>
+      createModel(config.goalModel ? { ...provider, model: config.goalModel } : provider),
+    onChange: () => persistState(),
+  });
+
   const restoreState = (state: SessionState): void => {
     todos.set(structuredClone(state.todos));
     gate.setSessionRules(state);
+    // else 分支同样重要:从一个带目标的会话 /resume 到不带目标的会话时,
+    // 旧目标必须解除,否则它会悄悄接管新会话的轮次。
+    if (state.goal?.condition) goal.restore(state.goal.condition);
+    else goal.clear();
     // 两轴权限不在此处应用:CLI 启动路径已把它并进配置层;
     // TUI 内 /resume 则由 resumeSession 显式调用 setPermissions。
   };
@@ -279,6 +302,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     bus,
     gate,
     todos,
+    goal,
     mcpStatuses: mcp.statuses,
     get store() {
       return store;
@@ -287,6 +311,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
       agent.clear();
       todos.set([]);
+      goal.clear();
       persistState();
       return store;
     },
@@ -325,6 +350,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       );
     },
     dispose: async () => {
+      goal.dispose();
       await Promise.all(mcp.connections.map((c) => c.close()));
     },
   };

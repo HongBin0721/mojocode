@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from 'ink-testing-library';
 import { App } from '../src/ui/App.js';
+import { stubGoal } from './support/goal.js';
 import { EventBus } from '../src/core/events.js';
 import type { Session } from '../src/app/bootstrap.js';
 
@@ -30,6 +31,7 @@ function setup() {
     bus,
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
+    goal: stubGoal(async () => {}),
     mcpStatuses: [],
     store: { id: 'test-session', messages: [] },
     switch: () => provider,

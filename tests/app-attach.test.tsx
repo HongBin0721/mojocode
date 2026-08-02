@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { App } from '../src/ui/App.js';
+import { stubGoal } from './support/goal.js';
 import { EventBus } from '../src/core/events.js';
 import type { Session } from '../src/app/bootstrap.js';
 
@@ -32,6 +33,12 @@ function setup(options?: { isRunning?: boolean }) {
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   const runCalls: [string, { display?: string; images?: unknown[] } | undefined][] = [];
   const injected: [string, unknown[] | undefined][] = [];
+  // App 的提交路径经 goal.run,目标未激活时它原样透传到 agent.run——桩里
+  // 两处共用同一个实现,断言 runCalls 与真实链路一致。
+  const run = async (text: string, runOptions?: { display?: string; images?: unknown[] }) => {
+    runCalls.push([text, runOptions]);
+    bus.emit({ type: 'turn-start', userText: text, display: runOptions?.display });
+  };
   const session = {
     root,
     config: {
@@ -49,10 +56,7 @@ function setup(options?: { isRunning?: boolean }) {
         injected.push([text, images]);
         return true;
       },
-      run: async (text: string, runOptions?: { display?: string; images?: unknown[] }) => {
-        runCalls.push([text, runOptions]);
-        bus.emit({ type: 'turn-start', userText: text, display: runOptions?.display });
-      },
+      run,
       abort: () => {},
       clear: () => {},
       compact: async () => {},
@@ -60,6 +64,7 @@ function setup(options?: { isRunning?: boolean }) {
     bus,
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
+    goal: stubGoal(run),
     mcpStatuses: [],
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
