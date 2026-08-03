@@ -55,6 +55,9 @@ export const glyphs = {
   checked: '☒',
   unchecked: '☐',
   thinking: '✻',
+  // 目标指示器。刻意不用 🎯:emoji 在各终端里的显示宽度不一致,会把靠右
+  // 对齐的那一行算错列宽,整套字形也都是单宽几何符号。
+  goal: '◎',
 } as const;
 
 /**

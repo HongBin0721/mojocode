@@ -11,6 +11,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'status.compacting': '压缩上下文中',
   'status.listingModels': '获取模型列表中',
   'status.evaluating': '检查目标中',
+  'goal.progress': '目标 {turn}/{max} · {elapsed}',
+  'goal.pending': '目标待续 — 发条消息就接着做',
   'status.ctrlcAgain': '再按一次 ctrl+c 退出',
   'status.meta': '({s}s · esc 中断{extra})',
   'status.todoHide': 'ctrl+t 隐藏任务',

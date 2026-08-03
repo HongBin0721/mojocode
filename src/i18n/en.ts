@@ -17,6 +17,8 @@ export const en = {
   'status.compacting': 'compacting',
   'status.listingModels': 'listing models',
   'status.evaluating': 'checking the goal',
+  'goal.progress': 'goal {turn}/{max} · {elapsed}',
+  'goal.pending': 'goal pending — send a message to carry on',
   'status.ctrlcAgain': 'press ctrl+c again to exit',
   'status.meta': '({s}s · esc to interrupt{extra})',
   'status.todoHide': 'ctrl+t to hide todos',

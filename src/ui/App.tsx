@@ -4,6 +4,7 @@ import { Footer } from './Footer.js';
 import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
 import { TodoPanel, todoPanelRows } from './TodoPanel.js';
+import { GoalLine } from './GoalLine.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import {
@@ -246,6 +247,11 @@ export function App({ session }: Props): React.ReactElement {
     approval: session.config.approval,
   });
   const [planActive, setPlanActive] = useState(session.config.plan);
+  // 有没有目标在身。只管"那一行要不要渲染";轮数与已用时由 GoalLine 自己
+  // 按秒现取——目标循环两轮之间几十秒里 App 没有任何 state 变化,靠 props
+  // 传快照会一直停在设定目标那一刻的数字。初值取 session:`mojocode -c`
+  // 恢复的目标在首帧就该显示出来。
+  const [goalActive, setGoalActive] = useState(session.goal.active);
   // 状态栏/头部显示的标签:plan 压过两轴。
   const modeLabel = planActive ? 'plan' : permissionsLabel(perms);
   const [think, setThink] = useState<ReasoningEffort>(session.provider.reasoningEffort);
@@ -453,6 +459,7 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'goal-start':
+          setGoalActive(true);
           push({
             kind: 'notice',
             level: 'info',
@@ -485,6 +492,8 @@ export function App({ session }: Props): React.ReactElement {
           break;
 
         case 'goal-stop':
+          // replaced 后面紧跟着新目标的 goal-start,顺序保证了不会误熄。
+          setGoalActive(false);
           push({
             kind: 'notice',
             level: event.reason === 'met' ? 'info' : 'warn',
@@ -1181,6 +1190,9 @@ export function App({ session }: Props): React.ReactElement {
   // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
   const fileLister = useMemo(() => createFileLister(session.root), [session]);
 
+  // 稳定引用,免得 GoalLine 每帧重挂载(那会把它自己的秒表也一起重置)。
+  const goalSnapshot = useCallback(() => session.goal.snapshot(), [session]);
+
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
   // 的 runCommand,上面那串依赖形同虚设,命令永远读到启动时的状态快照。
   const handleSubmit = useCallback(
@@ -1323,7 +1335,8 @@ export function App({ session }: Props): React.ReactElement {
   // 任务面板同处动态区,它占的行也要从预算里扣掉。
   const columns = stdout?.columns ?? 80;
   const panelRows = todoPanelVisible ? todoPanelRows(todos).length : 0;
-  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows);
+  // 目标进度那一行同处动态区,它占的一行也要从预算里扣掉。
+  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows - (goalActive ? 1 : 0));
   const textRows = Math.min(STREAM_PREVIEW_ROWS, budget);
   const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, budget);
 
@@ -1391,6 +1404,10 @@ export function App({ session }: Props): React.ReactElement {
           />
         ) : (
           <Box flexDirection="column" marginTop={1}>
+            {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
+                而不必敲 /goal 去问。授权确认框或回退选择器打开时不渲染
+                (它们走的是这个三元的另外两支)。 */}
+            {goalActive ? <GoalLine snapshot={goalSnapshot} /> : null}
             <Input
               onSubmit={handleSubmit}
               disabled={false}

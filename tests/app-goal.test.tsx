@@ -4,6 +4,7 @@ import { App } from '../src/ui/App.js';
 import { EventBus } from '../src/core/events.js';
 import { t } from '../src/i18n/index.js';
 import { plain } from './support/ansi.js';
+import { glyphs } from '../src/ui/theme.js';
 import type { Session } from '../src/app/bootstrap.js';
 import type { GoalStatus } from '../src/agent/goal.js';
 
@@ -254,6 +255,64 @@ describe('/goal 的事件渲染', () => {
     const output = plain(frames.join('\n'));
     expect(output).toContain('10');
     expect(output).toContain('/goal');
+    unmount();
+  });
+});
+
+describe('输入框上方的目标进度', () => {
+  it('有目标时靠右显示轮数与已用时', async () => {
+    const { frames, unmount } = setup({ status: { ...STATUS, elapsedMs: 64_000 } });
+    await tick();
+
+    const line = plain(frames.at(-1) ?? '')
+      .split('\n')
+      .find((l) => l.includes(glyphs.goal));
+    expect(line).toBeDefined();
+    expect(line).toContain('3/10');
+    // 整秒展示,不带小数——formatDuration 的 `64.0s` 挂在这里每秒跳尾数只是噪音。
+    expect(line).toContain('1m04s');
+    // 靠右:前面有一大段留白。
+    expect(line).toMatch(/^\s{10,}/);
+    unmount();
+  });
+
+  it('恢复来的目标提示待续,不显示轮数', async () => {
+    const { frames, unmount } = setup({
+      status: { ...STATUS, turns: 0, restored: true, lastReason: '' },
+    });
+    await tick();
+
+    const output = plain(frames.at(-1) ?? '');
+    expect(output).toContain(t('goal.pending'));
+    expect(output).not.toContain('0/10');
+    unmount();
+  });
+
+  it('没有目标时不占行', async () => {
+    const { frames, unmount } = setup();
+    await tick();
+
+    expect(plain(frames.at(-1) ?? '')).not.toContain(glyphs.goal);
+    unmount();
+  });
+
+  it('goal-stop 之后这一行消失', async () => {
+    const { bus, frames, unmount } = setup({ status: STATUS });
+    await tick();
+    expect(plain(frames.at(-1) ?? '')).toContain(glyphs.goal);
+
+    bus.emit({
+      type: 'goal-stop',
+      reason: 'met',
+      condition: STATUS.condition,
+      detail: '好了',
+      turns: 3,
+      elapsedMs: 1000,
+      tokens: 10,
+    });
+    await tick();
+
+    expect(plain(frames.at(-1) ?? '')).not.toContain(glyphs.goal);
     unmount();
   });
 });
