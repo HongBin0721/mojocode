@@ -4,7 +4,8 @@ import { App } from '../src/ui/App.js';
 import { EventBus } from '../src/core/events.js';
 import { t } from '../src/i18n/index.js';
 import { plain } from './support/ansi.js';
-import { glyphs } from '../src/ui/theme.js';
+import { glyphs, WIDTH_SAFETY } from '../src/ui/theme.js';
+import { GoalLine } from '../src/ui/GoalLine.js';
 import type { Session } from '../src/app/bootstrap.js';
 import type { GoalStatus } from '../src/agent/goal.js';
 
@@ -286,6 +287,23 @@ describe('输入框上方的目标进度', () => {
     expect(output).toContain(t('goal.pending'));
     expect(output).not.toContain('0/10');
     unmount();
+  });
+
+  // 直接渲染组件:ink-testing-library 的终端宽度写死 100,窄终端只能这样测。
+  it('窄终端下截断,不折成两行', async () => {
+    // 折行的话动态区就比 App 的高度预算多出一行——预算只给这里留了一行。
+    // 待续那句英文有 40 多列,是最容易撞上的一条。
+    const status = { ...STATUS, turns: 0, restored: true, lastReason: '' };
+    const view = render(<GoalLine snapshot={() => status} columns={30} />);
+    await tick();
+
+    const rows = plain(view.lastFrame() ?? '').split('\n');
+    expect(rows).toHaveLength(1);
+    // 只量文字本身:那一行是靠右对齐的,左边的留白由 ink 按终端宽度补,
+    // 与截断宽度无关。
+    expect(rows[0]!.trim().length).toBeLessThanOrEqual(30 - WIDTH_SAFETY);
+    expect(rows[0]).toContain(glyphs.goal);
+    view.unmount();
   });
 
   it('没有目标时不占行', async () => {

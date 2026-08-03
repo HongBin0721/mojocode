@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
-import { theme, glyphs, WIDTH_SAFETY } from './theme.js';
+import { theme, glyphs, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import { t } from '../i18n/index.js';
 import type { GoalStatus } from '../agent/goal.js';
 
@@ -11,6 +11,8 @@ interface Props {
    * state 变化)。这个组件自己按秒 tick,每次现读。
    */
   snapshot: () => GoalStatus | undefined;
+  /** 终端宽度,用于截断——理由见下方注释。 */
+  columns: number;
 }
 
 /**
@@ -20,7 +22,7 @@ interface Props {
  * 渲染,而恢复回来的目标是"已设定但没在跑",那时更需要提醒;而且状态行本身
  * 已经带了阶段、秒数和 esc 提示,窄终端下再往里塞就要折行了。
  */
-export function GoalLine({ snapshot }: Props): React.ReactElement | null {
+export function GoalLine({ snapshot, columns }: Props): React.ReactElement | null {
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), 1000);
@@ -30,17 +32,20 @@ export function GoalLine({ snapshot }: Props): React.ReactElement | null {
   const status = snapshot();
   if (!status) return null;
 
+  const label = status.restored
+    ? t('goal.pending')
+    : t('goal.progress', {
+        turn: status.turns,
+        max: status.maxTurns,
+        elapsed: formatElapsed(status.elapsedMs),
+      });
+
   return (
     <Box justifyContent="flex-end" paddingRight={WIDTH_SAFETY}>
+      {/* 必须截断:待续那句英文有 40 多列,窄终端下会折成两行,而 App 的
+          高度预算只给这里留了一行,动态区就会比记账多出一行。 */}
       <Text color={theme.dim}>
-        {glyphs.goal}{' '}
-        {status.restored
-          ? t('goal.pending')
-          : t('goal.progress', {
-              turn: status.turns,
-              max: status.maxTurns,
-              elapsed: formatElapsed(status.elapsedMs),
-            })}
+        {truncateWidth(`${glyphs.goal} ${label}`, Math.max(8, columns - WIDTH_SAFETY))}
       </Text>
     </Box>
   );

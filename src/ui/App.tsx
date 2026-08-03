@@ -1190,7 +1190,8 @@ export function App({ session }: Props): React.ReactElement {
   // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
   const fileLister = useMemo(() => createFileLister(session.root), [session]);
 
-  // 稳定引用,免得 GoalLine 每帧重挂载(那会把它自己的秒表也一起重置)。
+  // 稳定引用:GoalLine 靠自己的秒表驱动,不需要跟着 App 的每次 setState
+  // 一起重渲染。(秒表本身不受影响——它的 effect 依赖是空数组。)
   const goalSnapshot = useCallback(() => session.goal.snapshot(), [session]);
 
   // 必须定义在 runCommand 之后并把它列进依赖:否则这里会永久捕获首次渲染
@@ -1335,8 +1336,14 @@ export function App({ session }: Props): React.ReactElement {
   // 任务面板同处动态区,它占的行也要从预算里扣掉。
   const columns = stdout?.columns ?? 80;
   const panelRows = todoPanelVisible ? todoPanelRows(todos).length : 0;
-  // 目标进度那一行同处动态区,它占的一行也要从预算里扣掉。
-  const budget = Math.max(1, (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows - (goalActive ? 1 : 0));
+  // 目标进度那一行同处动态区,它占的一行也要从预算里扣掉——但它和输入框
+  // 同属一个三元分支,授权确认框或回退选择器占着位置时压根不渲染。不带上
+  // 这个条件的话,矮终端下弹确认框时预览会比实际可用空间少截一行。
+  const goalLineVisible = goalActive && !permission && !rewind;
+  const budget = Math.max(
+    1,
+    (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows - (goalLineVisible ? 1 : 0),
+  );
   const textRows = Math.min(STREAM_PREVIEW_ROWS, budget);
   const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, budget);
 
@@ -1407,7 +1414,7 @@ export function App({ session }: Props): React.ReactElement {
             {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
                 而不必敲 /goal 去问。授权确认框或回退选择器打开时不渲染
                 (它们走的是这个三元的另外两支)。 */}
-            {goalActive ? <GoalLine snapshot={goalSnapshot} /> : null}
+            {goalActive ? <GoalLine snapshot={goalSnapshot} columns={columns} /> : null}
             <Input
               onSubmit={handleSubmit}
               disabled={false}
