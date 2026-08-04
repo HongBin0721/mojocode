@@ -44,13 +44,26 @@ async function connectOne(name: string, config: McpServerConfig): Promise<McpCon
           requestInit: { headers: config.headers },
         });
 
-  await withTimeout(
-    client.connect(transport),
-    CONNECT_TIMEOUT_MS,
-    `MCP server "${name}" did not respond within ${CONNECT_TIMEOUT_MS}ms`,
-  );
-
-  const { tools } = await client.listTools();
+  // 失败(含超时)一律顺手关掉 client:stdio server 是子进程,不关就会留下
+  // 一个既没人用、也没人回收的进程。
+  let tools;
+  try {
+    await withTimeout(
+      client.connect(transport),
+      CONNECT_TIMEOUT_MS,
+      `MCP server "${name}" did not respond within ${CONNECT_TIMEOUT_MS}ms`,
+    );
+    // listTools 同样要有时限:握手成功之后卡住的 server 一样会把调用方吊死
+    // (会话启动、`mojocode doctor` 都要等它),超时后当作连接失败是既有路径。
+    ({ tools } = await withTimeout(
+      client.listTools(),
+      CONNECT_TIMEOUT_MS,
+      `MCP server "${name}" did not list its tools within ${CONNECT_TIMEOUT_MS}ms`,
+    ));
+  } catch (err) {
+    await client.close().catch(() => undefined);
+    throw err;
+  }
 
   return {
     name,

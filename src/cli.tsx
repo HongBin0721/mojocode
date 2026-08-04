@@ -20,6 +20,8 @@ import { AmbiguousSessionError, SessionNotFoundError, SessionStore } from './ses
 import { SessionPicker } from './ui/SessionPicker.js';
 import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
+import { packageVersion } from './config/version.js';
+import { formatDoctor, runDoctor } from './app/doctor.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
 import { INIT_PROMPT } from './agent/init.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
@@ -114,7 +116,7 @@ const program = new Command();
 program
   .name(APP_NAME)
   .description(t('cli.appDesc'))
-  .version('0.1.0')
+  .version(packageVersion())
   .option('-p, --print <prompt>', t('cli.opt.print'))
   .option('--json', t('cli.opt.json'))
   .option('--provider <id>', t('cli.opt.provider', { list: BUILTIN_PROVIDER_IDS.join(', ') }))
@@ -207,6 +209,35 @@ program
         `${meta.id.slice(0, 8)}  ${meta.updatedAt.slice(0, 16).replace('T', ' ')}  ` +
           `${meta.provider}/${meta.model}  ${t('cli.msgs', { n: meta.messageCount })}  ${meta.title}\n`,
       );
+    }
+  });
+
+program
+  .command('doctor')
+  .description(t('cli.cmd.doctor'))
+  .option('--json', t('cli.opt.doctorJson'))
+  .option('--offline', t('cli.opt.doctorOffline'))
+  .action(async (opts: { json?: boolean; offline?: boolean }) => {
+    // 根命令上已有 -C 和 --json,commander 会让父级抢先接住同名选项的值,
+    // 子命令自己声明的那个只会拿到 undefined。所以一律回落读父级,
+    // `mojocode -C dir doctor` 与 `mojocode doctor -C dir` 两种写法都能生效。
+    const globals = program.opts() as MainFlags;
+    const root = globals.cwd ? (await import('node:path')).resolve(globals.cwd) : process.cwd();
+    const json = opts.json === true || globals.json === true;
+    await applyConfigLocale(root);
+    try {
+      const report = await runDoctor({ root, offline: opts.offline === true });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(report, null, 2)}\n`
+          : formatDoctor(report, {
+              color: process.stdout.isTTY === true && !process.env.NO_COLOR,
+            }),
+      );
+      // 有异常项时给非零退出码,这样 CI 里 `mojocode doctor` 能当门禁用。
+      if (!report.healthy) process.exitCode = 1;
+    } catch (error) {
+      fail(error);
     }
   });
 

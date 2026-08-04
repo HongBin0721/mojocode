@@ -38,32 +38,117 @@ export interface ModelInfo {
 }
 
 /**
- * 请求 `GET {baseURL}/models`。供 `mojocode models` 使用,让用户能查到自己的
- * key 实际拥有的模型 id,而不是去猜那些变化频繁的名字。
+ * 展开 Error 的 cause 链。undici 抛出来的顶层消息永远是干巴巴的
+ * `fetch failed`,真正有用的 ENOTFOUND / ECONNREFUSED / 自签证书 / 代理拒绝
+ * 全在 `cause` 里——而这恰恰是 `doctor` 存在的意义,不能丢。
  */
-export async function listModels(provider: ResolvedProvider): Promise<ModelInfo[]> {
+function errorChain(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    const code = (current as NodeJS.ErrnoException).code;
+    const text = code && !current.message.includes(code) ? `${current.message} (${code})` : current.message;
+    if (text && !parts.includes(text)) parts.push(text);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.length > 0 ? parts.join(' ← ') : String(err);
+}
+
+/** 一次 `/models` 探测的结果。失败也是正常返回值——`doctor` 要报告失败详情。 */
+export interface ModelProbe {
+  url: string;
+  /** 拿到 HTTP 响应时的状态码;连接层面就失败(DNS/超时)时为 undefined。 */
+  status?: number;
+  ok: boolean;
+  models?: ModelInfo[];
+  /** 失败原因,已格式化成可直接展示的一行(或多行)。 */
+  error?: string;
+  durationMs: number;
+}
+
+export interface ProbeOptions {
+  signal?: AbortSignal;
+  /** 注入用,便于测试;默认全局 fetch。 */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * 请求 `GET {baseURL}/models` 并把结果(含失败)原样返回。
+ * `listModels` 在此之上抛错,`doctor` 则据此区分 401(密钥问题)与
+ * 404(端点不提供列表,不代表不能对话)。
+ */
+export async function probeModels(
+  provider: ResolvedProvider,
+  options: ProbeOptions = {},
+): Promise<ModelProbe> {
+  const doFetch = options.fetchImpl ?? fetch;
   const url = `${provider.baseURL.replace(/\/$/, '')}/models`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${provider.apiKey}`,
-      ...provider.headers,
-    },
+  const started = Date.now();
+  const done = (rest: Omit<ModelProbe, 'url' | 'durationMs'>): ModelProbe => ({
+    url,
+    durationMs: Date.now() - started,
+    ...rest,
   });
+
+  let res: Response;
+  try {
+    res = await doFetch(url, {
+      headers: {
+        Authorization: `Bearer ${provider.apiKey}`,
+        ...provider.headers,
+      },
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    return done({ ok: false, error: `GET ${url} failed: ${errorChain(err)}` });
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(
-      `GET ${url} failed: ${res.status} ${res.statusText}${body ? `\n${body.slice(0, 500)}` : ''}`,
-    );
+    return done({
+      ok: false,
+      status: res.status,
+      error: `GET ${url} failed: ${res.status} ${res.statusText}${body ? `\n${body.slice(0, 500)}` : ''}`,
+    });
   }
 
-  const json = (await res.json()) as { data?: Array<{ id?: string; owned_by?: string }> };
+  let json: { data?: Array<{ id?: string; owned_by?: string }> };
+  try {
+    json = (await res.json()) as typeof json;
+  } catch (err) {
+    return done({
+      ok: false,
+      status: res.status,
+      error: `GET ${url} returned invalid JSON: ${(err as Error).message}`,
+    });
+  }
   if (!Array.isArray(json.data)) {
-    throw new Error(`GET ${url} returned an unexpected shape (no "data" array).`);
+    return done({
+      ok: false,
+      status: res.status,
+      error: `GET ${url} returned an unexpected shape (no "data" array).`,
+    });
   }
 
-  return json.data
-    .filter((m): m is { id: string; owned_by?: string } => typeof m.id === 'string')
-    .map((m) => ({ id: m.id, ownedBy: m.owned_by }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+  return done({
+    ok: true,
+    status: res.status,
+    models: json.data
+      .filter((m): m is { id: string; owned_by?: string } => typeof m.id === 'string')
+      .map((m) => ({ id: m.id, ownedBy: m.owned_by }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  });
+}
+
+/**
+ * 请求 `GET {baseURL}/models`。供 `mojocode models` 使用,让用户能查到自己的
+ * key 实际拥有的模型 id,而不是去猜那些变化频繁的名字。
+ */
+export async function listModels(
+  provider: ResolvedProvider,
+  options?: ProbeOptions,
+): Promise<ModelInfo[]> {
+  const probe = await probeModels(provider, options);
+  if (!probe.ok) throw new Error(probe.error);
+  return probe.models ?? [];
 }

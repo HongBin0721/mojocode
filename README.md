@@ -69,8 +69,18 @@ export ZHIPU_API_KEY=...            # GLM:           open.bigmodel.cn
 ### 3. 验证连通
 
 ```bash
+mojocode doctor                     # 一次性体检：环境、配置、密钥、端点连通、MCP、会话存储
 mojocode providers                  # 列出内置服务商，✓ 表示密钥已就位
 mojocode models --provider glm      # 拉取你的密钥实际可用的模型列表
+```
+
+`doctor` 是排障的第一站：它把每一项标成 ✓（正常）/ !（提醒）/ ✗（异常），并对异常项直接给出
+修复命令。密钥只显示打码后的头尾。存在异常项时退出码为 1，可以直接放进 CI 当门禁。
+
+```bash
+mojocode doctor --offline           # 跳过联网检查（端点探测、版本比对、MCP 连接）
+mojocode doctor --json              # 结构化输出，字段 id 稳定，便于脚本消费
+mojocode doctor -C ~/某项目          # 体检指定工作区（项目级配置、git、AGENTS.md）
 ```
 
 ### 4. 开始使用
@@ -124,6 +134,7 @@ mojocode
 | `/clear` | 开始新对话 |
 | `/resume` | 切换到本目录的另一个历史会话（二级选择器选取） |
 | `/mcp` | 查看 MCP 服务器状态 |
+| `/doctor [offline]` | 体检：环境、配置、密钥、端点连通、MCP、会话存储。读会话此刻的配置，`offline` 跳过联网检查 |
 | `/cost` | 查看本次会话 token 用量 |
 
 **esc esc 回退**：空闲时连按两次 `esc` 打开回退选择器，选中一条历史消息即把对话截断到它之前，原文回到输入框，编辑后重发——相当于从那一点分叉重来。
@@ -376,6 +387,10 @@ npm run dev         # 监听改动自动重新打包
 ---
 
 ## 常见问题
+
+**Q：跑不起来，但不知道卡在哪一步**
+`mojocode doctor`。它会逐项报出 Node 版本、配置文件解析、密钥来源、端点是否可达、
+模型 id 是否还在服务商列表里、MCP 连接、会话目录是否可写，并对每个异常项给出修复命令。
 
 **Q：报 "No API key for provider ..."**
 运行 `mojocode auth` 配置，或检查环境变量名是否正确（`mojocode providers` 会列出每家认哪些变量）。

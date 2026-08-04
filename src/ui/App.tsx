@@ -61,6 +61,7 @@ import { INIT_PROMPT } from '../agent/init.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
 import { readClipboardImage } from '../app/clipboard.js';
+import { formatDoctor, runDoctor } from '../app/doctor.js';
 
 /** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
 function buildCommands(): SlashCommand[] {
@@ -79,6 +80,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
     { name: 'mcp', description: t('cmd.mcp') },
+    { name: 'doctor', description: t('cmd.doctor') },
     { name: 'cost', description: t('cmd.cost') },
     { name: 'resume', description: t('cmd.resume') },
     { name: 'exit', aliases: ['quit'], description: t('cmd.exit') },
@@ -1124,6 +1126,32 @@ export function App({ session }: Props): React.ReactElement {
                     .join('\n'),
           });
           break;
+
+        // 体检读的是会话此刻的配置(含 /approvals、/model 改过的值),MCP 直接
+        // 采信已连上的状态——重新连一遍会把每个 stdio server 的子进程再拉起
+        // 一份。`/doctor offline` 跳过联网那两项(端点探测、版本比对)。
+        case 'doctor': {
+          const offline = arg.trim() === 'offline';
+          push({ kind: 'notice', level: 'info', message: t('notice.doctorRunning') });
+          try {
+            const report = await runDoctor({
+              root: session.root,
+              config: session.config,
+              mcpStatuses: session.mcpStatuses,
+              offline,
+            });
+            push({
+              kind: 'notice',
+              level: report.healthy ? 'info' : 'warn',
+              // 不上色:notice 整段由 Timeline 按 level 着色,再嵌一层 ANSI
+              // 会和它打架;✓ / ! / ✗ 三个符号已经能区分轻重。
+              message: formatDoctor(report).trimEnd(),
+            });
+          } catch (err) {
+            push({ kind: 'error', message: (err as Error).message });
+          }
+          break;
+        }
 
         case 'cost':
           push({
