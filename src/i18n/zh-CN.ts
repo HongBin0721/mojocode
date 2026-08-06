@@ -24,6 +24,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'footer.think': '思考 {level}',
 
   'input.placeholder': '输入任务，/ 查看命令',
+  'input.planPlaceholder': '规划模式：先讨论方案，不会改动文件',
   'input.steer': '执行中… 可输入引导消息，回车发送，esc 中断',
   'input.menuHint': '↑/↓ 选择 · 回车执行 · tab 补全 · esc 收起',
   'input.newlineHint': 'shift+enter（或 ctrl+j / 行尾 `\\` + 回车）换行 · 回车发送',

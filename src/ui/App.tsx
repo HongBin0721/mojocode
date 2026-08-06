@@ -1525,7 +1525,15 @@ export function App({ session }: Props): React.ReactElement {
             <Input
               onSubmit={handleSubmit}
               disabled={false}
-              placeholder={running || work ? t('input.steer') : t('input.placeholder')}
+              placeholder={
+                running || work
+                  ? t('input.steer')
+                  : planActive
+                    ? t('input.planPlaceholder')
+                    : t('input.placeholder')
+              }
+              mode={modeLabel}
+              busy={running || Boolean(work)}
               commands={commands}
               onEscape={handleEscape}
               prefill={prefill}

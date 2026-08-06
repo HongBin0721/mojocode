@@ -51,6 +51,14 @@ export const glyphs = {
   done: '✓',
   failed: '✗',
   prompt: '›',
+  /** plan 模式下输入框的提示符:与 thinking 的 ✻ 同族的星形,示意"在构思"。 */
+  promptPlan: '✦',
+  /**
+   * full-access 下输入框的提示符。刻意不用 ⚡:它是 emoji 表现形,部分终端
+   * 按双宽渲染会破坏对齐(同 goal 不用 🎯 的理由);↯ 是单宽的箭头区字符,
+   * 闪电含义不变。
+   */
+  promptDanger: '↯',
   pointer: '❯',
   checked: '☒',
   unchecked: '☐',
@@ -91,6 +99,23 @@ export function modeColor(label: string): string {
   if (label === 'full-access' || label.startsWith('danger-full-access')) return theme.warn;
   if (label === 'plan') return theme.accent;
   return theme.dim;
+}
+
+/**
+ * 输入框的模式样式:边框/提示符颜色与提示符字形随权限模式变化,让"当前
+ * 处于什么模式"在打字的地方就看得见,而不用扫底栏。
+ *
+ * 与 modeColor 的取色刻意不同:那边"其余弱化"是因为底栏是背景信息,这里
+ * 常规模式(ask/auto)保持强调色——输入框是焦点,灰掉会像被禁用;read-only
+ * 则确实取弱化色,"写不了东西"与"收着劲"的观感一致。
+ */
+export function inputModeStyle(mode: string | undefined): { color: string; glyph: string } {
+  if (!mode) return { color: theme.accent, glyph: glyphs.prompt };
+  if (mode === 'full-access' || mode.startsWith('danger-full-access'))
+    return { color: theme.warn, glyph: glyphs.promptDanger };
+  if (mode === 'plan') return { color: theme.accent, glyph: glyphs.promptPlan };
+  if (mode.startsWith('read-only')) return { color: theme.dim, glyph: glyphs.prompt };
+  return { color: theme.accent, glyph: glyphs.prompt };
 }
 
 export function formatTokens(n: number): string {

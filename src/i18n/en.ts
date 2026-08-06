@@ -30,6 +30,7 @@ export const en = {
   'footer.think': 'think {level}',
 
   'input.placeholder': 'ask anything, / for commands',
+  'input.planPlaceholder': 'plan mode: discuss the approach first, no files will change',
   'input.steer': 'working… type to steer, enter to send, esc to interrupt',
   'input.menuHint': '↑/↓ select · enter run · tab complete · esc dismiss',
   'input.newlineHint': 'shift+enter (or ctrl+j / `\\` + enter) for newline · enter to send',

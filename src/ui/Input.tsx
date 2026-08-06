@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { theme, glyphs } from './theme.js';
+import { theme, glyphs, inputModeStyle } from './theme.js';
 import { t } from '../i18n/index.js';
 import { fuzzyFilter } from '../app/file-index.js';
 import type { ImageAttachment } from '../app/attachments.js';
@@ -45,6 +45,16 @@ interface Props {
   onSubmit: (value: string, images?: ImageAttachment[]) => void;
   disabled: boolean;
   placeholder: string;
+  /**
+   * 当前权限模式标签(plan / full-access / read-only / ask…)。边框与提示符
+   * 的颜色、字形据此变化,见 theme.inputModeStyle;不传则用默认样式。
+   */
+  mode?: string;
+  /**
+   * 任务运行中。输入仍然可用(引导消息),但边框退为弱化色,让视觉焦点
+   * 留给上方的流式输出;提示符保持模式色,示意"这里还能打字"。
+   */
+  busy?: boolean;
   /** 自动补全菜单中展示的斜杠命令。 */
   commands: SlashCommand[];
   /**
@@ -117,6 +127,8 @@ export function Input({
   onSubmit,
   disabled,
   placeholder,
+  mode,
+  busy,
   commands,
   onEscape,
   prefill,
@@ -681,11 +693,14 @@ export function Input({
   const lines = value.split('\n');
   const cursorRow = countLines(value.slice(0, cursor)) - 1;
   const cursorCol = cursor - (value.lastIndexOf('\n', cursor - 1) + 1);
+  const modeStyle = inputModeStyle(mode);
+  const borderColor = disabled || busy ? theme.dim : modeStyle.color;
+  const promptColor = disabled ? theme.dim : modeStyle.color;
 
   return (
     <Box flexDirection="column">
-      <Box borderStyle="round" borderColor={disabled ? theme.dim : theme.accent} paddingX={1}>
-        <Text color={disabled ? theme.dim : theme.accent}>{glyphs.prompt} </Text>
+      <Box borderStyle="round" borderColor={borderColor} paddingX={1}>
+        <Text color={promptColor}>{modeStyle.glyph} </Text>
         {value.length === 0 ? (
           <Text>
             {!disabled ? <Text inverse> </Text> : null}
