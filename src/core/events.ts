@@ -118,6 +118,26 @@ export type AgentEvent =
       /** 本次目标消耗的 token,含评估器自身的开销。 */
       tokens: number;
     }
+  // 子 agent(task 工具)的进度。子 agent 在自己的 EventBus 上跑,细节事件
+  // 不进主时间线——只把"跑到哪了"以这一条聚合事件转发出来,由渲染层贴在
+  // 进行中的 Task 工具行上。callId 即那次 task 调用的 toolCallId。
+  | {
+      type: 'task-progress';
+      callId: string;
+      description: string;
+      /** 子 agent 已完成的步数。 */
+      steps: number;
+      /** 子 agent 迄今消耗的 token(其累计值,最终由 tool 结果定稿)。 */
+      tokens: number;
+      /** 子 agent 当前正在跑的工具;两次工具之间为 undefined(思考中)。 */
+      currentTool?: string;
+      /**
+       * 最近启动的几条工具调用(旧→新,最多 3 条),渲染层缩进画成过程轨迹。
+       * 带原始 input 而不是格式化文本:core 不做 UI 格式化(那是 theme.ts 的
+       * formatToolInput 的事),与主总线 tool-start 携带原始 input 同一约定。
+       */
+      recentCalls?: Array<{ toolName: string; input: unknown }>;
+    }
   | { type: 'step-end'; usage: UsageSnapshot }
   | { type: 'compaction'; removedMessages: number; summaryChars: number }
   | { type: 'turn-end'; usage: UsageSnapshot; finishReason: string }

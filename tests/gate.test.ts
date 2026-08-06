@@ -589,3 +589,40 @@ describe('联网权限(checkNet)', () => {
     expect(gate.exportSessionRules().allowNet).toEqual([]);
   });
 });
+
+// 子 agent 没有 exit_plan(方案审批是主 agent 与用户之间的事)也问不了用户:
+// 照抄主 agent 的拒绝理由会把它引向一个不存在的工具,拿到 NoSuchTool 再重试,
+// 一路空转到步数上限。判定本身对主、子 agent 完全一致,只有措辞不同。
+describe('硬停理由按调用方身份措辞', () => {
+  it('计划模式:主 agent 被指向 exit_plan,子 agent 被明确告知没有它', async () => {
+    const { gate } = makeGate(presetById('ask'), { type: 'allow' }, true);
+    expect(() => gate.assertCanMutate('src/a.ts')).toThrow(/call the exit_plan tool/);
+
+    let subMessage = '';
+    try {
+      gate.assertCanMutate('src/a.ts', { subagent: true });
+    } catch (err) {
+      subMessage = (err as Error).message;
+    }
+    expect(subMessage).toMatch(/Do not call exit_plan/);
+    expect(subMessage).not.toMatch(/call the exit_plan tool to submit/);
+  });
+
+  it('read-only+never:主 agent 被告知去找用户,子 agent 被告知它问不了', async () => {
+    const { gate } = makeGate(READ_ONLY_NEVER);
+    expect(() => gate.assertCanMutate('src/a.ts')).toThrow(/Ask the user to relaunch/);
+    await expect(gate.checkBash('npm install', '.', { subagent: true })).rejects.toThrow(
+      /You cannot ask the user/,
+    );
+  });
+
+  it('身份只改措辞,不改判定:两者照样被拒', () => {
+    const { gate } = makeGate(READ_ONLY_NEVER);
+    expect(() => gate.assertCanMutate('src/a.ts', { subagent: true })).toThrow(
+      PermissionDeniedError,
+    );
+    expect(() => gate.assertCanMutate('src/a.ts', { subagent: false })).toThrow(
+      PermissionDeniedError,
+    );
+  });
+});

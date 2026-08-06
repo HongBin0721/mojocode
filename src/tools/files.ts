@@ -84,7 +84,7 @@ export function createFileTools(ctx: ToolContext) {
     }),
     execute: async ({ path: filePath, content }) => {
       const resolved = await resolveInsideWorkspace(filePath, sandbox);
-      ctx.gate.assertCanMutate(resolved.relative);
+      ctx.gate.assertCanMutate(resolved.relative, { subagent: ctx.subagent });
 
       let before = '';
       let existed = true;
@@ -102,7 +102,7 @@ export function createFileTools(ctx: ToolContext) {
       const diff = existed
         ? renderDiff(resolved.relative, before, content)
         : truncate(content, 4000);
-      await ctx.gate.checkWrite(resolved.relative, diff);
+      await ctx.gate.checkWrite(resolved.relative, diff, { subagent: ctx.subagent });
 
       await fs.mkdir(path.dirname(resolved.absolute), { recursive: true });
       await fs.writeFile(resolved.absolute, content, 'utf8');
@@ -133,7 +133,7 @@ export function createFileTools(ctx: ToolContext) {
     }),
     execute: async ({ path: filePath, oldString, newString, replaceAll }) => {
       const resolved = await resolveInsideWorkspace(filePath, sandbox);
-      ctx.gate.assertCanMutate(resolved.relative);
+      ctx.gate.assertCanMutate(resolved.relative, { subagent: ctx.subagent });
 
       if (!ctx.readFiles.has(resolved.absolute)) {
         throw new Error(
@@ -165,7 +165,7 @@ export function createFileTools(ctx: ToolContext) {
         : before.replace(oldString, newString);
 
       const diff = renderDiff(resolved.relative, before, after);
-      await ctx.gate.checkWrite(resolved.relative, diff);
+      await ctx.gate.checkWrite(resolved.relative, diff, { subagent: ctx.subagent });
       await fs.writeFile(resolved.absolute, after, 'utf8');
 
       const diagnostics = await ctx.lsp?.check(resolved.absolute, after);

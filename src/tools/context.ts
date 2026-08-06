@@ -10,8 +10,16 @@ export interface ToolContext {
   gate: PermissionGate;
   bus: EventBus;
   rules: PermissionRules;
-  /** 本会话中 agent 已读取过的文件——`edit` 拒绝修改未读过的文件。 */
+  /**
+   * 本 agent 已读取过的文件——`edit` 拒绝修改未读过的文件。
+   *
+   * **每个 agent 一份**,子 agent 不与主 agent 共享:这个护栏要保证的是
+   * "改的那个 agent 亲眼看过内容",共享会让主 agent 凭子 agent 的阅读
+   * 就能编辑自己从没读过的文件。
+   */
   readFiles: Set<string>;
+  /** 这套工具是否给子 agent 用。只影响权限被硬拒时的措辞,见 GateCallerOptions。 */
+  subagent?: boolean;
   /** LSP 诊断管理器;`lsp.enabled: false` 时为 undefined。write/edit 成功后回喂诊断。 */
   lsp?: LspManager;
   /**

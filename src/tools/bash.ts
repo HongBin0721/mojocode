@@ -32,7 +32,7 @@ export function createBashTool(ctx: ToolContext) {
       const workDir = cwd ? (await resolveInsideWorkspace(cwd, { root: ctx.root, denyPath: ctx.rules.denyPath })).absolute : ctx.root;
       const label = path.relative(ctx.root, workDir) || '.';
 
-      await ctx.gate.checkBash(command, label);
+      await ctx.gate.checkBash(command, label, { subagent: ctx.subagent });
 
       const started = Date.now();
       const result = await execa(command, {

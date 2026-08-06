@@ -21,6 +21,16 @@ export class PermissionDeniedError extends Error {
   }
 }
 
+/**
+ * 调用方身份。目前只区分"是不是子 agent",且**只影响硬停时的措辞**——
+ * 权限判定本身对主、子 agent 完全一致(同一个门、同一套会话规则、同一个
+ * 确认框队列)。子 agent 没有 exit_plan 也问不了用户,照抄主 agent 的提示
+ * 会把它引向不存在的工具。
+ */
+export interface GateCallerOptions {
+  subagent?: boolean;
+}
+
 export interface GateOptions {
   root: string;
   permissions: Permissions;
@@ -94,18 +104,26 @@ export class PermissionGate {
    * 通道也被 never 关死)。read-only+on-request **不算**——写入可以逐次升级
    * 确认,所以不在这里拦,由 checkWrite/checkBash 弹确认。
    */
-  private hardStopReason(action: string): string | undefined {
+  private hardStopReason(action: string, subagent = false): string | undefined {
     if (this.options.plan) {
-      return (
-        `Cannot ${action}: you are in plan mode. Keep researching with the read-only tools, ` +
-        'then call the exit_plan tool to submit your plan for approval. Do not attempt edits before it is approved.'
-      );
+      // 子 agent 没有 exit_plan(也不该有:方案审批是主 agent 与用户之间的事),
+      // 照抄主 agent 那句会让它去调一个不存在的工具,拿到 NoSuchTool 再重试,
+      // 一路空转到步数上限。同理它也没法"问用户"。
+      return subagent
+        ? `Cannot ${action}: the session is in plan mode, so nothing can be modified. ` +
+            'Research with the read-only tools and report what you found. ' +
+            'Do not call exit_plan — you do not have it; the main agent submits the plan.'
+        : `Cannot ${action}: you are in plan mode. Keep researching with the read-only tools, ` +
+            'then call the exit_plan tool to submit your plan for approval. Do not attempt edits before it is approved.';
     }
     const { sandbox, approval } = this.options.permissions;
     if (sandbox === 'read-only' && approval === 'never') {
       return (
         `Cannot ${action}: the sandbox is read-only and the approval policy is never, ` +
-        'so nothing can be escalated. Ask the user to relaunch with a writable sandbox.'
+        'so nothing can be escalated. ' +
+        (subagent
+          ? 'You cannot ask the user. Report what you found with the read-only tools instead.'
+          : 'Ask the user to relaunch with a writable sandbox.')
       );
     }
     return undefined;
@@ -119,13 +137,13 @@ export class PermissionGate {
    * 否则这条保证就取决于恰好执行了哪个分支。可升级的组合在这里放行,
    * 确认发生在 checkWrite。
    */
-  assertCanMutate(what: string): void {
-    const reason = this.hardStopReason(`modify ${what}`);
+  assertCanMutate(what: string, opts?: GateCallerOptions): void {
+    const reason = this.hardStopReason(`modify ${what}`, opts?.subagent);
     if (reason) throw new PermissionDeniedError(reason);
   }
 
-  async checkWrite(relativePath: string, detail?: string): Promise<void> {
-    this.assertCanMutate(relativePath);
+  async checkWrite(relativePath: string, detail?: string, opts?: GateCallerOptions): Promise<void> {
+    this.assertCanMutate(relativePath, opts);
     const { sandbox, approval } = this.options.permissions;
     if (sandbox === 'danger-full-access') return;
 
@@ -159,7 +177,7 @@ export class PermissionGate {
     });
   }
 
-  async checkBash(command: string, cwdLabel: string): Promise<void> {
+  async checkBash(command: string, cwdLabel: string, opts?: GateCallerOptions): Promise<void> {
     const { sandbox, approval } = this.options.permissions;
     const verdict = judgeCommand(command, {
       allow: [...this.options.rules.allowBash, ...this.sessionAllowBash],
@@ -179,7 +197,7 @@ export class PermissionGate {
 
     // 非白名单命令一律视为"沙箱外":没有 OS 沙箱能把命令圈在工作区里,
     // 所以 workspace-write 也不放行——这是与 Codex 的刻意差异,见 schema.ts。
-    const reason = this.hardStopReason(`run \`${command}\``);
+    const reason = this.hardStopReason(`run \`${command}\``, opts?.subagent);
     if (reason) throw new PermissionDeniedError(`${reason} Only read-only commands run freely.`);
 
     if (approval === 'never') {
@@ -201,11 +219,11 @@ export class PermissionGate {
   }
 
   /** MCP 工具是不透明的,所以除 danger-full-access 外总要确认(或被 never 拒绝)。 */
-  async checkMcpTool(toolName: string, input: unknown): Promise<void> {
+  async checkMcpTool(toolName: string, input: unknown, opts?: GateCallerOptions): Promise<void> {
     const { sandbox, approval } = this.options.permissions;
     if (!this.options.plan && sandbox === 'danger-full-access') return;
 
-    const reason = this.hardStopReason(`call MCP tool ${toolName}`);
+    const reason = this.hardStopReason(`call MCP tool ${toolName}`, opts?.subagent);
     if (reason) throw new PermissionDeniedError(reason);
 
     if (approval === 'never') {

@@ -511,6 +511,15 @@ export class Agent {
     this.cumulativeTokens += (inputTokens ?? 0) + (outputTokens ?? 0);
   }
 
+  /**
+   * 把外部消耗(子 agent、评估器之外的旁路调用)并入会话累计,footer、
+   * `/cost` 与 goal 的记账才是全貌。只加总量,不动 lastInputTokens——那
+   * 描述的是主对话自己的上下文占用,子 agent 的输入不占主窗口。
+   */
+  addExternalTokens(tokens: number): void {
+    if (tokens > 0) this.cumulativeTokens += tokens;
+  }
+
   private usageSnapshot(usage: {
     inputTokens: number | undefined;
     outputTokens: number | undefined;

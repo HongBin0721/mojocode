@@ -77,6 +77,15 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
       return t('sum.webFetch', { chars: String((o.content as string | undefined)?.length ?? 0) });
     case 'todo':
       return t('sum.todo', { done: Number(o.completed), total: Number(o.total) });
+    // 报告正文已喂给模型(通常还会被转述),摘要只报规模。被截停/出错时
+    // 必须在这一行说出来——否则界面上它和一次完整调研长得一模一样。
+    case 'task': {
+      const size = t('sum.task', {
+        steps: Number(o.steps),
+        tokens: formatTokensShort(Number(o.tokens)),
+      });
+      return o.incomplete ? `${size} · ${t('sum.taskIncomplete')}` : size;
+    }
     case 'exit_plan':
       // 非计划模式下的误调也返回 approved:false,但那不是"用户打回了方案"
       // ——照直说成打回,时间线就在报告一次根本没发生过的审批。
@@ -96,6 +105,13 @@ function withDiagnostics(base: string, o: Record<string, unknown>): string {
   if (errors > 0) return `${base} · ${t('sum.lspErrors', { n: errors })}`;
   if (warnings > 0) return `${base} · ${t('sum.lspWarnings', { n: warnings })}`;
   return base;
+}
+
+/** 与 ui/theme.ts 的 formatTokens 同形。tools 不 import ui,各留一份。 */
+function formatTokensShort(n: number): string {
+  if (!Number.isFinite(n) || n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 function formatMs(ms: number): string {

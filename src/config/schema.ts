@@ -297,6 +297,12 @@ export const configSchema = z.object({
    * 发现额度没了。想跑长任务的人抬高它是一行配置的事。
    */
   goalMaxTurns: z.number().int().positive().max(100).default(10),
+  /**
+   * 子 agent(task 工具)用的模型 id(与会话同一个 provider)。不填复用会话
+   * 当前模型。调研型子任务换个便宜的模型很划算;同 goalModel,绝不预置
+   * 具体 id——猜错就是 404。
+   */
+  taskModel: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   /** 思考强度的全局默认值,可被 providers.<id>.reasoningEffort 覆盖,用 /think 调整。 */
   reasoningEffort: reasoningEffortSchema.default('auto'),

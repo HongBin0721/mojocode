@@ -1,6 +1,6 @@
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { McpConnection } from './client.js';
-import type { PermissionGate } from '../permissions/gate.js';
+import type { GateCallerOptions, PermissionGate } from '../permissions/gate.js';
 import { truncate } from '../tools/context.js';
 
 /**
@@ -9,7 +9,11 @@ import { truncate } from '../tools/context.js';
  * 有意手写而不用 AI SDK 的实验性 MCP client:这样权限门禁能挡在每次调用
  * 前面,AI SDK 升级也不会悄悄改变 MCP 工具的行为。
  */
-export function bridgeMcpTools(connections: McpConnection[], gate: PermissionGate): ToolSet {
+export function bridgeMcpTools(
+  connections: McpConnection[],
+  gate: PermissionGate,
+  opts?: GateCallerOptions,
+): ToolSet {
   const tools: ToolSet = {};
   const taken = new Set<string>();
 
@@ -26,7 +30,7 @@ export function bridgeMcpTools(connections: McpConnection[], gate: PermissionGat
         // zod 往返转换而丢失约束。
         inputSchema: jsonSchema(mcpTool.inputSchema as Record<string, unknown>),
         execute: async (input) => {
-          await gate.checkMcpTool(name, input);
+          await gate.checkMcpTool(name, input, opts);
 
           const result = await connection.client.callTool({
             name: mcpTool.name,

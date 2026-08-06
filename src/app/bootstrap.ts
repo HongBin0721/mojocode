@@ -17,6 +17,7 @@ import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
 import { LspManager } from '../lsp/manager.js';
 import { createBuiltinTools, TodoStore } from '../tools/index.js';
+import { createTaskTool, SUBAGENT_PROMPT } from '../tools/task.js';
 import { SessionStore, type SessionState } from '../session/store.js';
 import { t } from '../i18n/index.js';
 
@@ -181,9 +182,71 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       : connectMcpServers(config.mcpServers, options.onMcpStatus),
   ]);
 
+  /**
+   * 子 agent 的工具集:每次现建一份 builtin(共享同一个 toolContext,权限门、
+   * readFiles、搜索后端全都同一套),去掉主会话状态类工具——todo 会抢主界面
+   * 的任务面板,exit_plan 属于主 agent 的计划审批;task 本身不在 builtin 里,
+   * 递归天然只放一层。现建而非复用 tools:web_search 注册与否取决于当时
+   * 能不能解析出搜索后端。
+   */
+  const subagentTools = () => {
+    // 自己的 readFiles:护栏要保证"改的那个 agent 亲眼看过内容",共享会让
+    // 主 agent 凭子 agent 的阅读就能编辑自己从没读过的文件。每次调用现建
+    // 一份,连续两个子任务之间也不串。
+    const subContext = { ...toolContext, readFiles: new Set<string>(), subagent: true };
+    const { todo: _todo, exit_plan: _exitPlan, ...rest } = {
+      ...createBuiltinTools(subContext, todos),
+      ...bridgeMcpTools(mcp.connections, gate, { subagent: true }),
+    };
+    return rest;
+  };
+
+  /**
+   * 子 agent 的系统提示词。plan 恒传 false——计划模式那段要求"最终必须调
+   * exit_plan",而子 agent 没有这个工具,照抄只会让它对着不存在的工具空转;
+   * 写入约束本身由共享的权限门兜底,这里只需一句说明。
+   */
+  const subagentSystemPrompt = (): string => {
+    const base = buildSystemPrompt(
+      env,
+      {
+        permissions: { sandbox: config.sandbox, approval: config.approval },
+        plan: false,
+        webSearch: webSearchAvailable,
+      },
+      config.systemPromptAppend,
+    );
+    // 计划模式下写入会被门禁硬拒。提前说清楚,免得它把步数耗在"试一次被拒
+    // →再试一次"上;门禁的拒绝理由也针对子 agent 单独措辞(见 hardStopReason)。
+    const planNote = config.plan
+      ? '\n\nNote: the session is in plan mode — file edits and state-changing commands are ' +
+        'refused. Research and report only. You have no exit_plan tool; never try to call it.'
+      : '';
+    return `${base}\n\n${SUBAGENT_PROMPT}${planNote}`;
+  };
+
+  /** 子 agent 的 provider:惰性取,taskModel 覆盖模型 id(未配置则原样)。 */
+  const taskProvider = (): ResolvedProvider =>
+    config.taskModel ? { ...provider, model: config.taskModel } : provider;
+
   const tools = {
     ...createBuiltinTools(toolContext, todos),
     ...bridgeMcpTools(mcp.connections, gate),
+    task: createTaskTool({
+      config,
+      bus,
+      // 惰性取值:/model、/provider 之后 provider 是新对象,提前建好的模型
+      // 会一直打向被换掉的服务端(与 GoalController.evaluatorModel 同理)。
+      // model 与 provider 必须取同一份:normalizeError 用 provider.model 组装
+      // "模型不存在"的提示,两者不一致时 taskModel 打错字会报到会话模型头上,
+      // 指着一个完全正常的 id 让人排查。
+      model: () => createModel(taskProvider()),
+      provider: taskProvider,
+      systemPrompt: subagentSystemPrompt,
+      tools: subagentTools,
+      // agent 在下方才创建;这个回调要到子任务收尾才被调用,那时早已就绪。
+      onTokens: (tokens) => agent.addExternalTokens(tokens),
+    }),
   };
   // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
   const webSearchAvailable = 'web_search' in tools;

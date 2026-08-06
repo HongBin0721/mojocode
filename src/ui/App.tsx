@@ -237,6 +237,18 @@ export function App({ session }: Props): React.ReactElement {
   const [activeText, setActiveText] = useState('');
   const [activeReasoning, setActiveReasoning] = useState('');
   const [activeTools, setActiveTools] = useState<ActiveToolCall[]>([]);
+  // 进行中的子 agent(task 工具)的进度,按 callId 键。tool-end 时清掉。
+  const [taskProgress, setTaskProgress] = useState<
+    Record<
+      string,
+      {
+        steps: number;
+        tokens: number;
+        currentTool?: string;
+        recentCalls?: Array<{ toolName: string; input: unknown }>;
+      }
+    >
+  >({});
   const [permission, setPermission] = useState<PermissionRequest | undefined>();
   const [running, setRunning] = useState(false);
   // 工作状态:undefined 表示空闲(状态行隐藏)。since 在整轮工作中保持
@@ -361,6 +373,7 @@ export function App({ session }: Props): React.ReactElement {
       flushReasoning();
       flushText();
       setActiveTools([]);
+      setTaskProgress({});
     };
 
     const off = session.bus.on((event: AgentEvent) => {
@@ -420,6 +433,11 @@ export function App({ session }: Props): React.ReactElement {
 
         case 'tool-end': {
           setActiveTools((prev) => prev.filter((t) => t.callId !== event.callId));
+          setTaskProgress((prev) => {
+            if (!(event.callId in prev)) return prev;
+            const { [event.callId]: _gone, ...rest } = prev;
+            return rest;
+          });
           const input = toolInputs.current.get(event.callId);
           toolInputs.current.delete(event.callId);
           push({
@@ -434,6 +452,18 @@ export function App({ session }: Props): React.ReactElement {
           beginWork('thinking');
           break;
         }
+
+        case 'task-progress':
+          setTaskProgress((prev) => ({
+            ...prev,
+            [event.callId]: {
+              steps: event.steps,
+              tokens: event.tokens,
+              currentTool: event.currentTool,
+              recentCalls: event.recentCalls,
+            },
+          }));
+          break;
 
         case 'permission-request':
           setPermission(event.request);
@@ -1482,17 +1512,45 @@ export function App({ session }: Props): React.ReactElement {
 
         {activeTools.map((call) => {
           const label = toolDisplayName(call.toolName);
+          // 子 agent 的实时进度:顶行贴步数,下面缩进画最近几条工具调用的
+          // 轨迹。轨迹只存在于动态区,任务收尾即消失——过程随时看得见,
+          // 时间线(回滚缓冲)仍然只留一行摘要。
+          const progress = taskProgress[call.callId];
+          const trail = progress?.recentCalls ?? [];
+          // 顶行只报步数:正在跑的工具就是轨迹的末条,再写一遍是重复。
+          // (事件里仍带 currentTool,给 --json 的消费方用。)
+          const progressText = progress
+            ? ` · ${t('ui.taskSteps', { n: progress.steps })}`
+            : '';
           // 前缀 2 列 + 工具名 + 括号 2 列,截到单行以内。
           const args = truncateWidth(
             formatToolInput(call.toolName, call.input),
-            Math.max(20, columns - WIDTH_SAFETY - label.length - 6),
+            Math.max(20, columns - WIDTH_SAFETY - label.length - 6 - progressText.length),
           );
           return (
-            <Box key={call.callId} marginTop={1} paddingRight={WIDTH_SAFETY}>
-              <Text color={theme.tool}>{glyphs.running} </Text>
-              <Text bold>{label}</Text>
-              {/* 无参数的工具(todo)不画空括号,与时间线、headless 一致。 */}
-              {args ? <Text color={theme.dim}>({args})</Text> : null}
+            <Box key={call.callId} marginTop={1} flexDirection="column" paddingRight={WIDTH_SAFETY}>
+              <Box>
+                <Text color={theme.tool}>{glyphs.running} </Text>
+                <Text bold>{label}</Text>
+                {/* 无参数的工具(todo)不画空括号,与时间线、headless 一致。 */}
+                {args ? <Text color={theme.dim}>({args})</Text> : null}
+                {progressText ? <Text color={theme.dim}>{progressText}</Text> : null}
+              </Box>
+              {trail.map((sub, index) => {
+                const subLabel = toolDisplayName(sub.toolName);
+                const subArgs = truncateWidth(
+                  formatToolInput(sub.toolName, sub.input),
+                  Math.max(20, columns - WIDTH_SAFETY - subLabel.length - 10),
+                );
+                return (
+                  <Box key={index} paddingLeft={3}>
+                    <Text color={theme.dim}>
+                      {glyphs.branch} {subLabel}
+                      {subArgs ? `(${subArgs})` : ''}
+                    </Text>
+                  </Box>
+                );
+              })}
             </Box>
           );
         })}
