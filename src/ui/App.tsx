@@ -1236,6 +1236,9 @@ export function App({ session }: Props): React.ReactElement {
               root: session.root,
               config: session.config,
               mcpStatuses: session.mcpStatuses,
+              // 会话内已拉起的服务器直接采信状态;没拉起过的由 doctor 做一次
+              // 真握手探测(探完即杀)。
+              lspStatuses: session.lsp?.statuses(),
               offline,
             });
             push({

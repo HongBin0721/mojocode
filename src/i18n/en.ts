@@ -285,6 +285,13 @@ export const en = {
   'doctor.lspNone': 'no servers configured',
   'doctor.lspNotFound': 'not installed — files it covers get no diagnostics',
   'doctor.lspNotFoundHint': 'Install {command}, or fix lsp.servers.{id} in your config.',
+  'doctor.lspRunning': 'running in this session',
+  'doctor.lspInstalled': 'installed (not started this session)',
+  'doctor.lspDead': 'failed to start during this session',
+  'doctor.lspHandshakeOk': 'handshake OK · {ms}',
+  'doctor.lspHandshakeFailed': 'found but the handshake failed: {message}',
+  'doctor.lspProbeHint':
+    'Run {command} by hand to see why (typescript-language-server needs typescript@5 in the workspace).',
   'doctor.check.searchBackend': 'Backend',
   'doctor.check.searchKey': 'Search API key',
   'doctor.check.searchEndpoint': 'Search endpoint',

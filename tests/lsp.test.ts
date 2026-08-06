@@ -144,6 +144,70 @@ describe('LspManager 端到端(fake server)', () => {
     await expect(manager.check(file, `BUG ${'x'.repeat(200_000)}`)).resolves.toBeUndefined();
   }, 15_000);
 
+  it('graceMs 可按服务器覆盖:宽限调小后,迟到的批次确实等不到', async () => {
+    const manager = makeManager(
+      lspConfigSchema.parse({
+        timeoutMs: 3000,
+        servers: {
+          fake: { command: process.execPath, args: [FAKE_SERVER], extensions: ['.zz'], graceMs: 10 },
+        },
+      }),
+    );
+    // LATE 的真诊断 80ms 后才来,10ms 宽限接不住 → 报"干净"。这正是可配的
+    // 意义:反过来,大项目上 rust-analyzer 超过内置启发值时把它调大就能接住。
+    await expect(manager.check(path.join(root, 'grace.zz'), 'LATE BUG')).resolves.toBeUndefined();
+  }, 15_000);
+
+  it('改 A 波及 B:B 的新诊断以 otherFiles 报出', async () => {
+    const manager = makeManager();
+    const fileB = path.join(root, 'xb.zz');
+    await manager.check(fileB, 'clean here'); // B 先检查过(已打开)
+    const res = (await manager.check(path.join(root, 'xa.zz'), 'CROSSFILE BUG')) as LspCheckResult;
+    expect(res.errors).toBe(1);
+    expect(res.otherFiles?.[0]).toContain('xb.zz');
+    expect(res.otherFiles?.[0]).toContain('1 error');
+  }, 15_000);
+
+  it('本文件干净但改炸了 B:仍然出声,而不是沉默', async () => {
+    const manager = makeManager();
+    await manager.check(path.join(root, 'yb.zz'), 'clean');
+    const res = (await manager.check(path.join(root, 'ya.zz'), 'CROSSFILE clean')) as LspCheckResult;
+    expect(res).toBeDefined();
+    expect(res.errors).toBe(0);
+    expect(res.items).toEqual([]);
+    expect(res.otherFiles).toHaveLength(1);
+  }, 15_000);
+
+  it('没检查过的文件收到推送不算波及(全工程分析器的存量噪音)', async () => {
+    const manager = makeManager();
+    // 只检查 A,不先检查 B:fake 只会给打开过的文件推送,这里 A 是唯一
+    // 打开的文件,CROSSFILE 无人可炸 → 没有 otherFiles。
+    const res = (await manager.check(path.join(root, 'za.zz'), 'CROSSFILE BUG')) as LspCheckResult;
+    expect(res.errors).toBe(1);
+    expect(res.otherFiles).toBeUndefined();
+  }, 15_000);
+
+  // 全工程分析器编辑任一文件后会把所有打开文件的诊断原样重发。B 早就有的、
+  // 与这次改动无关的报错不该被算作被 A 波及。
+  it('原样重发的旧诊断不算波及:B 的存量报错不归到 A 头上', async () => {
+    const manager = makeManager();
+    const fileB = path.join(root, 'rb.zz');
+    await manager.check(fileB, 'BUG in B'); // B 自己就有一个错(存量)
+    // 编辑 A(本身干净),服务器把 B 的**同一个**错原样重发。
+    await expect(manager.check(path.join(root, 'ra.zz'), 'REPUBLISH clean')).resolves.toBeUndefined();
+  }, 15_000);
+
+  // 本文件自己的诊断超时了,但改动已经波及到 B——那份已经到手的观察不能丢。
+  it('本文件超时也要报出已观察到的跨文件波及', async () => {
+    const manager = makeManager(fakeConfig({ timeoutMs: 500 }));
+    await manager.check(path.join(root, 'sb.zz'), 'clean'); // B 先打开
+    // A 用 SILENT:自己永不回诊断(等到超时),但 CROSSFILE 已炸了 B。
+    const res = (await manager.check(path.join(root, 'sa.zz'), 'CROSSFILE SILENT')) as LspCheckResult;
+    expect(res).toBeDefined();
+    expect(res.items).toEqual([]);
+    expect(res.otherFiles?.[0]).toContain('sb.zz');
+  }, 15_000);
+
   it('用户条目可以禁用内置服务器', async () => {
     const manager = makeManager(
       lspConfigSchema.parse({ servers: { typescript: { enabled: false } } }),

@@ -42,17 +42,17 @@ interface DiagnosticsWaiter {
   fail: () => void;
 }
 
-/**
- * 收到**空**诊断后额外等一小会儿,看有没有后续批次。
- *
- * typescript-language-server 会把语法/语义/建议三轮合并成一批发出(实测
- * 5.3 对同一版本只发一次),但 rust-analyzer(cargo check 流式出结果)和
- * gopls(按包检查)会先发一个空批次占位、真正的错误稍后才到。当场收工
- * 就会把"有错"报成"干净"——那正是这个功能最不能出的错。
- *
- * 只在空批次上付这个等待:有错的时候立刻返回,不拖慢常见路径。
- */
-const EMPTY_GRACE_MS = 400;
+/** 一次诊断请求的结果。 */
+export interface DiagnoseResult {
+  /** 该文件的诊断;null = 超时,"不知道"而不是"没问题"。 */
+  diagnostics: LspDiagnostic[] | null;
+  /**
+   * 本次检查期间**其他已打开文件**收到的新诊断——改了 A 的签名,之前
+   * 检查过的 B 的调用点炸了,就在这里现形。只报本会话 diagnose 过的文件:
+   * pyright 这类全工程分析器会顺手推送一堆没碰过的文件,那些是存量噪音。
+   */
+  others: Array<{ uri: string; diagnostics: LspDiagnostic[] }>;
+}
 
 export interface LspClientOptions {
   command: string;
@@ -70,6 +70,10 @@ export class LspClient {
   /** uri(解码后) → 已发送的最新文档版本。0 未打开。 */
   private versions = new Map<string, number>();
   private waiters = new Map<string, DiagnosticsWaiter[]>();
+  /** 全局递增的诊断到达序号,跨文件感知靠它圈定"这次检查期间"。 */
+  private publishSeq = 0;
+  /** 每个文件最新一批诊断(含原始 uri,供转回路径)。 */
+  private latest = new Map<string, { seq: number; uri: string; diagnostics: LspDiagnostic[] }>();
   private readonly initPromise: Promise<void>;
   /** 进程拉不起来/半路死掉/握手失败。manager 据此本会话不再重试。 */
   failed = false;
@@ -97,16 +101,26 @@ export class LspClient {
     this.initPromise.catch(() => {});
   }
 
+  /** 握手完成(或失败时拒绝)。doctor 的真握手探测用。 */
+  ready(): Promise<void> {
+    return this.initPromise;
+  }
+
   /**
    * 把一份文件内容交给服务器并等它发回该文件的诊断。
-   * 返回 null 表示超时——"不知道"而不是"没问题",调用方应当沉默。
+   * diagnostics 为 null 表示超时——"不知道"而不是"没问题",调用方应当沉默。
    */
   async diagnose(
     absolutePath: string,
     languageId: string,
     text: string,
-    timeoutMs: number,
-  ): Promise<LspDiagnostic[] | null> {
+    opts: {
+      timeoutMs: number;
+      /** 空批次后的宽限,按服务器给(见 LspServerDef.emptyGraceMs)。 */
+      graceMs: number;
+    },
+  ): Promise<DiagnoseResult> {
+    const { timeoutMs, graceMs } = opts;
     await this.initPromise;
     // 握手成功之后死掉的服务器:早点抛,manager 才能把它记死。不抛的话
     // send() 静默丢弃、诊断永远不来,此后每次 write/edit 都要白等一个
@@ -117,6 +131,8 @@ export class LspClient {
     const key = decodeURIComponent(uri);
     const version = (this.versions.get(key) ?? 0) + 1;
     this.versions.set(key, version);
+    // 圈定"这次检查期间":settle 之后到达序号更大的其他文件诊断即为波及。
+    const startSeq = this.publishSeq;
 
     // 先挂 waiter 再发通知,免得诊断在两步之间到达而没人接。
     const wait = new Promise<LspDiagnostic[] | null>((resolve) => {
@@ -141,10 +157,11 @@ export class LspClient {
             settle(diags);
             return;
           }
-          // 空批次:宽限一次,等可能的后续批次(见 EMPTY_GRACE_MS)。
-          // 宽限期内再来空批次不续期,总时长仍受 timeoutMs 约束。
+          // 空批次:宽限一次,等可能的后续批次(时长按服务器给,见
+          // LspServerDef.emptyGraceMs)。宽限期内再来空批次不续期,总时长
+          // 仍受 timeoutMs 约束。
           if (graceTimer) return;
-          graceTimer = setTimeout(() => settle(diags), Math.min(EMPTY_GRACE_MS, timeoutMs));
+          graceTimer = setTimeout(() => settle(diags), Math.min(graceMs, timeoutMs));
           graceTimer.unref();
         },
         fail: () => settle(null),
@@ -166,7 +183,23 @@ export class LspClient {
         contentChanges: [{ text }],
       });
     }
-    return wait;
+    const diagnostics = await wait;
+    return { diagnostics, others: this.othersUpdatedSince(startSeq, key) };
+  }
+
+  /** 本次检查期间收到新诊断的**其他已打开文件**(改 A 波及 B)。 */
+  private othersUpdatedSince(
+    sinceSeq: number,
+    excludeKey: string,
+  ): Array<{ uri: string; diagnostics: LspDiagnostic[] }> {
+    const others: Array<{ uri: string; diagnostics: LspDiagnostic[] }> = [];
+    for (const [key, entry] of this.latest) {
+      if (key === excludeKey || entry.seq <= sinceSeq) continue;
+      // 只报本会话 diagnose 过的文件:全工程分析器顺手推送的存量问题不算波及。
+      if (!this.versions.has(key)) continue;
+      others.push({ uri: entry.uri, diagnostics: entry.diagnostics });
+    }
+    return others;
   }
 
   async dispose(): Promise<void> {
@@ -307,6 +340,20 @@ export class LspClient {
 
   private onDiagnostics(params: { uri: string; version?: number; diagnostics: LspDiagnostic[] }): void {
     const key = decodeURIComponent(params.uri);
+    const incoming = params.diagnostics ?? [];
+    // 只在诊断**实际变化**时更新 latest 并推进 seq。pyright 这类全工程分析器
+    // 编辑任一文件后会把所有打开文件的诊断原样重发一遍——照单全收地推进 seq,
+    // 跨文件感知就会把 B 早就存在、与这次改动无关的报错算到这次头上。
+    const prev = this.latest.get(key);
+    if (!prev || !sameDiagnostics(prev.diagnostics, incoming)) {
+      // 变化的重新插到队尾:latest 按"最近变化"淘汰,长会话里不会无界增长。
+      if (prev) this.latest.delete(key);
+      this.latest.set(key, { seq: ++this.publishSeq, uri: params.uri, diagnostics: incoming });
+      if (this.latest.size > LATEST_CAP) {
+        const oldest = this.latest.keys().next().value;
+        if (oldest !== undefined) this.latest.delete(oldest);
+      }
+    }
     const list = this.waiters.get(key);
     if (!list || list.length === 0) return;
     // publish 会就地把已收工的 waiter 从 this.waiters 里摘掉(settle),
@@ -315,7 +362,32 @@ export class LspClient {
       // 带版本的诊断落后于我们发出的版本时,是旧内容的余波,继续等新的。
       // (注意 tsls 压根不发 version 字段,这一条对它不生效。)
       if (params.version !== undefined && params.version < waiter.version) continue;
-      waiter.publish(params.diagnostics ?? []);
+      waiter.publish(incoming);
     }
   }
+}
+
+/** 跨文件感知的 latest 表上限,按最近变化淘汰。够大到覆盖真实一轮的波及面。 */
+const LATEST_CAP = 1000;
+
+/** 两批诊断是否等价——跨文件感知靠它区分"真变了"和"原样重发"。 */
+function sameDiagnostics(a: LspDiagnostic[], b: LspDiagnostic[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (
+      x.message !== y.message ||
+      x.severity !== y.severity ||
+      x.code !== y.code ||
+      x.source !== y.source ||
+      x.range.start.line !== y.range.start.line ||
+      x.range.start.character !== y.range.start.character ||
+      x.range.end.line !== y.range.end.line ||
+      x.range.end.character !== y.range.end.character
+    ) {
+      return false;
+    }
+  }
+  return true;
 }

@@ -15,7 +15,8 @@ import { PROVIDER_PRESETS, isBuiltinProvider } from '../config/providers.js';
 import { SEARCH_PRESETS, resolveSearchBackend } from '../config/search.js';
 import { permissionsLabel, type Config } from '../config/schema.js';
 import { packageRoot, packageVersion } from '../config/version.js';
-import { resolveLspServers } from '../lsp/manager.js';
+import { resolveLspServers, type LspRuntimeStatus } from '../lsp/manager.js';
+import { LspClient } from '../lsp/client.js';
 import { connectMcpServers, type McpStatus } from '../mcp/client.js';
 import { probeModels } from '../model/registry.js';
 import { t } from '../i18n/index.js';
@@ -76,6 +77,8 @@ export interface DoctorInput {
    * 已经连着,再连一次等于把每个 stdio server 的子进程又拉起一份。
    */
   mcpStatuses?: McpStatus[];
+  /** 会话内已拉起的 LSP 服务器状态,同上:有则采信,没有的才做握手探测。 */
+  lspStatuses?: LspRuntimeStatus[];
 }
 
 export interface DoctorOptions {
@@ -89,6 +92,7 @@ export interface DoctorOptions {
    */
   config?: Config;
   mcpStatuses?: McpStatus[];
+  lspStatuses?: LspRuntimeStatus[];
 }
 
 /** CLI 入口:先做分层加载(允许失败),再交给 collectDoctor 体检。 */
@@ -124,7 +128,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
     configChecks(input),
     config ? providerChecks(config, env, offline, input.fetchImpl) : undefined,
     config ? searchChecks(config, env, offline, input.fetchImpl) : undefined,
-    config ? lspChecks(config, env) : undefined,
+    config ? lspChecks(config, env, input.root, offline, input.lspStatuses) : undefined,
     config ? mcpChecks(config, offline, input.mcpStatuses) : undefined,
     sessionChecks(input.sessionsDir ?? defaultSessionsDir(), config),
     workspaceChecks(input.root),
@@ -546,12 +550,22 @@ function searchKeyEnvNames(config: Config, backendId: string): string[] {
 }
 
 /**
- * LSP 分节:列出合并后(内置 + 用户配置)的每个服务器,报告命令在不在 PATH 上。
- * 只查存在性,不真的拉起服务器——与 MCP 分节不重连的理由相同,doctor 不该
- * 有副作用。内置服务器缺席是常态(装了就用的可选增强),报 info;用户显式
- * 配置的条目缺命令则值得一条 warn,那多半是笔误或忘了装。
+ * LSP 分节:列出合并后(内置 + 用户配置)的每个服务器。
+ *
+ * 三级递进:命令不在 PATH 上 → 内置 info / 用户显式配置 warn;在 PATH 上且
+ * 会话给了运行状态(TUI 的 /doctor)→ 直接采信,不重复拉起;否则做一次真
+ * 握手探测——拉起、initialize、随即杀掉(与 MCP 分节连一下就断同理)。
+ * 只查存在性抓不住"装了个坏的":tsls 没有 workspace typescript@5 时命令
+ * 在 PATH 上却根本起不来,那正是最需要 doctor 说话的情形。offline 跳过
+ * 探测(拉起语言服务器可能触发它联网下载索引)。
  */
-async function lspChecks(config: Config, env: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+async function lspChecks(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  root: string,
+  offline: boolean,
+  known?: LspRuntimeStatus[],
+): Promise<DoctorCheck[]> {
   if (!config.lsp.enabled) {
     return [
       { id: 'lspStatus', label: t('doctor.check.lsp'), level: 'info', detail: t('doctor.lspDisabled') },
@@ -567,19 +581,84 @@ async function lspChecks(config: Config, env: NodeJS.ProcessEnv): Promise<Doctor
     defs.map(async (def): Promise<DoctorCheck> => {
       const found = await findCommand(def.command, env);
       const exts = def.extensions.join(' ');
-      if (found) {
-        return { id: `lsp:${def.id}`, label: def.id, level: 'ok', detail: `${found} · ${exts}` };
+      if (!found) {
+        const userConfigured = config.lsp.servers[def.id]?.command !== undefined;
+        return {
+          id: `lsp:${def.id}`,
+          label: def.id,
+          level: userConfigured ? 'warn' : 'info',
+          detail: `${def.command} · ${t('doctor.lspNotFound')}`,
+          ...(userConfigured
+            ? { hint: t('doctor.lspNotFoundHint', { command: def.command, id: def.id }) }
+            : {}),
+        };
       }
-      const userConfigured = config.lsp.servers[def.id]?.command !== undefined;
-      return {
-        id: `lsp:${def.id}`,
-        label: def.id,
-        level: userConfigured ? 'warn' : 'info',
-        detail: `${def.command} · ${t('doctor.lspNotFound')}`,
-        ...(userConfigured
-          ? { hint: t('doctor.lspNotFoundHint', { command: def.command, id: def.id }) }
-          : {}),
-      };
+
+      // 会话内已经拉起过:直接采信运行状态。
+      const status = known?.find((s) => s.id === def.id);
+      if (status) {
+        return status.state === 'ok'
+          ? { id: `lsp:${def.id}`, label: def.id, level: 'ok', detail: `${found} · ${exts} · ${t('doctor.lspRunning')}` }
+          : {
+              id: `lsp:${def.id}`,
+              label: def.id,
+              level: 'warn',
+              detail: `${found} · ${t('doctor.lspDead')}`,
+              hint: t('doctor.lspProbeHint', { command: def.command }),
+            };
+      }
+
+      // 会话内体检(known 非 undefined):这个服务器本会话还没被任何编辑触发过。
+      // 绝不为体检去拉一个真语言服务器——那正是 MCP 分节刻意规避的"从运行中的
+      // 会话再拉起一份重量级子进程"(rust-analyzer 会连带 cargo/go 子进程)。
+      // 只报"装了、在 PATH 上";真握手留给 CLI 的 `mojocode doctor`。
+      if (known !== undefined) {
+        return {
+          id: `lsp:${def.id}`,
+          label: def.id,
+          level: 'ok',
+          detail: `${found} · ${exts} · ${t('doctor.lspInstalled')}`,
+        };
+      }
+
+      if (offline) {
+        return {
+          id: `lsp:${def.id}`,
+          label: def.id,
+          level: 'ok',
+          detail: `${found} · ${exts} · ${t('doctor.skippedOffline')}`,
+        };
+      }
+
+      // 真握手:起得来才算数。探完立刻杀,不留子进程。用已解析的绝对路径
+      // 拉起(findCommand 看的是传入的 env.PATH,spawn 走的是进程真实 PATH,
+      // 两者可能不一致——报告说的和试的必须是同一个可执行文件)。
+      const started = Date.now();
+      const client = new LspClient({
+        command: found,
+        args: def.args,
+        root,
+        initTimeoutMs: NETWORK_TIMEOUT_MS,
+      });
+      try {
+        await client.ready();
+        return {
+          id: `lsp:${def.id}`,
+          label: def.id,
+          level: 'ok',
+          detail: `${found} · ${exts} · ${t('doctor.lspHandshakeOk', { ms: `${Date.now() - started}ms` })}`,
+        };
+      } catch (err) {
+        return {
+          id: `lsp:${def.id}`,
+          label: def.id,
+          level: 'warn',
+          detail: `${found} · ${t('doctor.lspHandshakeFailed', { message: (err as Error).message })}`,
+          hint: t('doctor.lspProbeHint', { command: def.command }),
+        };
+      } finally {
+        await client.dispose().catch(() => {});
+      }
     }),
   );
 }

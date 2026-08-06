@@ -372,3 +372,42 @@ describe('cleanup', () => {
     });
   });
 });
+
+describe('子任务过程记录(kind: task)', () => {
+  it('saveTask / readTasks 往返;open() 恢复回放不受影响', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'p', model: 'm', dir });
+    await store.save([msg('user', '你好'), msg('assistant', '在')]);
+    await store.saveTask({
+      callId: 'task-1',
+      description: '找调用点',
+      mode: 'explore',
+      steps: 3,
+      tokens: 1500,
+      finishReason: 'stop',
+      messages: [msg('user', '子任务简报'), msg('assistant', '子任务报告')],
+    });
+    await store.save([msg('user', '你好'), msg('assistant', '在'), msg('user', '继续')]);
+
+    // 回查:task 记录完整取回,按时间顺序。
+    const tasks = await SessionStore.readTasks(store.id, dir);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ callId: 'task-1', mode: 'explore', steps: 3 });
+    expect(tasks[0]!.messages.map((m) => m.content)).toEqual(['子任务简报', '子任务报告']);
+
+    // 恢复回放只看主对话,task 记录不混进历史。
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages.map((m) => m.content)).toEqual(['你好', '在', '继续']);
+  });
+
+  it('旧读者视角:未知 kind 被静默跳过,文件仍可打开', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'p', model: 'm', dir });
+    await store.save([msg('user', 'hi')]);
+    // 手动塞一条"未来版本"的记录,模拟前向兼容。
+    await fs.appendFile(
+      path.join(dir, `${store.id}.jsonl`),
+      `${JSON.stringify({ kind: 'from-the-future', payload: 1 })}\n`,
+    );
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages.map((m) => m.content)).toEqual(['hi']);
+  });
+});

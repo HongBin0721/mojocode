@@ -20,6 +20,25 @@ import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
 import { truncate } from './context.js';
 
+/**
+ * 子 agent 的类型。general 与主 agent 同一套工具(去 task/todo/exit_plan);
+ * explore 只给只读工具(read/glob/grep/web),纯调研任务用它更安全——
+ * 连写入确认框都不会弹。
+ */
+export type TaskMode = 'general' | 'explore';
+
+/** 一次子任务的完整过程,由 bootstrap 落进会话文件供事后回查。 */
+export interface TaskTranscript {
+  callId: string;
+  description: string;
+  mode: TaskMode;
+  steps: number;
+  tokens: number;
+  finishReason?: string;
+  error?: string;
+  messages: ModelMessage[];
+}
+
 export interface TaskToolDeps {
   config: Config;
   /** 主总线,只用来转发 task-progress。 */
@@ -31,11 +50,16 @@ export interface TaskToolDeps {
   model: () => LanguageModel;
   provider: () => ResolvedProvider;
   /** 子 agent 的系统提示词(不含计划模式段——子 agent 没有 exit_plan)。 */
-  systemPrompt: () => string;
-  /** 子 agent 的工具集:builtin 去掉 task/todo/exit_plan,加上 MCP 桥接。 */
-  tools: () => ToolSet;
+  systemPrompt: (mode: TaskMode) => string;
+  /** 子 agent 的工具集:按类型给,见 TaskMode。 */
+  tools: (mode: TaskMode) => ToolSet;
   /** 子 agent 的总消耗,并入主 agent 的会话累计(Agent.addExternalTokens)。 */
   onTokens: (tokens: number) => void;
+  /**
+   * 子任务收尾(含中断/失败)时上报完整过程。工具结果只带最终报告,过程
+   * 从主对话看是黑箱——排查"那个子任务为什么给了错结论"全靠这份落盘。
+   */
+  onTranscript?: (transcript: TaskTranscript) => void;
 }
 
 /** 追加到子 agent 系统提示词末尾的工作方式说明。英文,喂给模型的文本不本地化。 */
@@ -48,6 +72,12 @@ You are a subagent handling a task delegated by the main agent. Work autonomousl
   Make it self-contained: findings, relevant file paths as \`path:line\`, and clear conclusions.
 - Stay within the delegated task. Do not expand scope or start unrelated work.`;
 
+/** explore 类型追加的段落:只读调研,别试图动手。 */
+export const EXPLORE_PROMPT = `## Explore mode
+
+This task is read-only research. You only have read/search/web tools — no write, edit or bash.
+Do not attempt changes and do not ask for permission to make them; investigate and report.`;
+
 export function createTaskTool(deps: TaskToolDeps) {
   return tool({
     description:
@@ -57,21 +87,30 @@ export function createTaskTool(deps: TaskToolDeps) {
       'question, or an isolated chunk of implementation. The subagent has the same tools and ' +
       'permissions as you (minus task/todo), but sees NONE of this conversation — write the ' +
       'prompt as a complete standalone brief: the goal, all context it needs, and exactly what ' +
-      'the report should contain. Do not use it for quick single-file lookups; read directly.',
+      'the report should contain. Do not use it for quick single-file lookups; read directly. ' +
+      "For pure research set mode 'explore': the subagent then gets only read-only tools, " +
+      'which is safer and never prompts for write approval.',
     inputSchema: z.object({
       description: z.string().describe('Short label shown to the user (3-8 words).'),
       prompt: z.string().describe('Complete standalone instructions for the subagent.'),
+      mode: z
+        .enum(['general', 'explore'])
+        .default('general')
+        .describe("'explore' = read-only research (read/glob/grep/web only); 'general' = full tools."),
     }),
-    execute: async ({ description, prompt }, { toolCallId, abortSignal }) => {
+    execute: async ({ description, prompt, mode }, { toolCallId, abortSignal }) => {
       if (abortSignal?.aborted) throw new Error('Task was interrupted before it started.');
 
       const innerBus = new EventBus();
+      // 子任务用自己的步数上限(taskMaxSteps),缺省沿用 maxSteps。克隆 config
+      // 只为改这一个值;子任务是有界的,轮中 /think 之类的就地修改赶不上它。
+      const maxSteps = deps.config.taskMaxSteps ?? deps.config.maxSteps;
       const agent = new Agent({
         model: deps.model(),
         provider: deps.provider(),
-        config: deps.config,
-        systemPrompt: deps.systemPrompt(),
-        tools: deps.tools(),
+        config: { ...deps.config, maxSteps },
+        systemPrompt: deps.systemPrompt(mode),
+        tools: deps.tools(mode),
         bus: innerBus,
       });
 
@@ -134,6 +173,17 @@ export function createTaskTool(deps: TaskToolDeps) {
         abortSignal?.removeEventListener('abort', onAbort);
         // 中断/失败也要把已花掉的钱记上——token 确实花了。
         deps.onTokens(tokens);
+        // 过程落盘同样不挑收尾方式:中断/失败恰恰是最需要回查的时候。
+        deps.onTranscript?.({
+          callId: toolCallId,
+          description,
+          mode,
+          steps,
+          tokens,
+          finishReason,
+          ...(lastError ? { error: lastError.message } : {}),
+          messages: [...agent.history],
+        });
       }
 
       if (abortSignal?.aborted) throw new Error('Task was interrupted.');
@@ -161,7 +211,7 @@ export function createTaskTool(deps: TaskToolDeps) {
         lastError !== undefined
           ? `The subagent hit an error and stopped early: ${lastError.message}`
           : finishReason === 'tool-calls'
-            ? `The subagent ran out of its step budget (${deps.config.maxSteps} steps) before ` +
+            ? `The subagent ran out of its step budget (${maxSteps} steps) before ` +
               'finishing. The text below is its last message, not a considered final report.'
             : finishReason === 'length'
               ? 'The subagent hit the model output limit; the report is cut off.'

@@ -206,7 +206,7 @@ export function formatToolInput(toolName: string, input: unknown): string {
       return String(i.url ?? '');
     // 完整 prompt 又长又是给子 agent 看的,括号里放用户可读的短标签。
     case 'task':
-      return String(i.description ?? '');
+      return `${String(i.description ?? '')}${i.mode === 'explore' ? ' · explore' : ''}`;
     // 不带参数:任务数在紧随其后的清单里一目了然,写进括号只是重复。
     case 'todo':
       return '';

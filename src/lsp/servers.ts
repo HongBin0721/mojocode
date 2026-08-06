@@ -13,7 +13,18 @@ export interface LspServerDef {
   args: string[];
   /** 该服务器接管的文件扩展名,含点(".ts")。 */
   extensions: string[];
+  /**
+   * 收到**空**诊断批次后再等多久,看有没有后续批次(毫秒)。
+   *
+   * tsls 实测把语法/语义合并成一批发出,短宽限只是保险;rust-analyzer
+   * (cargo check 流式出结果)与 gopls(按包检查)先发空批次占位、真正的
+   * 错误明显滞后,宽限必须给足,否则"有错"会被报成"干净"。这些数字是
+   * 启发值,config 的 lsp.servers.<id>.graceMs 可逐服务器覆盖。
+   */
+  emptyGraceMs: number;
 }
+
+const DEFAULT_EMPTY_GRACE_MS = 400;
 
 export const BUILTIN_LSP_SERVERS: readonly LspServerDef[] = [
   {
@@ -21,26 +32,32 @@ export const BUILTIN_LSP_SERVERS: readonly LspServerDef[] = [
     command: 'typescript-language-server',
     args: ['--stdio'],
     extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'],
+    emptyGraceMs: DEFAULT_EMPTY_GRACE_MS,
   },
   {
     id: 'pyright',
     command: 'pyright-langserver',
     args: ['--stdio'],
     extensions: ['.py', '.pyi'],
+    emptyGraceMs: DEFAULT_EMPTY_GRACE_MS,
   },
   {
     id: 'gopls',
     command: 'gopls',
     args: [],
     extensions: ['.go'],
+    emptyGraceMs: 1000,
   },
   {
     id: 'rust-analyzer',
     command: 'rust-analyzer',
     args: [],
     extensions: ['.rs'],
+    emptyGraceMs: 1500,
   },
 ];
+
+export { DEFAULT_EMPTY_GRACE_MS };
 
 /** didOpen 需要的 languageId。没有专名的扩展名退化为去点的扩展名本身。 */
 const LANGUAGE_IDS: Record<string, string> = {

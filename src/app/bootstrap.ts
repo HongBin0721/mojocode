@@ -1,4 +1,4 @@
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import { Agent } from '../agent/loop.js';
 import { GoalController } from '../agent/goal.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
@@ -17,7 +17,7 @@ import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
 import { LspManager } from '../lsp/manager.js';
 import { createBuiltinTools, TodoStore } from '../tools/index.js';
-import { createTaskTool, SUBAGENT_PROMPT } from '../tools/task.js';
+import { createTaskTool, EXPLORE_PROMPT, SUBAGENT_PROMPT, type TaskMode } from '../tools/task.js';
 import { SessionStore, type SessionState } from '../session/store.js';
 import { t } from '../i18n/index.js';
 
@@ -32,6 +32,8 @@ export interface Session {
   todos: TodoStore;
   /** `/goal` 的目标监管器:发起轮次时经它走,由它决定要不要自动续跑。 */
   goal: GoalController;
+  /** LSP 诊断管理器;lsp.enabled: false 时为 undefined。/doctor 读它的运行状态。 */
+  lsp?: LspManager;
   mcpStatuses: McpStatus[];
   store: SessionStore;
   /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
@@ -189,16 +191,23 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    * 递归天然只放一层。现建而非复用 tools:web_search 注册与否取决于当时
    * 能不能解析出搜索后端。
    */
-  const subagentTools = () => {
+  const subagentTools = (mode: TaskMode): ToolSet => {
     // 自己的 readFiles:护栏要保证"改的那个 agent 亲眼看过内容",共享会让
     // 主 agent 凭子 agent 的阅读就能编辑自己从没读过的文件。每次调用现建
     // 一份,连续两个子任务之间也不串。
     const subContext = { ...toolContext, readFiles: new Set<string>(), subagent: true };
-    const { todo: _todo, exit_plan: _exitPlan, ...rest } = {
+    const { todo: _todo, exit_plan: _exitPlan, ...general } = {
       ...createBuiltinTools(subContext, todos),
       ...bridgeMcpTools(mcp.connections, gate, { subagent: true }),
     };
-    return rest;
+    if (mode !== 'explore') return general;
+    // explore:纯调研,只留只读工具。MCP 工具不透明,可能有副作用,一并去掉。
+    const picked: ToolSet = {};
+    for (const name of ['read', 'glob', 'grep', 'web_fetch', 'web_search']) {
+      const t_ = (general as ToolSet)[name];
+      if (t_) picked[name] = t_;
+    }
+    return picked;
   };
 
   /**
@@ -206,7 +215,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    * exit_plan",而子 agent 没有这个工具,照抄只会让它对着不存在的工具空转;
    * 写入约束本身由共享的权限门兜底,这里只需一句说明。
    */
-  const subagentSystemPrompt = (): string => {
+  const subagentSystemPrompt = (mode: TaskMode): string => {
     const base = buildSystemPrompt(
       env,
       {
@@ -222,7 +231,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       ? '\n\nNote: the session is in plan mode — file edits and state-changing commands are ' +
         'refused. Research and report only. You have no exit_plan tool; never try to call it.'
       : '';
-    return `${base}\n\n${SUBAGENT_PROMPT}${planNote}`;
+    const modeNote = mode === 'explore' ? `\n\n${EXPLORE_PROMPT}` : '';
+    return `${base}\n\n${SUBAGENT_PROMPT}${modeNote}${planNote}`;
   };
 
   /** 子 agent 的 provider:惰性取,taskModel 覆盖模型 id(未配置则原样)。 */
@@ -244,8 +254,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       provider: taskProvider,
       systemPrompt: subagentSystemPrompt,
       tools: subagentTools,
-      // agent 在下方才创建;这个回调要到子任务收尾才被调用,那时早已就绪。
+      // agent/store 在下方才创建;回调要到子任务收尾才被调用,那时早已就绪。
       onTokens: (tokens) => agent.addExternalTokens(tokens),
+      // 完整过程随会话落盘(kind: 'task' 记录,恢复回放不读、旧版本安全跳过),
+      // 排查"子任务为什么给了错结论"的唯一入口。尽力而为,失败不打扰。
+      onTranscript: (transcript) => {
+        void store.saveTask(transcript).catch(() => {});
+      },
     }),
   };
   // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
@@ -389,6 +404,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     gate,
     todos,
     goal,
+    lsp,
     mcpStatuses: mcp.statuses,
     get store() {
       return store;

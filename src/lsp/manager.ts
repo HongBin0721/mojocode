@@ -8,8 +8,14 @@
  */
 
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { LspClient, type LspDiagnostic } from './client.js';
-import { BUILTIN_LSP_SERVERS, languageIdFor, type LspServerDef } from './servers.js';
+import {
+  BUILTIN_LSP_SERVERS,
+  DEFAULT_EMPTY_GRACE_MS,
+  languageIdFor,
+  type LspServerDef,
+} from './servers.js';
 import type { LspConfig } from '../config/schema.js';
 
 export interface LspCheckResult {
@@ -17,6 +23,17 @@ export interface LspCheckResult {
   warnings: number;
   /** 已格式化的诊断行(如 `12:5 error: Cannot find name 'x' (typescript 2304)`)。 */
   items: string[];
+  /**
+   * 本次检查期间冒出新问题的**其他已检查过的文件**——改了 A 的签名,B 的
+   * 调用点炸了。每行如 `src/b.ts: 2 errors, 1 warning`,细节让模型自己去读。
+   */
+  otherFiles?: string[];
+}
+
+/** 会话内各服务器的运行状态,doctor 用(有则采信,不再重复拉起)。 */
+export interface LspRuntimeStatus {
+  id: string;
+  state: 'ok' | 'failed';
 }
 
 /** 单次回喂最多带多少条诊断——一个坏改动能炸出几百条,全带上只会淹掉重点。 */
@@ -73,21 +90,68 @@ export class LspManager {
       // 总时长再加一道硬上限:首次调用要付服务器握手的钱,但一个僵死的
       // 服务器不能把 write/edit 拖住十几秒——超限就放弃,握手在后台继续,
       // 下一次调用多半就能用上了。
-      const diags = await withCap(
-        client.diagnose(absolutePath, languageIdFor(ext), content, this.config.timeoutMs),
+      const outcome = await withCap(
+        client.diagnose(absolutePath, languageIdFor(ext), content, {
+          timeoutMs: this.config.timeoutMs,
+          graceMs: def.emptyGraceMs,
+        }),
         this.config.timeoutMs + HANDSHAKE_GRACE_MS,
       );
-      // 没拿到结果时顺带看一眼服务器是不是已经死了:死了就记死,否则
-      // 此后每次 write/edit 都要为一个不会再说话的进程白等一个超时。
-      if (diags === null) {
+      // withCap 硬超时(outcome=null):连 others 都没得报,直接放弃。
+      if (outcome === null) return undefined;
+      // 本文件自己的诊断超时了(diagnostics=null),但波及到的 B 可能已经在
+      // 等待期间到齐——那份观察不能一起丢掉,否则"这次改动炸了 B"就没人知道。
+      const otherFiles = this.formatOthers(outcome.others);
+      if (outcome.diagnostics === null) {
         if (client.failed) this.clients.set(def.id, null);
-        return undefined;
+        return otherFiles.length > 0
+          ? { errors: 0, warnings: 0, items: [], otherFiles }
+          : undefined;
       }
-      return formatDiagnostics(diags);
+      const primary = formatDiagnostics(outcome.diagnostics);
+      // 本文件干净且没波及别人才沉默;本文件干净但改炸了 B,必须出声。
+      if (!primary && otherFiles.length === 0) return undefined;
+      return {
+        errors: primary?.errors ?? 0,
+        warnings: primary?.warnings ?? 0,
+        items: primary?.items ?? [],
+        ...(otherFiles.length > 0 ? { otherFiles } : {}),
+      };
     } catch {
       if (!client || client.failed) this.clients.set(def.id, null);
       return undefined;
     }
+  }
+
+  /** 本次检查期间其他文件的新诊断 → `src/b.ts: 2 errors, 1 warning` 行。 */
+  private formatOthers(others: Array<{ uri: string; diagnostics: LspDiagnostic[] }>): string[] {
+    const lines: string[] = [];
+    for (const other of others) {
+      const formatted = formatDiagnostics(other.diagnostics);
+      if (!formatted) continue; // 波及后反而干净了(顺手修好)不必出声
+      let relative: string;
+      try {
+        relative = path.relative(this.root, fileURLToPath(other.uri));
+      } catch {
+        continue;
+      }
+      const parts = [
+        formatted.errors > 0 ? `${formatted.errors} error${formatted.errors > 1 ? 's' : ''}` : '',
+        formatted.warnings > 0
+          ? `${formatted.warnings} warning${formatted.warnings > 1 ? 's' : ''}`
+          : '',
+      ].filter(Boolean);
+      lines.push(`${relative}: ${parts.join(', ')} (this edit may have broken it — read it to check)`);
+    }
+    return lines;
+  }
+
+  /** 会话内已拉起过的服务器状态。doctor 有则采信,不再重复拉起。 */
+  statuses(): LspRuntimeStatus[] {
+    return [...this.clients.entries()].map(([id, client]) => ({
+      id,
+      state: client === null || client.failed ? ('failed' as const) : ('ok' as const),
+    }));
   }
 
   async dispose(): Promise<void> {
@@ -120,6 +184,7 @@ export function resolveLspServers(config: LspConfig): LspServerDef[] {
       command: override.command ?? base?.command ?? '',
       args: override.args ?? base?.args ?? [],
       extensions: (override.extensions ?? base?.extensions ?? []).map((e) => e.toLowerCase()),
+      emptyGraceMs: override.graceMs ?? base?.emptyGraceMs ?? DEFAULT_EMPTY_GRACE_MS,
     };
     // 自定义条目缺 command 或 extensions 时无从工作,静默忽略。
     if (!def.command || def.extensions.length === 0) continue;

@@ -36,13 +36,14 @@ const finishStep = (input: number, output: number): StreamPart => ({
 });
 const finish: StreamPart = { type: 'finish', totalUsage: {}, finishReason: 'stop' };
 
-function makeDeps() {
+function makeDeps(configOverrides: Record<string, unknown> = {}) {
   const bus = new EventBus();
   const events: AgentEvent[] = [];
   bus.on((e) => events.push(e));
   const onTokens = vi.fn();
+  const onTranscript = vi.fn();
   const deps: TaskToolDeps = {
-    config: { maxSteps: 10, compactThreshold: 0.8 } as never,
+    config: { maxSteps: 10, compactThreshold: 0.8, ...configOverrides } as never,
     bus,
     model: () => ({}) as never,
     provider: () =>
@@ -55,15 +56,16 @@ function makeDeps() {
         parallelToolCalls: true,
         reasoningEffort: 'auto',
       }) as never,
-    systemPrompt: () => 'sub system prompt',
-    tools: () => ({}),
+    systemPrompt: vi.fn(() => 'sub system prompt'),
+    tools: vi.fn(() => ({})),
     onTokens,
+    onTranscript,
   };
-  return { deps, events, onTokens };
+  return { deps, events, onTokens, onTranscript };
 }
 
 type Execute = (
-  input: { description: string; prompt: string },
+  input: { description: string; prompt: string; mode?: 'general' | 'explore' },
   options: { toolCallId: string; abortSignal?: AbortSignal },
 ) => Promise<{ result: string; steps: number; tokens: number; incomplete?: string }>;
 const executeOf = (deps: TaskToolDeps): Execute =>
@@ -306,5 +308,126 @@ describe('子 agent 的 readFiles 与主 agent 隔离', () => {
     ).rejects.toThrow(/have not read/);
 
     await fs.rm(root, { recursive: true, force: true });
+  });
+});
+
+describe('taskMaxSteps / explore / 过程落盘 / 并行', () => {
+  it('taskMaxSteps 独立于主 agent 的 maxSteps,截停文案报的是它', async () => {
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield finishStep(10, 5);
+        yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
+      })(),
+      responseMessages: Promise.resolve([{ role: 'assistant', content: '刚开了个头' }]),
+      finishReason: Promise.resolve('tool-calls'),
+    }));
+    const { deps } = makeDeps({ taskMaxSteps: 3 });
+    const out = await executeOf(deps)({ description: 'd', prompt: 'p' }, { toolCallId: 't' });
+    expect(out.incomplete).toContain('(3 steps)');
+  });
+
+  it('mode 透传给工具集与系统提示词', async () => {
+    installStream([finish], [{ role: 'assistant', content: 'ok' }]);
+    const { deps } = makeDeps();
+    await executeOf(deps)(
+      { description: 'd', prompt: 'p', mode: 'explore' },
+      { toolCallId: 't' },
+    );
+    expect(deps.tools).toHaveBeenCalledWith('explore');
+    expect(deps.systemPrompt).toHaveBeenCalledWith('explore');
+  });
+
+  it('过程上报:带完整消息历史与统计', async () => {
+    installStream([finishStep(10, 5), finish], [{ role: 'assistant', content: '结论' }]);
+    const { deps, onTranscript } = makeDeps();
+    await executeOf(deps)(
+      { description: '调研', prompt: '查一下', mode: 'general' },
+      { toolCallId: 'tr-1' },
+    );
+    expect(onTranscript).toHaveBeenCalledOnce();
+    const transcript = onTranscript.mock.calls[0]![0] as {
+      callId: string;
+      messages: Array<{ role: string }>;
+    };
+    expect(transcript).toMatchObject({
+      callId: 'tr-1',
+      description: '调研',
+      mode: 'general',
+      steps: 1,
+      tokens: 15,
+      finishReason: 'stop',
+    });
+    expect(transcript.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('两个 task 并发:结果、进度、记账都按 callId 各归各', async () => {
+    let call = 0;
+    mockStreamText.mockImplementation(() => {
+      call += 1;
+      const n = call;
+      return {
+        fullStream: (async function* () {
+          yield { type: 'tool-call', toolCallId: `c${n}`, toolName: `tool${n}`, input: {} };
+          yield { type: 'tool-result', toolCallId: `c${n}`, toolName: `tool${n}`, output: {} };
+          yield finishStep(n * 100, 0);
+          yield finish;
+        })(),
+        responseMessages: Promise.resolve([{ role: 'assistant', content: `报告${n}` }]),
+        finishReason: Promise.resolve('stop'),
+      };
+    });
+    const { deps, events, onTokens } = makeDeps();
+    const exec = executeOf(deps);
+    const [a, b] = await Promise.all([
+      exec({ description: 'A', prompt: 'a' }, { toolCallId: 'task-A' }),
+      exec({ description: 'B', prompt: 'b' }, { toolCallId: 'task-B' }),
+    ]);
+    // 结果不串台(两个流的先后由实现决定,按内容配对断言)。
+    expect([a.result, b.result].sort()).toEqual(['报告1', '报告2']);
+    expect([a.tokens, b.tokens].sort((x, y) => x - y)).toEqual([100, 200]);
+    expect(
+      onTokens.mock.calls.map((c) => c[0] as number).sort((x, y) => x - y),
+    ).toEqual([100, 200]);
+    // 每个 callId 的进度事件只描述自己的任务。
+    const forA = events.filter((e) => e.type === 'task-progress' && e.callId === 'task-A');
+    const forB = events.filter((e) => e.type === 'task-progress' && e.callId === 'task-B');
+    expect(forA.length).toBeGreaterThan(0);
+    expect(forB.length).toBeGreaterThan(0);
+    expect(forA.every((e) => e.type === 'task-progress' && e.description === 'A')).toBe(true);
+    expect(forB.every((e) => e.type === 'task-progress' && e.description === 'B')).toBe(true);
+  });
+
+  it('一个信号同时停两个并发子任务,过程照样各自落盘', async () => {
+    const outer = new AbortController();
+    let started = 0;
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield finishStep(10, 0);
+        started += 1;
+        await hold;
+        throw new Error('aborted');
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    const { deps, onTranscript } = makeDeps();
+    const exec = executeOf(deps);
+    const settled = Promise.allSettled([
+      exec({ description: 'A', prompt: 'a' }, { toolCallId: 'A', abortSignal: outer.signal }),
+      exec({ description: 'B', prompt: 'b' }, { toolCallId: 'B', abortSignal: outer.signal }),
+    ]);
+    await vi.waitFor(() => expect(started).toBe(2));
+    outer.abort();
+    release();
+    const [ra, rb] = await settled;
+    expect(ra.status).toBe('rejected');
+    expect(rb.status).toBe('rejected');
+    expect((ra as PromiseRejectedResult).reason.message).toMatch(/interrupted/);
+    expect((rb as PromiseRejectedResult).reason.message).toMatch(/interrupted/);
+    expect(onTranscript).toHaveBeenCalledTimes(2);
   });
 });

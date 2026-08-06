@@ -268,6 +268,13 @@ export const zhCN: Record<keyof typeof en, string> = {
   'doctor.lspNone': '未配置任何服务器',
   'doctor.lspNotFound': '未安装，它负责的文件不做诊断',
   'doctor.lspNotFoundHint': '安装 {command}，或修正配置里的 lsp.servers.{id}。',
+  'doctor.lspRunning': '本会话运行中',
+  'doctor.lspInstalled': '已安装（本会话未启动）',
+  'doctor.lspDead': '本会话中启动失败',
+  'doctor.lspHandshakeOk': '握手正常 · {ms}',
+  'doctor.lspHandshakeFailed': '命令存在但握手失败：{message}',
+  'doctor.lspProbeHint':
+    '手动运行 {command} 看原因（typescript-language-server 需要工作区里有 typescript@5）。',
   'doctor.check.searchBackend': '后端',
   'doctor.check.searchKey': '搜索 API key',
   'doctor.check.searchEndpoint': '搜索端点',

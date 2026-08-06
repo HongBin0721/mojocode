@@ -241,6 +241,11 @@ export const lspServerConfigSchema = z.object({
   extensions: z.array(z.string()).optional(),
   /** false 时禁用该服务器(含内置条目)。 */
   enabled: z.boolean().optional(),
+  /**
+   * 收到空诊断批次后再等多久(毫秒)。rust-analyzer/gopls 这类先发空批次
+   * 占位的服务器在大项目上可能超过内置启发值,漏报"有错"时把它调大。
+   */
+  graceMs: z.number().int().positive().optional(),
 });
 export type LspServerConfig = z.infer<typeof lspServerConfigSchema>;
 
@@ -303,6 +308,11 @@ export const configSchema = z.object({
    * 具体 id——猜错就是 404。
    */
   taskModel: z.string().optional(),
+  /**
+   * 子 agent 单次任务的步数上限,缺省沿用 maxSteps。撞上限时报告会被标记
+   * 不完整——调研型子任务给更小的值能更早止损。
+   */
+  taskMaxSteps: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
   /** 思考强度的全局默认值,可被 providers.<id>.reasoningEffort 覆盖,用 /think 调整。 */
   reasoningEffort: reasoningEffortSchema.default('auto'),

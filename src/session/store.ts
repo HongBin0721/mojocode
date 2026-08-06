@@ -72,7 +72,30 @@ interface StateRecord {
   state: SessionState;
 }
 
-type Record_ = MetaRecord | MessagesRecord | AppendRecord | SnapshotRecord | StateRecord;
+/**
+ * 一次子任务(task 工具)的完整过程。工具结果只带最终报告,过程从主对话看
+ * 是黑箱——这份记录是排查"子任务为什么给了错结论"的唯一入口。
+ * open() 的恢复回放不读它(它不属于主对话历史);旧版本读到未知 kind 会
+ * 静默跳过,格式向后兼容。
+ */
+export interface SessionTaskRecord {
+  callId: string;
+  description: string;
+  mode?: string;
+  steps: number;
+  tokens: number;
+  finishReason?: string;
+  error?: string;
+  messages: ModelMessage[];
+}
+
+interface TaskRecord {
+  kind: 'task';
+  at: string;
+  task: SessionTaskRecord;
+}
+
+type Record_ = MetaRecord | MessagesRecord | AppendRecord | SnapshotRecord | StateRecord | TaskRecord;
 
 /** `open()`/`resolveId()` 找不到会话。消息保持英文(CLI 层负责本地化呈现)。 */
 export class SessionNotFoundError extends Error {
@@ -373,6 +396,38 @@ export class SessionStore {
       await this.writeSidecar(meta);
     });
     await this.flush();
+  }
+
+  /** 追加一条子任务过程记录。尽力而为:失败不打扰用户(与 saveState 同理)。 */
+  async saveTask(task: SessionTaskRecord): Promise<void> {
+    const record: TaskRecord = { kind: 'task', at: new Date().toISOString(), task };
+    this.enqueue(async () => {
+      await this.appendRecord(record);
+    });
+    await this.flush();
+  }
+
+  /** 读出一个会话文件里的全部子任务过程(时间顺序)。回查/测试用,不常驻内存。 */
+  static async readTasks(id: string, dir?: string): Promise<Array<SessionTaskRecord & { at: string }>> {
+    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new SessionNotFoundError(id);
+      throw err;
+    }
+    const tasks: Array<SessionTaskRecord & { at: string }> = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as Record_;
+        if (record.kind === 'task') tasks.push({ ...record.task, at: record.at });
+      } catch {
+        // 末尾的不完整写入照旧忽略
+      }
+    }
+    return tasks;
   }
 
   /** 只有状态真的变了才追加记录,避免每轮一条重复 state。 */

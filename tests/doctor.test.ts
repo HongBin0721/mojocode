@@ -465,3 +465,108 @@ describe('LSP 分节', () => {
     expect(find(report, 'lsp:typescript')).toBeUndefined();
   });
 });
+
+describe('LSP 真握手探测', () => {
+  // 只查 PATH 抓不住"装了个坏的":命令在、起不来,才是最需要 doctor 说话的时候。
+  async function makeBin(name: string, script: string) {
+    const binDir = path.join(dir, 'lsp-bin');
+    await fs.mkdir(binDir, { recursive: true });
+    const file = path.join(binDir, name);
+    await fs.writeFile(file, script, { mode: 0o755 });
+    return binDir;
+  }
+  const probeConfig = () =>
+    configSchema.parse({
+      provider: 'deepseek',
+      lsp: { servers: { probe: { command: 'probe-lsp', extensions: ['.zz'] } } },
+    });
+
+  it('起得来的服务器报握手耗时;探完即杀不留子进程', async () => {
+    const fake = new URL('./support/fake-lsp.mjs', import.meta.url).pathname;
+    const binDir = await makeBin('probe-lsp', `#!/bin/sh\nexec "${process.execPath}" "${fake}"\n`);
+    const report = await collectDoctor(
+      input({
+        offline: false,
+        config: probeConfig(),
+        env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir },
+        fetchImpl: fakeFetch({
+          'https://registry.npmjs.org': { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'm' }] } },
+        }),
+      }),
+    );
+    const check = find(report, 'lsp:probe');
+    expect(check?.level).toBe('ok');
+    expect(check?.detail).toMatch(/handshake OK · \d+ms/);
+  }, 20_000);
+
+  it('命令存在但握手失败 → warn 带排查提示,而不是照报绿', async () => {
+    const binDir = await makeBin('probe-lsp', '#!/bin/sh\nexit 1\n');
+    const report = await collectDoctor(
+      input({
+        offline: false,
+        config: probeConfig(),
+        env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir },
+        fetchImpl: fakeFetch({
+          'https://registry.npmjs.org': { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'm' }] } },
+        }),
+      }),
+    );
+    const check = find(report, 'lsp:probe');
+    expect(check?.level).toBe('warn');
+    expect(check?.detail).toContain('handshake failed');
+    expect(check?.hint).toContain('probe-lsp');
+  }, 20_000);
+
+  it('offline 跳过探测,只报存在性', async () => {
+    const binDir = await makeBin('probe-lsp', '#!/bin/sh\nexit 1\n');
+    const report = await collectDoctor(
+      input({ config: probeConfig(), env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir } }),
+    );
+    const check = find(report, 'lsp:probe');
+    expect(check?.level).toBe('ok');
+    expect(check?.detail).toContain('--offline');
+  });
+
+  // 会话内体检绝不为一个还没被触发的服务器去拉一个真语言服务器(rust-analyzer
+  // 会连带 cargo 子进程)。用一个握手必失败的命令验证:若真拉起了会是 warn,
+  // 拿到 ok 就证明没拉。
+  it('会话内(known 非空)对未启动的服务器不做握手,只报已安装', async () => {
+    const binDir = await makeBin('probe-lsp', '#!/bin/sh\nexit 1\n');
+    const report = await collectDoctor(
+      input({
+        offline: false,
+        config: probeConfig(),
+        env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir },
+        lspStatuses: [], // 会话已启动、但这个服务器还没被任何编辑触发
+        fetchImpl: fakeFetch({
+          'https://registry.npmjs.org': { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'm' }] } },
+        }),
+      }),
+    );
+    const check = find(report, 'lsp:probe');
+    expect(check?.level).toBe('ok');
+    expect(check?.detail).toContain('not started this session');
+  });
+
+  it('会话给了运行状态就采信,不再拉起:failed → warn', async () => {
+    const binDir = await makeBin('probe-lsp', '#!/bin/sh\nexit 1\n');
+    const report = await collectDoctor(
+      input({
+        offline: false,
+        config: probeConfig(),
+        env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir },
+        lspStatuses: [{ id: 'probe', state: 'failed' }],
+        fetchImpl: fakeFetch({
+          'https://registry.npmjs.org': { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'm' }] } },
+        }),
+      }),
+    );
+    const check = find(report, 'lsp:probe');
+    expect(check?.level).toBe('warn');
+    expect(check?.detail).toContain('failed to start during this session');
+  });
+});
