@@ -1,3 +1,4 @@
+import Table from 'cli-table3';
 import { Marked, type MarkedExtension } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import stringWidth from 'string-width';
@@ -28,6 +29,7 @@ export function renderMarkdownAnsi(text: string, columns: number): string {
       tab: 2,
     });
     patchListRendering(extension);
+    patchTableRendering(extension, width);
     const instance = new Marked();
     instance.use(extension);
     cached = { width, instance };
@@ -110,6 +112,112 @@ function patchListRendering(extension: MarkedExtension): void {
       depth -= 1;
     }
   };
+}
+
+/** 单列内容预算的下限(显示列数),再窄连两个双宽汉字都放不下。 */
+const MIN_CELL_CONTENT = 4;
+
+/** marked-terminal 的 codespan 用它占位冒号,自渲染单元格时要还原。 */
+const COLON_REPLACER_RE = /\*#COLON\|\*/g;
+
+/**
+ * 接管表格渲染。marked-terminal 把表格交给 cli-table3 时不传任何宽度约束,
+ * 列宽按内容自然撑开:CJK 单元格(每字 2 列)很容易画出远超终端宽度的表,
+ * 随后 wrapLine 的逐行硬折行把每条框线、每行单元格从中间切开,断点还因
+ * 双宽字符逐行漂移,框线就成了阶梯状碎片。cli-table3 自带的 wordWrap 也
+ * 救不了:按词折行拆不开无空格的中文长句,`wrapOnWordBoundary: false` 的
+ * 逐字折行又按 code unit 计宽,CJK 行照样超宽后被截断。
+ *
+ * 这里自己排版:按可用宽度给各列分配内容预算(先按自然宽度,放不下时
+ * 逐列收窄最宽者),用 wrap-ansi——显示宽度计宽、不劈双宽字符、断点处
+ * 闭合并重开 ANSI 样式——把单元格预折成多行,再交给 cli-table3 画框。
+ * 它按多行单元格里最宽的一行定列宽,整张表因此永远不超终端宽度,
+ * wrapLine 也就不会再碰它。
+ *
+ * 单元格自渲染(parseInline)绕过了 marked-terminal 的 transform,这里
+ * 照它的样子还原 HTML 实体与 codespan 的冒号占位;emoji 短代码转换省略
+ * (它自己渲染表头时同样不做)。另外表格内的链接只保留链接文本:终端不
+ * 支持超链接时 marked-terminal 会展开成 `文本 (href)`,在按列折行的
+ * 单元格里徒占宽度。
+ */
+function patchTableRendering(extension: MarkedExtension, width: number): void {
+  const renderer = extension.renderer;
+  if (!renderer) return;
+  const baseLink = renderer.link;
+
+  // 单元格是在 table 渲染器执行期间同步递归渲染的,用标志区分表内外。
+  let inTable = false;
+
+  renderer.link = function (token) {
+    if (!inTable) return baseLink ? baseLink.call(this, token) : false;
+    return this.parser.parseInline(token.tokens).trim() || token.href;
+  };
+
+  renderer.table = function (token) {
+    inTable = true;
+    try {
+      const head = token.header.map((cell) => restoreEntities(this.parser.parseInline(cell.tokens)));
+      const rows = token.rows.map((row) =>
+        row.map((cell) => restoreEntities(this.parser.parseInline(cell.tokens))),
+      );
+      const budgets = columnBudgets([head, ...rows], width);
+      const wrapCells = (cells: string[]) =>
+        cells.map((cell, i) =>
+          wrapAnsi(cell, budgets[i] ?? MIN_CELL_CONTENT, { hard: true, trim: false }),
+        );
+      const table = new Table({ head: wrapCells(head) });
+      for (const row of rows) table.push(wrapCells(row));
+      // 与 marked-terminal 的 section() 一致,块级元素之间空一行。
+      return `${table.toString()}\n\n`;
+    } finally {
+      inTable = false;
+    }
+  };
+}
+
+/**
+ * 给每列分配单元格内容的显示宽度预算:总预算 = 终端宽度减去框线与
+ * cli-table3 的左右 padding;自然宽度放得下就原样保留,放不下则反复
+ * 收窄当前最宽的列,直到装下或所有列都到下限。
+ */
+function columnBudgets(rows: string[][], width: number): number[] {
+  const cols = rows[0]?.length ?? 0;
+  const natural: number[] = Array.from({ length: cols }, () => MIN_CELL_CONTENT);
+  for (const row of rows) {
+    row.forEach((cell, i) => {
+      if (i >= cols) return;
+      let widest = natural[i] ?? MIN_CELL_CONTENT;
+      // 单元格可能已含换行(<br> 或图片),按最宽一行计。
+      for (const line of cell.split('\n')) widest = Math.max(widest, stringWidth(line));
+      natural[i] = widest;
+    });
+  }
+  // 每列 2 列 padding,加 cols+1 根竖线;终端窄到连下限都装不下时保住
+  // 下限,让外层 wrapLine 兜底。
+  const avail = Math.max(cols * MIN_CELL_CONTENT, width - cols * 3 - 1);
+  let total = natural.reduce((a, b) => a + b, 0);
+  while (total > avail) {
+    let widest = 0;
+    natural.forEach((budget, i) => {
+      if (budget > (natural[widest] ?? 0)) widest = i;
+    });
+    const budget = natural[widest] ?? 0;
+    if (budget <= MIN_CELL_CONTENT) break;
+    natural[widest] = budget - 1;
+    total -= 1;
+  }
+  return natural;
+}
+
+/** 与 marked-terminal 的 transform(undoColon + unescapeEntities)保持一致。 */
+function restoreEntities(text: string): string {
+  return text
+    .replace(COLON_REPLACER_RE, ':')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
 }
 
 /**

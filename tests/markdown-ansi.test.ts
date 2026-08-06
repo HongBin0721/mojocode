@@ -19,6 +19,42 @@ describe('renderMarkdownAnsi', () => {
     expect(out).not.toContain('|---|');
   });
 
+  // marked-terminal 画表格不受 width 约束,CJK 表格超宽后会被 wrapLine 切碎;
+  // patchTableRendering 按列预算预折单元格,保证整张表不超终端宽度。
+  it('CJK 长单元格的表格不超宽,框线完整', () => {
+    const md = [
+      '| 分类 | 内容 |',
+      '|---|---|',
+      `| 研究 | ${'R1、V3、Coder V2、VL 等开源模型'.repeat(3)} |`,
+      '| 产品 | DeepSeek App、网页版、开放平台、API 价格、服务状态 |',
+    ].join('\n');
+    const out = plain(renderMarkdownAnsi(md, 60));
+    const lines = out.split('\n').filter(Boolean);
+    for (const line of lines) {
+      expect(stringWidth(line)).toBeLessThanOrEqual(60);
+    }
+    // 每一行都是完整的框线行或单元格行,不存在被拦腰切断顶回行首的碎片。
+    for (const line of lines) {
+      expect(line.startsWith('┌') || line.startsWith('│') || line.startsWith('├') || line.startsWith('└')).toBe(true);
+    }
+    // 内容一个字不丢。
+    expect(out.replace(/\s/g, '')).toContain('服务状态');
+  });
+
+  it('表格单元格里的自动链接不展开 (mailto:…)', () => {
+    const out = plain(
+      renderMarkdownAnsi('| 联系 |\n|---|\n| security@deepseek.com |', 80),
+    );
+    expect(out).toContain('security@deepseek.com');
+    expect(out).not.toContain('mailto:');
+  });
+
+  it('表格单元格保留实体反转义与 codespan 冒号', () => {
+    const out = plain(renderMarkdownAnsi('| 键 | 值 |\n|---|---|\n| R&D | `a:b` |', 80));
+    expect(out).toContain('R&D');
+    expect(out).toContain('a:b');
+  });
+
   it('代码块保留内容且围栏被剥掉', () => {
     const out = plain(renderMarkdownAnsi('```js\nconst x = 1;\n```', 80));
     expect(out).toContain('const x = 1;');
