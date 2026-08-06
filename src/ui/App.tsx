@@ -156,6 +156,15 @@ const REASONING_PREVIEW_ROWS = 5;
 /** 留给状态行、输入框、信息栏、进行中的工具行和各处 marginTop 的余量。 */
 const RESERVED_ROWS = 13;
 
+/** 宽度拖动期间 <Static> 的空条目列表;模块级常量保证引用稳定。 */
+const NO_ITEMS: TimelineItem[] = [];
+
+/**
+ * 宽度拖动期间在动态区实时渲染的时间线尾部条数。足够铺满一屏(更早的
+ * 内容本来就在视口外),又给长会话的每次宽度变化重渲染封住了成本上限。
+ */
+const RESIZE_TAIL_ITEMS = 12;
+
 
 let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
@@ -220,6 +229,11 @@ export function App({ session }: Props): React.ReactElement {
    * 的长预览)就会把清掉的整份记录重新打回屏幕。
    */
   const [staticEpoch, setStaticEpoch] = useState(0);
+  // 终端宽度正在拖动调节中:时间线暂时从 <Static> 摘下,尾部条目改在动态区
+  // 实时渲染,停稳后整体重放(见下方 resize 监听的注释)。
+  const [resizing, setResizing] = useState(false);
+  // 拖动期间每个宽度变化递增一次,专门用来触发重渲染;值本身不被读取。
+  const [, setResizeTick] = useState(0);
   const [activeText, setActiveText] = useState('');
   const [activeReasoning, setActiveReasoning] = useState('');
   const [activeTools, setActiveTools] = useState<ActiveToolCall[]>([]);
@@ -669,6 +683,60 @@ export function App({ session }: Props): React.ReactElement {
     },
     [writeStdout],
   );
+
+  // 终端宽度变化时的时间线处理。<Static> 里的条目按定稿时的宽度排版、
+  // 只打印一次;宽度一变,终端自己把这些历史行重新折行——表格框线被拦腰
+  // 切碎,拖动过程中滚进回滚缓冲的旧动态帧(输入框边框)也留成鬼影。ink
+  // 的 resize 处理只重画动态区,救不了 <Static> 那部分。
+  //
+  // 节奏是"开始时搬进动态区、停稳后放回 <Static>":首次宽度变化立即清屏、
+  // 把时间线从 <Static> 摘下,改为在动态区渲染其尾部若干条(resizing 分支,
+  // 见 JSX);此后每个宽度变化都触发一次 React 重渲染,尾部条目跟着按新
+  // 宽度重排——动态区完全归 ink 掌控,重写包在同步输出(DEC 2026)里,
+  // 内容全程可见、排版正确、几乎不闪。宽度停稳后再清屏、恢复条目并换
+  // <Static> 身份,全部按最终宽度重放。之前试过两版:拖动期间节流清屏
+  // 重放整份时间线,重画本身闪得比错乱还凶;拖动期间整条藏起来,又变成
+  // 内容全程不可见。
+  //
+  // 只看列数:高度伸缩不影响已定稿行的折行,不值得为它清一次屏。
+  useEffect(() => {
+    if (!stdout) return;
+    // 最后一次宽度变化后多久算"停稳"。太短会在慢速拖动中反复重放,太长
+    // 则松手后时间线迟迟不回来。
+    const SETTLE_MS = 200;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let lastColumns = stdout.columns;
+    let dragging = false;
+    const onResize = () => {
+      if (stdout.columns === lastColumns) return;
+      lastColumns = stdout.columns;
+      if (!dragging) {
+        dragging = true;
+        writeStdout('\x1b[2J\x1b[3J\x1b[H');
+        // 同一批 setState:摘下条目 + 换 <Static> 身份,让 ink 丢掉已累积
+        // 的静态输出,否则拖动中随便一个撑出视口的帧会把旧时间线重播回来。
+        setResizing(true);
+        setStaticEpoch((epoch) => epoch + 1);
+      } else {
+        // 拖动进行中:每个宽度变化都要一次重渲染,动态区里的尾部条目才会
+        // 按新宽度重排(ink 的 resize 只重排 yoga 布局,不重跑组件,
+        // renderMarkdownAnsi 的输出不触发 React 渲染就不会更新)。
+        setResizeTick((tick) => tick + 1);
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        dragging = false;
+        writeStdout('\x1b[2J\x1b[3J\x1b[H');
+        setResizing(false);
+        setStaticEpoch((epoch) => epoch + 1);
+      }, SETTLE_MS);
+    };
+    stdout.on('resize', onResize);
+    return () => {
+      clearTimeout(timer);
+      stdout.off('resize', onResize);
+    };
+  }, [stdout, writeStdout]);
 
   /** esc 的总入口:运行中 → 中断;空闲二连 esc → 回退选择器。 */
   const handleEscape = useCallback(() => {
@@ -1377,10 +1445,21 @@ export function App({ session }: Props): React.ReactElement {
 
   return (
     <Box flexDirection="column">
-      {/* 已完成的条目只渲染一次,留在终端回滚缓冲区中。 */}
-      <Static key={staticEpoch} items={items}>
+      {/* 已完成的条目只渲染一次,留在终端回滚缓冲区中。宽度拖动调节期间
+          整体摘下(见 resize 监听),停稳后按最终宽度重放。 */}
+      <Static key={staticEpoch} items={resizing ? NO_ITEMS : items}>
         {(item) => <TimelineEntry key={item.key} item={item} />}
       </Static>
+
+      {/* 宽度拖动期间的时间线尾部:在动态区实时渲染,每次宽度变化随
+          React 重渲染按新宽度重排,内容保持可见且不被终端折坏。 */}
+      {resizing ? (
+        <Box flexDirection="column">
+          {items.slice(-RESIZE_TAIL_ITEMS).map((item) => (
+            <TimelineEntry key={item.key} item={item} />
+          ))}
+        </Box>
+      ) : null}
 
       <Box flexDirection="column" marginTop={1}>
         {activeReasoning.trim() ? (

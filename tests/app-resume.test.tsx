@@ -69,6 +69,48 @@ describe('恢复会话的时间线回放', () => {
   });
 });
 
+describe('终端宽度变化的时间线重放', () => {
+  it('拖动开始清屏、尾部条目转入动态区保持可见,停稳后放回 <Static>,高度变化不触发', async () => {
+    const session = makeSession([
+      { role: 'user', content: '之前的问题' },
+      { role: 'assistant', content: '之前的回答' },
+    ] as ModelMessage[]);
+    const { frames, stdout, lastFrame, unmount } = render(<App session={session} />);
+    await tick();
+    const before = frames.length;
+
+    // 只变高度(列数没变):不清屏、不重放。
+    stdout.emit('resize');
+    await tick();
+    expect(frames.slice(before).join('')).not.toContain('\x1b[2J');
+
+    // 首次宽度变化:立即清屏(2J 清屏、3J 清回滚),时间线从 <Static> 摘下、
+    // 尾部条目转入动态区——拖动期间内容仍然可见。
+    // (ink-testing-library 以 debug 模式跑 ink,每帧都带上 fullStaticOutput,
+    // 断言"最新一帧"才对应拖动期间的实际渲染。)
+    Object.defineProperty(stdout, 'columns', { value: 60, configurable: true });
+    stdout.emit('resize');
+    await tick();
+    expect(frames.slice(before).join('\n')).toContain('\x1b[2J\x1b[3J\x1b[H');
+    expect(lastFrame()).toContain('之前的问题');
+    expect(lastFrame()).toContain('之前的回答');
+
+    // 拖动中继续变宽度:动态区随重渲染跟进,内容持续可见。
+    Object.defineProperty(stdout, 'columns', { value: 50, configurable: true });
+    stdout.emit('resize');
+    await tick();
+    expect(lastFrame()).toContain('之前的回答');
+
+    // 停稳后:再清屏一次,全部条目按最终宽度重放回 <Static>。
+    const mid = frames.length;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(frames.slice(mid).join('\n')).toContain('\x1b[2J\x1b[3J\x1b[H');
+    expect(lastFrame()).toContain('之前的问题');
+    expect(lastFrame()).toContain('之前的回答');
+    unmount();
+  });
+});
+
 describe('RewindPicker', () => {
   const entries = [
     { index: 5, ordinal: 3, text: '第三问' },
