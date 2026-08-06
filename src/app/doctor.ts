@@ -15,6 +15,7 @@ import { PROVIDER_PRESETS, isBuiltinProvider } from '../config/providers.js';
 import { SEARCH_PRESETS, resolveSearchBackend } from '../config/search.js';
 import { permissionsLabel, type Config } from '../config/schema.js';
 import { packageRoot, packageVersion } from '../config/version.js';
+import { resolveLspServers } from '../lsp/manager.js';
 import { connectMcpServers, type McpStatus } from '../mcp/client.js';
 import { probeModels } from '../model/registry.js';
 import { t } from '../i18n/index.js';
@@ -118,11 +119,12 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
 
   // 各分节并发跑,再按固定顺序组装。三项联网检查(registry 8s、端点 8s、
   // MCP 15s)串起来就是半分钟起步的干等,而它们之间毫无依赖。
-  const [envC, configC, providerC, searchC, mcpC, sessionsC, workspaceC] = await Promise.all([
+  const [envC, configC, providerC, searchC, lspC, mcpC, sessionsC, workspaceC] = await Promise.all([
     envChecks({ version, offline, fetchImpl: input.fetchImpl }),
     configChecks(input),
     config ? providerChecks(config, env, offline, input.fetchImpl) : undefined,
     config ? searchChecks(config, env, offline, input.fetchImpl) : undefined,
+    config ? lspChecks(config, env) : undefined,
     config ? mcpChecks(config, offline, input.mcpStatuses) : undefined,
     sessionChecks(input.sessionsDir ?? defaultSessionsDir(), config),
     workspaceChecks(input.root),
@@ -132,10 +134,11 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
     { id: 'env', title: t('doctor.section.env'), checks: envC },
     { id: 'config', title: t('doctor.section.config'), checks: configC },
   ];
-  if (config && providerC && searchC && mcpC) {
+  if (config && providerC && searchC && lspC && mcpC) {
     sections.push(
       { id: 'provider', title: t('doctor.section.provider'), checks: providerC },
       { id: 'search', title: t('doctor.section.search'), checks: searchC },
+      { id: 'lsp', title: t('doctor.section.lsp'), checks: lspC },
       { id: 'permissions', title: t('doctor.section.permissions'), checks: permissionChecks(config) },
       { id: 'mcp', title: t('doctor.section.mcp'), checks: mcpC },
     );
@@ -542,6 +545,45 @@ function searchKeyEnvNames(config: Config, backendId: string): string[] {
   return [...new Set(names)];
 }
 
+/**
+ * LSP 分节:列出合并后(内置 + 用户配置)的每个服务器,报告命令在不在 PATH 上。
+ * 只查存在性,不真的拉起服务器——与 MCP 分节不重连的理由相同,doctor 不该
+ * 有副作用。内置服务器缺席是常态(装了就用的可选增强),报 info;用户显式
+ * 配置的条目缺命令则值得一条 warn,那多半是笔误或忘了装。
+ */
+async function lspChecks(config: Config, env: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+  if (!config.lsp.enabled) {
+    return [
+      { id: 'lspStatus', label: t('doctor.check.lsp'), level: 'info', detail: t('doctor.lspDisabled') },
+    ];
+  }
+  const defs = resolveLspServers(config.lsp);
+  if (defs.length === 0) {
+    return [
+      { id: 'lspStatus', label: t('doctor.check.lsp'), level: 'info', detail: t('doctor.lspNone') },
+    ];
+  }
+  return Promise.all(
+    defs.map(async (def): Promise<DoctorCheck> => {
+      const found = await findCommand(def.command, env);
+      const exts = def.extensions.join(' ');
+      if (found) {
+        return { id: `lsp:${def.id}`, label: def.id, level: 'ok', detail: `${found} · ${exts}` };
+      }
+      const userConfigured = config.lsp.servers[def.id]?.command !== undefined;
+      return {
+        id: `lsp:${def.id}`,
+        label: def.id,
+        level: userConfigured ? 'warn' : 'info',
+        detail: `${def.command} · ${t('doctor.lspNotFound')}`,
+        ...(userConfigured
+          ? { hint: t('doctor.lspNotFoundHint', { command: def.command, id: def.id }) }
+          : {}),
+      };
+    }),
+  );
+}
+
 function permissionChecks(config: Config): DoctorCheck[] {
   const perms = { sandbox: config.sandbox, approval: config.approval };
   const dangerous = config.sandbox === 'danger-full-access';
@@ -759,6 +801,40 @@ function formatBytes(bytes: number): string {
 async function fileExists(file: string): Promise<boolean> {
   try {
     await fs.stat(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 在 PATH 上找可执行命令,返回解析出的完整路径。带路径分隔符的命令按原路径
+ * 检查。Windows 上按 PATHEXT 逐扩展名尝试(裸名优先,shell 习惯如此)。
+ */
+async function findCommand(command: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const suffixes =
+    process.platform === 'win32'
+      ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)]
+      : [''];
+  const candidates = command.includes('/') || command.includes(path.sep)
+    ? [command]
+    : (env.PATH ?? '')
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((dir) => path.join(dir, command));
+  for (const candidate of candidates) {
+    for (const suffix of suffixes) {
+      if (await isExecutableFile(candidate + suffix)) return candidate + suffix;
+    }
+  }
+  return undefined;
+}
+
+async function isExecutableFile(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (!stat.isFile()) return false;
+    await fs.access(file, fsConstants.X_OK);
     return true;
   } catch {
     return false;

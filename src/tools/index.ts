@@ -45,11 +45,15 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
       return t('sum.read', { shown: String(o.shownLines), total: String(o.totalLines) });
     case 'write':
       if (o.changed === false) return t('sum.writeUnchanged');
-      return t(o.created ? 'sum.writeCreated' : 'sum.writeWritten', { lines: Number(o.lines) });
+      return withDiagnostics(
+        t(o.created ? 'sum.writeCreated' : 'sum.writeWritten', { lines: Number(o.lines) }),
+        o,
+      );
     case 'edit':
-      return o.replacements === 1
-        ? t('sum.editOne')
-        : t('sum.editMany', { n: Number(o.replacements) });
+      return withDiagnostics(
+        o.replacements === 1 ? t('sum.editOne') : t('sum.editMany', { n: Number(o.replacements) }),
+        o,
+      );
     case 'glob':
       return t(o.truncated ? 'sum.globTruncated' : 'sum.globFiles', { n: Number(o.count) });
     case 'grep':
@@ -81,6 +85,17 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
     default:
       return t('sum.done');
   }
+}
+
+/** write/edit 结果带 LSP 诊断时,在摘要后追加错误/警告数,一眼看出改坏了。 */
+function withDiagnostics(base: string, o: Record<string, unknown>): string {
+  const diag = o.diagnostics as { errors?: number; warnings?: number } | undefined;
+  if (!diag) return base;
+  const errors = Number(diag.errors ?? 0);
+  const warnings = Number(diag.warnings ?? 0);
+  if (errors > 0) return `${base} · ${t('sum.lspErrors', { n: errors })}`;
+  if (warnings > 0) return `${base} · ${t('sum.lspWarnings', { n: warnings })}`;
+  return base;
 }
 
 function formatMs(ms: number): string {

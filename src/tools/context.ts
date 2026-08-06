@@ -2,6 +2,7 @@ import type { PermissionGate } from '../permissions/gate.js';
 import type { EventBus } from '../core/events.js';
 import type { Permissions, PermissionRules } from '../config/schema.js';
 import type { ResolvedSearchBackend } from '../config/search.js';
+import type { LspManager } from '../lsp/manager.js';
 
 /** 所有内置工具共享的状态。通过闭包传递,而非 AI SDK 的 context。 */
 export interface ToolContext {
@@ -11,6 +12,8 @@ export interface ToolContext {
   rules: PermissionRules;
   /** 本会话中 agent 已读取过的文件——`edit` 拒绝修改未读过的文件。 */
   readFiles: Set<string>;
+  /** LSP 诊断管理器;`lsp.enabled: false` 时为 undefined。write/edit 成功后回喂诊断。 */
+  lsp?: LspManager;
   /**
    * web_search 的后端。惰性 getter 而非解析好的对象:config 会被
    * switchProvider/applyPermissions 就地修改,现取现算才不会拿到旧值

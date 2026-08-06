@@ -258,6 +258,45 @@ DuckDuckGo MCP server——MCP 工具与内置工具走同一套权限门：
 > 代理提示：Node 的原生 fetch 不读 `HTTP_PROXY`/`HTTPS_PROXY`。需要走代理访问 Exa 时，
 > 可设 `NODE_USE_ENV_PROXY=1`（Node 24+），或直接换 `glm` 后端（国内直连）。
 
+### LSP 诊断回喂
+
+agent 每次 `write`/`edit` 成功后，mojocode 会把文件交给对应语言的 LSP 服务器，
+将**错误与警告**（不含 info/hint）随工具结果一并回喂给模型——改坏了当场就知道，
+不用等到跑 `tsc`/测试才发现。工具卡片的摘要也会带上错误数（如 `1 处替换 · 2 个 LSP 错误`）。
+
+内置识别四个服务器，**装了就用，没装就静默跳过**（绝不自动下载，也绝不因此报错）：
+
+| 语言 | 命令 | 安装 |
+|---|---|---|
+| TypeScript / JavaScript | `typescript-language-server` | `npm i -g typescript-language-server typescript@5`（工作区 node_modules 里有 typescript@5 也行；注意 tsls 尚不支持 typescript@7） |
+| Python | `pyright-langserver` | `npm i -g pyright` |
+| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer` |
+
+服务器按需惰性拉起（首次检查多付一次握手时间），拉不起来的本会话不再重试。
+`lsp` 配置节：
+
+```json
+{
+  "lsp": {
+    "enabled": true,
+    "timeoutMs": 3000,
+    "servers": {
+      "typescript": { "enabled": false },
+      "clangd": { "command": "clangd", "extensions": [".c", ".cc", ".cpp", ".h"] }
+    }
+  }
+}
+```
+
+`enabled: false` 整体关闭；`timeoutMs` 是单次等诊断的时长（超时不打扰模型，宁缺毋滥）；
+`servers` 里内置 id（`typescript` / `pyright` / `gopls` / `rust-analyzer`）只需写要覆盖的
+字段，自定义条目至少要 `command` 和 `extensions`。全局与项目配置按服务器 id 合并。
+
+`mojocode doctor` 有独立的「LSP 诊断」分节：逐个列出合并后的服务器，报告命令
+在不在 PATH 上（只查存在性，不真的拉起）。内置服务器缺席报 info——没装是常态；
+用户显式配置的条目找不到命令才告警。
+
 ### 界面语言
 
 界面内置英文和简体中文。解析顺序：配置 `language` → `MOJOCODE_LANG` → 系统 `LANG`/`LC_ALL`

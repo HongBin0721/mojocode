@@ -108,12 +108,15 @@ export function createFileTools(ctx: ToolContext) {
       await fs.writeFile(resolved.absolute, content, 'utf8');
       ctx.readFiles.add(resolved.absolute);
 
+      // 写盘之后才检查:诊断永远描述已落地的内容,失败也只是拿不到诊断。
+      const diagnostics = await ctx.lsp?.check(resolved.absolute, content);
       return {
         path: resolved.relative,
         changed: true,
         created: !existed,
         bytes: Buffer.byteLength(content, 'utf8'),
         lines: content.split('\n').length,
+        ...(diagnostics ? { diagnostics } : {}),
       };
     },
   });
@@ -165,10 +168,12 @@ export function createFileTools(ctx: ToolContext) {
       await ctx.gate.checkWrite(resolved.relative, diff);
       await fs.writeFile(resolved.absolute, after, 'utf8');
 
+      const diagnostics = await ctx.lsp?.check(resolved.absolute, after);
       return {
         path: resolved.relative,
         replacements: replaceAll ? occurrences : 1,
         diff,
+        ...(diagnostics ? { diagnostics } : {}),
       };
     },
   });

@@ -407,3 +407,61 @@ describe('联网搜索分节', () => {
     expect(find(auth, 'searchEndpoint')?.level).toBe('fail');
   });
 });
+
+describe('LSP 分节', () => {
+  it('列出合并后的每个服务器;PATH 上没有 → 内置报 info', async () => {
+    const report = await collectDoctor(input()); // env 里没有 PATH,谁都找不到
+    const section = report.sections.find((s) => s.id === 'lsp');
+    expect(section).toBeDefined();
+    expect(section!.checks.map((c) => c.id).sort()).toEqual([
+      'lsp:gopls',
+      'lsp:pyright',
+      'lsp:rust-analyzer',
+      'lsp:typescript',
+    ]);
+    const ts = find(report, 'lsp:typescript');
+    expect(ts?.level).toBe('info'); // 内置服务器缺席是常态,不该告警
+    expect(ts?.detail).toContain('typescript-language-server');
+    expect(ts?.detail).toContain('not installed');
+  });
+
+  it('命令在 PATH 上时报 ok 并给出解析路径与扩展名', async () => {
+    // 造一个真实可执行文件当命令(node 自己就是现成的可执行文件)。
+    const binDir = path.join(dir, 'bin');
+    await fs.mkdir(binDir, { recursive: true });
+    const fakeBin = path.join(binDir, 'gopls');
+    await fs.writeFile(fakeBin, '#!/bin/sh\n', { mode: 0o755 });
+    const report = await collectDoctor(
+      input({ env: { DEEPSEEK_API_KEY: 'sk-x', PATH: binDir } }),
+    );
+    const gopls = find(report, 'lsp:gopls');
+    expect(gopls?.level).toBe('ok');
+    expect(gopls?.detail).toContain(fakeBin);
+    expect(gopls?.detail).toContain('.go');
+  });
+
+  it('用户显式配置的命令缺失 → warn 带修复提示;enabled:false 的条目不出现', async () => {
+    const config = configSchema.parse({
+      provider: 'deepseek',
+      lsp: {
+        servers: {
+          clangd: { command: 'clangd-definitely-missing', extensions: ['.c'] },
+          typescript: { enabled: false },
+        },
+      },
+    });
+    const report = await collectDoctor(input({ config }));
+    const clangd = find(report, 'lsp:clangd');
+    expect(clangd?.level).toBe('warn');
+    expect(clangd?.hint).toContain('lsp.servers.clangd');
+    expect(find(report, 'lsp:typescript')).toBeUndefined();
+  });
+
+  it('lsp.enabled: false → 单条 info,不逐个列服务器', async () => {
+    const config = configSchema.parse({ provider: 'deepseek', lsp: { enabled: false } });
+    const report = await collectDoctor(input({ config }));
+    expect(find(report, 'lspStatus')?.level).toBe('info');
+    expect(find(report, 'lspStatus')?.detail).toContain('lsp.enabled: false');
+    expect(find(report, 'lsp:typescript')).toBeUndefined();
+  });
+});

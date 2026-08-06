@@ -15,6 +15,7 @@ import { createModel } from '../model/registry.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
 import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
+import { LspManager } from '../lsp/manager.js';
 import { createBuiltinTools, TodoStore } from '../tools/index.js';
 import { SessionStore, type SessionState } from '../session/store.js';
 import { t } from '../i18n/index.js';
@@ -151,12 +152,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    */
   let permsPromoted = false;
 
+  // 诊断回喂:惰性拉起 LSP 服务器,write/edit 后把错误/警告随工具结果给模型。
+  const lsp = config.lsp.enabled ? new LspManager(root, config.lsp) : undefined;
+
   const toolContext = {
     root,
     gate,
     bus,
     rules: config.permissions,
     readFiles: new Set<string>(),
+    lsp,
     // 惰性 getter,理由同下方 GoalController 的 evaluatorModel:config 会被
     // switchProvider/applyPermissions 就地修改,现取现算才拿到当下的值。
     searchBackend: () => resolveSearchBackend(config, process.env),
@@ -373,7 +378,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
     dispose: async () => {
       goal.dispose();
-      await Promise.all(mcp.connections.map((c) => c.close()));
+      await Promise.all([...mcp.connections.map((c) => c.close()), lsp?.dispose()]);
     },
   };
 }

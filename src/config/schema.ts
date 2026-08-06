@@ -229,6 +229,37 @@ export const searchLayerSchema = z.object({
   ...searchConfigShape,
 });
 
+/**
+ * 单个 LSP 服务器条目。内置 id(typescript / pyright / gopls / rust-analyzer)
+ * 只需写想覆盖的字段;自定义条目至少要 command 和 extensions,缺了会被
+ * 静默忽略(见 LspManager.resolveDefs)。
+ */
+export const lspServerConfigSchema = z.object({
+  command: z.string().optional(),
+  args: z.array(z.string()).optional(),
+  /** 该服务器接管的文件扩展名,含点(".ts")。覆盖内置条目时整组替换。 */
+  extensions: z.array(z.string()).optional(),
+  /** false 时禁用该服务器(含内置条目)。 */
+  enabled: z.boolean().optional(),
+});
+export type LspServerConfig = z.infer<typeof lspServerConfigSchema>;
+
+export const lspConfigSchema = z.object({
+  /** write/edit 后把 LSP 诊断回喂给模型。服务器没装时静默跳过,不算失败。 */
+  enabled: z.boolean().default(true),
+  /** 单次等 publishDiagnostics 的毫秒数;首次调用另有握手时间(内部上限)。 */
+  timeoutMs: z.number().int().positive().default(3000),
+  servers: z.record(z.string(), lspServerConfigSchema).default({}),
+});
+export type LspConfig = z.infer<typeof lspConfigSchema>;
+
+/** 分层文件用的无默认版本,理由同 searchLayerSchema。 */
+export const lspLayerSchema = z.object({
+  enabled: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  servers: z.record(z.string(), lspServerConfigSchema).optional(),
+});
+
 export const configSchema = z.object({
   /** 当前激活的 provider id——内置预设或 `providers` 中的键。 */
   provider: z.string().default('deepseek'),
@@ -250,6 +281,8 @@ export const configSchema = z.object({
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   /** web_search 的后端与凭据,见 config/search.ts。 */
   search: searchConfigSchema.default({ backend: 'auto' }),
+  /** LSP 诊断回喂,见 src/lsp/。 */
+  lsp: lspConfigSchema.default({ enabled: true, timeoutMs: 3000, servers: {} }),
   /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
   maxSteps: z.number().int().positive().default(50),
   /**
@@ -289,5 +322,6 @@ export const partialConfigSchema = configSchema.partial().extend({
   // 项目层只写 allowBash 会把全局层的 denyPath 盖成空数组——但那是历史
   // 行为,修它超出本次改动范围。)
   search: searchLayerSchema.optional(),
+  lsp: lspLayerSchema.optional(),
 });
 export type PartialConfig = z.input<typeof partialConfigSchema>;

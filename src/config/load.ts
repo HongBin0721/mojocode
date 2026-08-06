@@ -153,14 +153,30 @@ function envLayer(env: NodeJS.ProcessEnv, warnings: string[]): PartialConfig {
 /**
  * 按键做浅合并,其中 `providers`、`permissions`、`mcpServers` 和 `search` 会
  * 多深入一层合并,这样项目配置可以只新增一个 MCP server 或只改搜索后端,
- * 而不会抹掉全局定义的其他条目。
+ * 而不会抹掉全局定义的其他条目。`lsp` 再多合并一层:`lsp.servers` 按服务器
+ * id 合并,项目层只加一个 gopls 不会抹掉全局层的 pyright 覆盖。
  */
 function mergeLayers(layers: PartialConfig[]): PartialConfig {
   const out: PartialConfig = {};
   for (const layer of layers) {
     for (const [key, value] of Object.entries(layer)) {
       if (value === undefined) continue;
-      if (key === 'providers' || key === 'mcpServers' || key === 'permissions' || key === 'search') {
+      if (key === 'lsp') {
+        const prev = (out.lsp ?? {}) as Record<string, unknown>;
+        const next = value as Record<string, unknown>;
+        out.lsp = {
+          ...prev,
+          ...next,
+          ...(prev.servers || next.servers
+            ? {
+                servers: {
+                  ...(prev.servers as object | undefined),
+                  ...(next.servers as object | undefined),
+                },
+              }
+            : {}),
+        } as PartialConfig['lsp'];
+      } else if (key === 'providers' || key === 'mcpServers' || key === 'permissions' || key === 'search') {
         const prev = (out as Record<string, unknown>)[key];
         (out as Record<string, unknown>)[key] = {
           ...(typeof prev === 'object' && prev !== null ? prev : {}),
