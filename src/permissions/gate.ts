@@ -10,6 +10,7 @@ import type {
 import type { ApprovalPolicy, Permissions, PermissionRules, SandboxMode } from '../config/schema.js';
 import { projectConfigPath, projectDir } from '../config/paths.js';
 import { judgeCommand, ruleToPrefix } from './bash-rules.js';
+import { judgeUrl, resolvesToInternal, suggestNetRule, WEB_SEARCH_RULE } from './net-rules.js';
 import { matchGlob } from './sandbox.js';
 import { t } from '../i18n/index.js';
 
@@ -42,6 +43,7 @@ export interface GateOptions {
 export class PermissionGate {
   private readonly sessionAllowBash: string[] = [];
   private readonly sessionAllowWrite: string[] = [];
+  private readonly sessionAllowNet: string[] = [];
   /** 授权询问的排队链,保证一次只有一个确认框在等用户。见 askSerialized。 */
   private askChain: Promise<void> = Promise.resolve();
   /** 本轮是否已中断。中断后还排在队里的询问一律自动拒绝,见 cancelPending。 */
@@ -227,6 +229,76 @@ export class PermissionGate {
   }
 
   /**
+   * 联网工具(web_search / web_fetch)的门禁。
+   *
+   * 与 checkMcpTool 的两处刻意差异:
+   * 1. **私网硬拒先于一切**,danger-full-access 也不豁免——与 sandbox.ts 的
+   *    路径硬约束同一哲学,模型不该有任何路径去探测内网/云元数据。
+   * 2. **规则放行排在 never 判定之前**——让 approval=never / headless 档可以
+   *    靠配置好的 allowNet 无人值守联网,这是 CI 场景的正门;MCP 工具因为
+   *    完全不透明才被 never 一律拒绝,联网规则有域名粒度,不适用同一条理由。
+   *
+   * 也刻意不调 hardStopReason:plan 模式允许联网调研是产品决策,联网不参与
+   * read-only 的"写不了"语义。
+   */
+  async checkNet(
+    req: { tool: 'web_search'; query: string } | { tool: 'web_fetch'; url: string },
+  ): Promise<void> {
+    const { sandbox, approval } = this.options.permissions;
+    const allowRules = [...this.options.rules.allowNet, ...this.sessionAllowNet];
+
+    let title: string;
+    let detail: string;
+    let suggestedRule: string;
+    if (req.tool === 'web_fetch') {
+      const verdict = judgeUrl(req.url, allowRules);
+      if (verdict.kind === 'invalid' || verdict.kind === 'blocked') {
+        throw new PermissionDeniedError(verdict.reason);
+      }
+      // 字面量过关还不够:公网形状的名字可能解析到内网(nip.io 之类)。
+      // 这一步同样先于 danger-full-access 与 allow 规则——私网是硬线。
+      const internalAddr = await resolvesToInternal(verdict.host);
+      if (internalAddr) {
+        throw new PermissionDeniedError(
+          `Refused: ${verdict.host} resolves to ${internalAddr}, an internal address. ` +
+            'Fetching internal network targets is never allowed. To reach a local server, ' +
+            'use its address directly (e.g. http://localhost:PORT/).',
+        );
+      }
+      if (!this.options.plan && sandbox === 'danger-full-access') return;
+      if (verdict.kind === 'allowed') return;
+      title = t('perm.webFetchTitle', { host: verdict.host });
+      detail = req.url;
+      suggestedRule = verdict.suggestedRule;
+    } else {
+      if (!this.options.plan && sandbox === 'danger-full-access') return;
+      if (allowRules.includes(WEB_SEARCH_RULE)) return;
+      title = t('perm.webSearchTitle', { query: req.query });
+      detail = req.query;
+      suggestedRule = suggestNetRule({ tool: 'web_search' });
+    }
+
+    if (approval === 'never') {
+      throw new PermissionDeniedError(
+        `Cannot access the network: the approval policy is never and this target is not covered ` +
+          `by an allowNet rule. Ask the user to add "${suggestedRule}" to permissions.allowNet.`,
+      );
+    }
+
+    // suggestedRule 不做 read-only/plan 抑制(与 bash/MCP 不同):bash 在只读
+    // 沙箱抑制记忆,是因为那些授权属于"可写语境"的信任;而"信任这个域名"
+    // 与沙箱档位无关,plan 里批过的域名到实现阶段照样应该免打扰。
+    await this.request({
+      id: randomUUID(),
+      toolName: req.tool,
+      title,
+      detail,
+      suggestedRule,
+      risk: 'network',
+    });
+  }
+
+  /**
    * 呈交实现方案等待用户批准(计划模式的出口)。
    *
    * 复用 askSerialized 拿到排队与"轮被中断即自动拒绝"这两件事,但**返回**决定
@@ -310,6 +382,8 @@ export class PermissionGate {
   private remember(risk: PermissionRequest['risk'], rule: string): void {
     if (risk === 'write') {
       if (!this.sessionAllowWrite.includes(rule)) this.sessionAllowWrite.push(rule);
+    } else if (risk === 'network') {
+      if (!this.sessionAllowNet.includes(rule)) this.sessionAllowNet.push(rule);
     } else if (!this.sessionAllowBash.includes(rule)) {
       this.sessionAllowBash.push(rule);
     }
@@ -317,8 +391,12 @@ export class PermissionGate {
   }
 
   /** 导出会话级规则(副本),供写入会话文件后跨恢复还原。 */
-  exportSessionRules(): { allowBash: string[]; allowWrite: string[] } {
-    return { allowBash: [...this.sessionAllowBash], allowWrite: [...this.sessionAllowWrite] };
+  exportSessionRules(): { allowBash: string[]; allowWrite: string[]; allowNet: string[] } {
+    return {
+      allowBash: [...this.sessionAllowBash],
+      allowWrite: [...this.sessionAllowWrite],
+      allowNet: [...this.sessionAllowNet],
+    };
   }
 
   /**
@@ -328,14 +406,18 @@ export class PermissionGate {
    * 允许"的授权不能跟着漂过去——否则下一次 saveState 还会把两者的并集写进
    * 新会话文件,泄漏就永久留存了。
    */
-  setSessionRules(rules: { allowBash: string[]; allowWrite: string[] }): void {
+  setSessionRules(rules: { allowBash: string[]; allowWrite: string[]; allowNet?: string[] }): void {
     this.sessionAllowBash.length = 0;
     this.sessionAllowWrite.length = 0;
+    this.sessionAllowNet.length = 0;
     for (const rule of rules.allowBash) {
       if (!this.sessionAllowBash.includes(rule)) this.sessionAllowBash.push(rule);
     }
     for (const rule of rules.allowWrite) {
       if (!this.sessionAllowWrite.includes(rule)) this.sessionAllowWrite.push(rule);
+    }
+    for (const rule of rules.allowNet ?? []) {
+      if (!this.sessionAllowNet.includes(rule)) this.sessionAllowNet.push(rule);
     }
   }
 
@@ -352,7 +434,7 @@ export class PermissionGate {
     }
 
     const permissions = (existing.permissions ?? {}) as Record<string, string[]>;
-    const key = risk === 'write' ? 'allowWrite' : 'allowBash';
+    const key = risk === 'write' ? 'allowWrite' : risk === 'network' ? 'allowNet' : 'allowBash';
     const list = Array.isArray(permissions[key]) ? permissions[key] : [];
     if (!list.includes(rule)) list.push(rule);
     permissions[key] = list;
@@ -360,8 +442,10 @@ export class PermissionGate {
 
     await fs.writeFile(file, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
 
-    // 同步更新内存中的规则,避免同一个文件被提示两次。
+    // 同步更新内存中的规则,避免同一个目标被提示两次。allowNet 存整串规则
+    // (WebSearch / WebFetch(domain:x)),不像 bash 那样折算成前缀。
     if (risk === 'write') this.options.rules.allowWrite.push(rule);
+    else if (risk === 'network') this.options.rules.allowNet.push(rule);
     else this.options.rules.allowBash.push(ruleToPrefix(rule));
   }
 }

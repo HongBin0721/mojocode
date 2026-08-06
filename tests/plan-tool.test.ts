@@ -26,7 +26,7 @@ function setup(
     root: '/tmp/does-not-matter',
     permissions,
     plan,
-    rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+    rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
     ask,
     bus,
   });

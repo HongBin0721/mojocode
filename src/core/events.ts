@@ -30,7 +30,12 @@ export interface PermissionRequest {
   detail?: string;
   /** `allow-always` 会添加的规则,例如 `Bash(npm test:*)`。 */
   suggestedRule?: string;
-  risk: 'read' | 'write' | 'execute';
+  /**
+   * `network` 是联网工具(web_search/web_fetch)专用:它决定规则记进哪个桶
+   * (allowNet)。刻意不复用从未启用的 `read`——网络是数据外传通道,不是只读,
+   * 而且 read 的语义要留给将来真正的本地读确认。
+   */
+  risk: 'read' | 'write' | 'execute' | 'network';
 }
 
 /**

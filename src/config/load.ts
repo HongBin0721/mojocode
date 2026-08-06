@@ -5,6 +5,7 @@ import {
   fromLegacyMode,
   partialConfigSchema,
   sandboxModeSchema,
+  searchBackendSchema,
   type Config,
   type PartialConfig,
   type ProviderConfig,
@@ -12,6 +13,7 @@ import {
 } from './schema.js';
 import { globalConfigPath, projectConfigPath } from './paths.js';
 import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider } from './providers.js';
+import { resolveSearchBackend } from './search.js';
 
 export interface LoadOptions {
   /** 工作区根目录,用于定位 `<root>/.mojocode/config.json`。 */
@@ -118,6 +120,11 @@ function envLayer(env: NodeJS.ProcessEnv, warnings: string[]): PartialConfig {
     const parsed = approvalPolicySchema.safeParse(env.MOJOCODE_APPROVAL);
     if (parsed.success) layer.approval = parsed.data;
   }
+  // 搜索 key(MOJOCODE_SEARCH_API_KEY)不进配置层,由 resolveSearchBackend 直接读。
+  if (env.MOJOCODE_SEARCH_BACKEND) {
+    const parsed = searchBackendSchema.safeParse(env.MOJOCODE_SEARCH_BACKEND);
+    if (parsed.success) layer.search = { backend: parsed.data };
+  }
   // 旧环境变量:逐轴填空(理由同 convertLegacyMode——整体映射会静默放宽)。
   if (env.MOJOCODE_PERMISSION_MODE) {
     const mapped = fromLegacyMode(env.MOJOCODE_PERMISSION_MODE);
@@ -144,16 +151,16 @@ function envLayer(env: NodeJS.ProcessEnv, warnings: string[]): PartialConfig {
 }
 
 /**
- * 按键做浅合并,其中 `providers`、`permissions` 和 `mcpServers` 会多深入
- * 一层合并,这样项目配置可以只新增一个 MCP server,而不会抹掉全局定义的
- * 其他条目。
+ * 按键做浅合并,其中 `providers`、`permissions`、`mcpServers` 和 `search` 会
+ * 多深入一层合并,这样项目配置可以只新增一个 MCP server 或只改搜索后端,
+ * 而不会抹掉全局定义的其他条目。
  */
 function mergeLayers(layers: PartialConfig[]): PartialConfig {
   const out: PartialConfig = {};
   for (const layer of layers) {
     for (const [key, value] of Object.entries(layer)) {
       if (value === undefined) continue;
-      if (key === 'providers' || key === 'mcpServers' || key === 'permissions') {
+      if (key === 'providers' || key === 'mcpServers' || key === 'permissions' || key === 'search') {
         const prev = (out as Record<string, unknown>)[key];
         (out as Record<string, unknown>)[key] = {
           ...(typeof prev === 'object' && prev !== null ? prev : {}),
@@ -272,6 +279,27 @@ export async function loadRawConfig(
   const sources: string[] = [];
   if (Object.keys(globalLayer).length > 0) sources.push(globalFile);
   if (Object.keys(projectLayer).length > 0) sources.push(projectFile);
+
+  // 解析不出后端时 web_search 会静默不注册,不提示的话用户只会看到
+  // "模型怎么不搜"。两种情形要分开说,否则提示会指向错误的修法:
+  if (config.search.backend !== 'off' && !resolveSearchBackend(config, env)) {
+    const hasExplicitKey = Boolean(
+      config.search.apiKey ?? config.search.apiKeyEnv ?? env.MOJOCODE_SEARCH_API_KEY,
+    );
+    if (config.search.backend !== 'auto') {
+      warnings.push(
+        `search.backend is "${config.search.backend}" but no usable key/endpoint was found; ` +
+          'web_search will be unavailable. Run `mojocode doctor` for details.',
+      );
+    } else if (hasExplicitKey) {
+      // auto 刻意忽略专用 key(不知道该拿它打哪个端点),但用户配了 key 却
+      // 被告知"没配 key",那是最容易卡住人的一句话。
+      warnings.push(
+        'A dedicated search key is set but search.backend is "auto", which only reads the ' +
+          'per-backend env vars. Set search.backend to glm, exa or custom so the key is used.',
+      );
+    }
+  }
 
   return { config, sources, warnings };
 }

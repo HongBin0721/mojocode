@@ -196,8 +196,10 @@ mojocode -C ~/另一个项目                # 指定工作区目录
   "approval": "untrusted",
   "permissions": {
     "allowBash": ["Bash(npm test:*)", "Bash(git diff:*)"],
-    "allowWrite": ["src/**"]
+    "allowWrite": ["src/**"],
+    "allowNet": ["WebSearch", "WebFetch(domain:*.github.com)"]
   },
+  "search": { "backend": "glm" },
   "mcpServers": {
     "filesystem": {
       "type": "stdio",
@@ -217,6 +219,44 @@ mojocode -C ~/另一个项目                # 指定工作区目录
 |---|---|---|
 | `goalModel` | 会话当前模型 | 判定目标是否达成的模型 id，走当前服务商。判定只读一段抄本、只回两行，换个便宜的小模型能把自动循环的附加成本压到接近零。也可用 `MOJOCODE_GOAL_MODEL` 覆盖 |
 | `goalMaxTurns` | `10` | 一个目标最多自动续跑多少轮（上限 100）。默认给得保守：10 轮无人看管的 agent 轮次在真实代码库上已经是几十万 token |
+
+### 联网搜索
+
+内置 `web_search`（搜索）与 `web_fetch`（抓网页转 Markdown）两个工具。`web_fetch` 零依赖
+随时可用；`web_search` 需要一个搜索后端的 key，没有就不注册（模型不会看到这个工具）。
+
+| 后端 | 端点 | key 环境变量 | 成本 |
+|---|---|---|---|
+| `glm` | 智谱独立搜索 API | `ZHIPU_API_KEY`（与 GLM 大模型同一把 key） | search_std 约 ¥0.01/次 |
+| `exa` | api.exa.ai | `EXA_API_KEY` | 免费 20k 次/月 |
+| `custom` | 自定义（`search.baseURL`） | `search.apiKey` 或 `search.apiKeyEnv` | — |
+
+默认 `search.backend: "auto"`：按 glm → exa 的顺序取第一个能从**预设环境变量**拿到 key
+的后端。**用 GLM 当大模型的用户零配置即可搜索。** 注意 `auto` 刻意忽略 `search.apiKey`
+与 `MOJOCODE_SEARCH_API_KEY`——一把不知道属于谁的 key 拿去打错端点只会得到费解的 401，
+**专用 key 必须配显式 backend**。`"off"` 显式关闭。`search` 节的其余键：`engine`
+（GLM 档位，`search_std`/`search_pro`/…）、`count`（默认返回条数）、`baseURL`（覆盖端点；
+custom 必填，请求/响应契约与 GLM 的 `/paas/v4/web_search` 相同）。
+
+命令行 `--search-backend <id>`，环境变量 `MOJOCODE_SEARCH_BACKEND`。`mojocode doctor`
+有独立的「联网搜索」分节：后端解析、key 来源、端点连通（探测发一次最小真实请求，
+GLM 计费约 ¥0.01）。
+
+**零成本替代：挂免费搜索 MCP。** 不想为搜索配任何 key，可以接一个免费的
+DuckDuckGo MCP server——MCP 工具与内置工具走同一套权限门：
+
+```json
+{
+  "mcpServers": {
+    "ddg": { "type": "stdio", "command": "npx", "args": ["-y", "duckduckgo-mcp-server"] }
+  }
+}
+```
+
+区别：MCP 工具按 `Mcp(工具名)` 逐工具确认，内置 `web_fetch` 按域名确认记忆，两者可共存。
+
+> 代理提示：Node 的原生 fetch 不读 `HTTP_PROXY`/`HTTPS_PROXY`。需要走代理访问 Exa 时，
+> 可设 `NODE_USE_ENV_PROXY=1`（Node 24+），或直接换 `glm` 后端（国内直连）。
 
 ### 界面语言
 
@@ -262,6 +302,14 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 沙箱与计划模式下这类命令（以及可写语境下授权的 allow 规则）一律回到逐次确认。
 `find -exec`、`fd -x`、`git branch <名字>`、`git remote add` 这类「前缀只读、参数写盘」
 的形态同样不免检。
+
+**联网是独立的权限维度**：`web_search`/`web_fetch` 首次访问一个目标会弹确认，
+「本会话总是允许」记为规则——搜索一条总闸 `WebSearch`，抓取按域名
+`WebFetch(domain:example.com)`（`*.example.com` 匹配任意深度子域，不含裸域）。规则可
+持久化进 `permissions.allowNet`，headless/`never` 档靠预先配置的 allowNet 无人值守联网。
+两条硬线不受任何档位影响：私网/链路本地/云元数据地址（`192.168.*`、`169.254.169.254`
+之类）一律拒绝，`danger-full-access` 也不豁免；跨域名重定向会对落点重新走一遍确认。
+计划模式允许联网——调研本来就常要查文档。
 
 **与 Codex 的一处刻意差异**：Codex 的 sandbox 是 OS 内核强制（Seatbelt/Landlock），
 命令真的跑在沙箱里，所以 workspace-write 下任意命令都能放行。mojocode 的约束在权限门

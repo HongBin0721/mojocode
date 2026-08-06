@@ -24,6 +24,8 @@ export interface SessionState {
   /** 原始规则串,如 `Bash(npm test:*)`、`Mcp(name)`。 */
   allowBash: string[];
   allowWrite: string[];
+  /** 联网规则串(`WebSearch` / `WebFetch(domain:x)`)。可选:旧会话文件没有此字段。 */
+  allowNet?: string[];
   sandbox?: SandboxMode;
   approval?: ApprovalPolicy;
   /** 旧版单轴字段。只在恢复旧会话文件时读取,转换见 resume.ts,不再写入。 */

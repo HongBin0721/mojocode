@@ -3,6 +3,7 @@ import { t } from '../i18n/index.js';
 import { createFileTools } from './files.js';
 import { createSearchTools } from './search.js';
 import { createBashTool } from './bash.js';
+import { createWebTools } from './web.js';
 import { createTodoTool, TodoStore } from './todo.js';
 import { createExitPlanTool } from './plan.js';
 import type { ToolContext } from './context.js';
@@ -22,6 +23,8 @@ export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet 
     glob: search.glob,
     grep: search.grep,
     bash: createBashTool(ctx),
+    // web_fetch 恒在;web_search 仅在解析出搜索后端(有 key)时注册。
+    ...createWebTools(ctx),
     todo: createTodoTool(todos),
     exit_plan: createExitPlanTool(ctx),
   };
@@ -56,6 +59,18 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
     case 'bash':
       if (o.timedOut) return t('sum.bashTimeout');
       return t('sum.bashExit', { code: String(o.exitCode), time: formatMs(Number(o.durationMs)) });
+    // query/URL 不进摘要,理由同 read:工具行的 `Web Search(query)` 已经写着它。
+    case 'web_search':
+      if (o.timedOut) return t('sum.webTimeout');
+      if (o.count === 0) return t('sum.webSearchEmpty');
+      return t('sum.webSearch', { n: Number(o.count), backend: String(o.backend) });
+    case 'web_fetch':
+      if (o.timedOut) return t('sum.webTimeout');
+      if (o.unsupported) return t('sum.webFetchUnsupported');
+      if (typeof o.status === 'number' && o.status >= 400) {
+        return t('sum.webFetchStatus', { status: String(o.status) });
+      }
+      return t('sum.webFetch', { chars: String((o.content as string | undefined)?.length ?? 0) });
     case 'todo':
       return t('sum.todo', { done: Number(o.completed), total: Number(o.total) });
     case 'exit_plan':

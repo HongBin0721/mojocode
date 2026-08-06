@@ -12,6 +12,7 @@ import {
   approvalPolicySchema,
   presetById,
   sandboxModeSchema,
+  searchBackendSchema,
   type PartialConfig,
   type Permissions,
 } from './config/schema.js';
@@ -38,6 +39,7 @@ interface GlobalFlags {
   maxContext?: string;
   maxSteps?: string;
   noMcp?: boolean;
+  searchBackend?: string;
 }
 
 /** 根命令特有的 flags(`-p`、会话恢复相关)。 */
@@ -89,6 +91,15 @@ function overridesFromFlags(flags: GlobalFlags): PartialConfig {
   if (flags.plan) overrides.plan = true;
   if (flags.maxContext) overrides.maxContext = Number(flags.maxContext);
   if (flags.maxSteps) overrides.maxSteps = Number(flags.maxSteps);
+  if (flags.searchBackend) {
+    const parsed = searchBackendSchema.safeParse(flags.searchBackend);
+    if (!parsed.success) {
+      throw new ConfigError(
+        `Invalid --search-backend "${flags.searchBackend}". Valid: ${searchBackendSchema.options.join(', ')}`,
+      );
+    }
+    overrides.search = { backend: parsed.data };
+  }
   return overrides;
 }
 
@@ -130,6 +141,7 @@ program
   .option('--max-context <tokens>', t('cli.opt.maxContext'))
   .option('--max-steps <n>', t('cli.opt.maxSteps'))
   .option('--no-mcp', t('cli.opt.noMcp'))
+  .option('--search-backend <id>', t('cli.opt.searchBackend'))
   .option('-r, --resume [sessionId]', t('cli.opt.resume'))
   .option('-c, --continue', t('cli.opt.continue'))
   .option('--fork-session', t('cli.opt.forkSession'))
@@ -256,13 +268,7 @@ program
       const loaded = await loadConfig({ root });
       showWarnings(loaded.warnings);
       process.stdout.write(`${t('cli.sources', { list: loaded.sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
-      process.stdout.write(
-        `${JSON.stringify(
-          { ...loaded.config, providers: redactKeys(loaded.config.providers) },
-          null,
-          2,
-        )}\n`,
-      );
+      process.stdout.write(`${JSON.stringify(redactConfig(loaded.config), null, 2)}\n`);
     } catch (error) {
       // 缺少 API key 不能阻止 `config` 展示配置——
       // 看到配置通常是修复 key 的第一步。
@@ -271,9 +277,7 @@ program
         const { config, sources, warnings } = await loadRawConfig({ root });
         showWarnings(warnings);
         process.stdout.write(`${t('cli.sources', { list: sources.join(', ') || t('cli.defaultsOnly') })}\n\n`);
-        process.stdout.write(
-          `${JSON.stringify({ ...config, providers: redactKeys(config.providers) }, null, 2)}\n`,
-        );
+        process.stdout.write(`${JSON.stringify(redactConfig(config), null, 2)}\n`);
         return;
       }
       fail(error);
@@ -507,6 +511,17 @@ function redactKeys(providers: Record<string, { apiKey?: string }>): unknown {
       value.apiKey ? { ...value, apiKey: '***' } : value,
     ]),
   );
+}
+
+/** `mojocode config` 输出前打码所有落盘的 key:providers.*.apiKey 与 search.apiKey。 */
+function redactConfig<T extends { providers: Record<string, { apiKey?: string }>; search: { apiKey?: string } }>(
+  config: T,
+): unknown {
+  return {
+    ...config,
+    providers: redactKeys(config.providers),
+    search: config.search.apiKey ? { ...config.search, apiKey: '***' } : config.search,
+  };
 }
 
 function fail(error: unknown): void {

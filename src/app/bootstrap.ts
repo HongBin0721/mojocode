@@ -3,6 +3,7 @@ import { Agent } from '../agent/loop.js';
 import { GoalController } from '../agent/goal.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
+import { resolveSearchBackend } from '../config/search.js';
 import {
   isEphemeralPermissions,
   planReturnFor,
@@ -102,9 +103,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     const perms: Permissions = { sandbox: config.sandbox, approval: config.approval };
     const omit = isEphemeralPermissions(perms) || permsPromoted;
     const activeGoal = goal.state;
+    // allowNet 与 goal 同一手法:空时整个字段不出现,老会话的状态记录
+    // JSON 保持一字不差,脏检查不会平白多写一条记录。
+    const { allowNet, ...sessionRules } = gate.exportSessionRules();
     return {
       todos: todos.get(),
-      ...gate.exportSessionRules(),
+      ...sessionRules,
+      ...(allowNet.length > 0 ? { allowNet } : {}),
       ...(omit ? {} : { sandbox: perms.sandbox, approval: perms.approval }),
       // 无目标时整个字段不出现:JSON.stringify 的结果与加这个功能之前一字
       // 不差,saveState 的脏检查因此不会为老会话平白多写一条 state 记录。
@@ -152,6 +157,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     bus,
     rules: config.permissions,
     readFiles: new Set<string>(),
+    // 惰性 getter,理由同下方 GoalController 的 evaluatorModel:config 会被
+    // switchProvider/applyPermissions 就地修改,现取现算才拿到当下的值。
+    searchBackend: () => resolveSearchBackend(config, process.env),
     // applyPermissions 在下方才定义,但这个回调要到工具执行时才被调用,那时
     // 早已就绪——与上面 snapshotState 闭包 gate/store 是同一手法。
     exitPlanMode: (): Permissions => {
@@ -172,6 +180,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     ...createBuiltinTools(toolContext, todos),
     ...bridgeMcpTools(mcp.connections, gate),
   };
+  // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
+  const webSearchAvailable = 'web_search' in tools;
 
   // 可变:newSession/resumeSession 会把它换掉,onHistoryChange 始终写当前这个。
   let store: SessionStore;
@@ -190,7 +200,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     config,
     systemPrompt: buildSystemPrompt(
       env,
-      { permissions: { sandbox: config.sandbox, approval: config.approval }, plan: config.plan },
+      {
+        permissions: { sandbox: config.sandbox, approval: config.approval },
+        plan: config.plan,
+        webSearch: webSearchAvailable,
+      },
       config.systemPromptAppend,
     ),
     tools,
@@ -265,7 +279,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     gate.setPermissions(permissions);
     gate.setPlanMode(opts.plan);
     agent.updateSystemPrompt(
-      buildSystemPrompt(env, { permissions, plan: opts.plan }, config.systemPromptAppend),
+      buildSystemPrompt(
+        env,
+        { permissions, plan: opts.plan, webSearch: webSearchAvailable },
+        config.systemPromptAppend,
+      ),
     );
     persistState();
     // 权限也可能由 exit_plan 在工具侧切换,渲染层只能靠这条事件跟上。
@@ -344,7 +362,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       agent.updateSystemPrompt(
         buildSystemPrompt(
           env,
-          { permissions: { sandbox: config.sandbox, approval: config.approval }, plan: config.plan },
+          {
+            permissions: { sandbox: config.sandbox, approval: config.approval },
+            plan: config.plan,
+            webSearch: webSearchAvailable,
+          },
           config.systemPromptAppend,
         ),
       );

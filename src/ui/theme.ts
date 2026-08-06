@@ -71,6 +71,8 @@ const TOOL_LABELS: Record<string, string> = {
   glob: 'Glob',
   grep: 'Grep',
   bash: 'Bash',
+  web_search: 'Web Search',
+  web_fetch: 'Fetch',
   // 名字里就带上动作:它不带参数,紧随其后的是整份清单。
   todo: 'Update Todos',
   exit_plan: 'Plan',
@@ -172,6 +174,10 @@ export function formatToolInput(toolName: string, input: unknown): string {
       return `${String(i.pattern ?? '')}${i.include ? ` · ${String(i.include)}` : ''}`;
     case 'bash':
       return String(i.command ?? '');
+    case 'web_search':
+      return String(i.query ?? '');
+    case 'web_fetch':
+      return String(i.url ?? '');
     // 不带参数:任务数在紧随其后的清单里一目了然,写进括号只是重复。
     case 'todo':
       return '';

@@ -346,3 +346,64 @@ describe('formatDoctor', () => {
     expect(hintLine.indexOf('→')).toBe(lines[keyLine]!.indexOf('not configured'));
   });
 });
+
+describe('联网搜索分节', () => {
+  const registry = 'https://registry.npmjs.org/';
+  const glmSearch = 'https://open.bigmodel.cn/api/paas/v4/web_search';
+
+  it('无任何搜索 key:info 陈述,不计入告警', async () => {
+    const report = await collectDoctor(input());
+    const backend = find(report, 'searchBackend');
+    expect(backend?.level).toBe('info');
+    expect(report.sections.some((s) => s.id === 'search')).toBe(true);
+  });
+
+  it('auto 解析出 glm:offline 下端点探测标记跳过', async () => {
+    const report = await collectDoctor(
+      input({ env: { DEEPSEEK_API_KEY: 'sk-x', ZHIPU_API_KEY: 'glm-key-123456' } }),
+    );
+    expect(find(report, 'searchBackend')?.level).toBe('ok');
+    expect(find(report, 'searchBackend')?.detail).toContain('glm');
+    expect(find(report, 'searchKey')?.detail).toContain('ZHIPU_API_KEY');
+    expect(find(report, 'searchEndpoint')?.level).toBe('info');
+  });
+
+  it('显式后端缺 key:warn 并提示环境变量', async () => {
+    const report = await collectDoctor(
+      input({
+        config: configSchema.parse({ provider: 'deepseek', search: { backend: 'exa' } }),
+      }),
+    );
+    const backend = find(report, 'searchBackend');
+    expect(backend?.level).toBe('warn');
+    expect(backend?.hint).toContain('EXA_API_KEY');
+  });
+
+  it('端点探测:200 → ok,401 → fail 且提示 key', async () => {
+    const ok = await collectDoctor(
+      input({
+        offline: false,
+        env: { DEEPSEEK_API_KEY: 'sk-x', ZHIPU_API_KEY: 'glm-key-123456' },
+        fetchImpl: fakeFetch({
+          [registry]: { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'deepseek-v4-flash' }] } },
+          [glmSearch]: { status: 200, body: { search_result: [] } },
+        }),
+      }),
+    );
+    expect(find(ok, 'searchEndpoint')?.level).toBe('ok');
+
+    const auth = await collectDoctor(
+      input({
+        offline: false,
+        env: { DEEPSEEK_API_KEY: 'sk-x', ZHIPU_API_KEY: 'glm-key-123456' },
+        fetchImpl: fakeFetch({
+          [registry]: { status: 200, body: { version: '1.0.0' } },
+          'https://api.deepseek.com': { status: 200, body: { data: [{ id: 'deepseek-v4-flash' }] } },
+          [glmSearch]: { status: 401 },
+        }),
+      }),
+    );
+    expect(find(auth, 'searchEndpoint')?.level).toBe('fail');
+  });
+});

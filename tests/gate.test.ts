@@ -17,7 +17,7 @@ function makeGate(
     root: '/tmp/does-not-matter',
     permissions,
     plan,
-    rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+    rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
     ask,
     bus: new EventBus(),
   });
@@ -179,7 +179,7 @@ describe('plan 模式', () => {
       root: '/tmp/does-not-matter',
       permissions: presetById('ask'),
       plan: true,
-      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
       ask: async () => ({ type: 'allow' }),
       bus,
     });
@@ -208,7 +208,7 @@ describe('plan 模式', () => {
       root: '/tmp/does-not-matter',
       permissions: presetById('ask'),
       plan: true,
-      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
       ask: async (req) => {
         asked.push(req);
         return { type: 'allow' };
@@ -248,6 +248,7 @@ describe('会话规则导出/导入(跨恢复还原)', () => {
     expect(restored.gate.exportSessionRules()).toEqual({
       allowBash: ['Bash(npm install:*)'],
       allowWrite: ['src/**'],
+      allowNet: [],
     });
   });
 
@@ -258,7 +259,11 @@ describe('会话规则导出/导入(跨恢复还原)', () => {
 
     // /resume 切到另一个会话:它自己的规则完全取代前一段的。
     gate.setSessionRules({ allowBash: ['Bash(git:*)'], allowWrite: [] });
-    expect(gate.exportSessionRules()).toEqual({ allowBash: ['Bash(git:*)'], allowWrite: [] });
+    expect(gate.exportSessionRules()).toEqual({
+      allowBash: ['Bash(git:*)'],
+      allowWrite: [],
+      allowNet: [],
+    });
 
     // 上一段批准过的命令必须重新询问,否则授权跨会话泄漏。
     ask.mockClear();
@@ -272,7 +277,7 @@ describe('会话规则导出/导入(跨恢复还原)', () => {
       root: '/tmp/does-not-matter',
       permissions: presetById('ask'),
       plan: false,
-      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
       ask: async () => ({ type: 'allow-always', rule: 'src/**' }),
       bus: new EventBus(),
       onRulesChanged,
@@ -298,7 +303,7 @@ describe('并行工具调用的授权排队', () => {
       root: '/tmp/does-not-matter',
       permissions: presetById('ask'),
       plan: false,
-      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [] },
+      rules: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
       ask: async (req) => {
         asked.push(req);
         return new Promise<PermissionDecision>((resolve) => resolvers.push(resolve));
@@ -436,7 +441,7 @@ describe('只读语境下的项目代码命令', () => {
       root: '/tmp/does-not-matter',
       permissions: presetById('read-only'),
       plan: false,
-      rules: { allowBash: ['Bash(npm install:*)'], denyBash: [], allowWrite: [], denyPath: [] },
+      rules: { allowBash: ['Bash(npm install:*)'], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
       ask: async (req) => {
         asked.push(req);
         return { type: 'allow' };
@@ -445,5 +450,142 @@ describe('只读语境下的项目代码命令', () => {
     });
     await gate.checkBash('npm install lodash', '.');
     expect(asked).toHaveLength(1);
+  });
+});
+
+describe('联网权限(checkNet)', () => {
+  function makeNetGate(
+    permissions: Permissions,
+    opts: { decision?: PermissionDecision; plan?: boolean; allowNet?: string[] } = {},
+  ) {
+    const asked: PermissionRequest[] = [];
+    const ask = vi.fn(async (req: PermissionRequest) => {
+      asked.push(req);
+      return opts.decision ?? ({ type: 'allow' } as PermissionDecision);
+    });
+    const gate = new PermissionGate({
+      root: '/tmp/does-not-matter',
+      permissions,
+      plan: opts.plan ?? false,
+      rules: {
+        allowBash: [],
+        denyBash: [],
+        allowWrite: [],
+        denyPath: [],
+        allowNet: opts.allowNet ?? [],
+      },
+      ask,
+      bus: new EventBus(),
+    });
+    return { gate, ask, asked };
+  }
+
+  it('私网/云元数据硬拒,danger-full-access 也不豁免', async () => {
+    const { gate, ask } = makeNetGate(presetById('full-access'));
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'http://169.254.169.254/latest/meta-data/' }),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'http://192.168.1.1/' }),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('公网形状但解析到内网的域名被硬拒(DNS 层,danger-full-access 不豁免)', async () => {
+    // 真实 DNS:nip.io 把 IP 编进域名,localtest.me 常年指向 127.0.0.1。
+    // 这类名字过得了字面量判断,是绕过私网硬拒最省事的办法。
+    const { gate, ask } = makeNetGate(presetById('full-access'));
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'http://127.0.0.1.nip.io:8080/' }),
+    ).rejects.toThrow(/resolves to .*internal address/);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('非 http(s) URL 直接拒绝', async () => {
+    const { gate, ask } = makeNetGate(presetById('ask'));
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'file:///etc/passwd' }),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('danger-full-access 放行公网目标,不询问', async () => {
+    const { gate, ask } = makeNetGate(presetById('full-access'));
+    await expect(gate.checkNet({ tool: 'web_fetch', url: 'https://example.com/' })).resolves.toBeUndefined();
+    await expect(gate.checkNet({ tool: 'web_search', query: 'anything' })).resolves.toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('ask 预设下弹确认,带 network risk 与建议规则', async () => {
+    const { gate, asked } = makeNetGate(presetById('ask'));
+    await gate.checkNet({ tool: 'web_fetch', url: 'https://docs.foo.dev/guide' });
+    await gate.checkNet({ tool: 'web_search', query: 'zod v4 changes' });
+    expect(asked).toHaveLength(2);
+    expect(asked[0]!.risk).toBe('network');
+    expect(asked[0]!.suggestedRule).toBe('WebFetch(domain:docs.foo.dev)');
+    expect(asked[0]!.detail).toBe('https://docs.foo.dev/guide');
+    expect(asked[1]!.suggestedRule).toBe('WebSearch');
+  });
+
+  it('配置里的 allowNet 规则放行,不询问(域名与 WebSearch 各自独立)', async () => {
+    const { gate, ask } = makeNetGate(presetById('ask'), {
+      allowNet: ['WebFetch(domain:docs.foo.dev)', 'WebSearch'],
+    });
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'https://docs.foo.dev/a/b' }),
+    ).resolves.toBeUndefined();
+    await expect(gate.checkNet({ tool: 'web_search', query: 'q' })).resolves.toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('approval=never:无规则拒绝且指引 allowNet;有规则照常放行', async () => {
+    const denied = makeNetGate({ sandbox: 'workspace-write', approval: 'never' });
+    await expect(
+      denied.gate.checkNet({ tool: 'web_search', query: 'q' }),
+    ).rejects.toThrow(/allowNet/);
+    expect(denied.ask).not.toHaveBeenCalled();
+
+    const allowed = makeNetGate(
+      { sandbox: 'workspace-write', approval: 'never' },
+      { allowNet: ['WebSearch'] },
+    );
+    await expect(allowed.gate.checkNet({ tool: 'web_search', query: 'q' })).resolves.toBeUndefined();
+  });
+
+  it('plan 模式允许联网:走确认而非硬拒;full-access 语义在 plan 下不豁免确认', async () => {
+    const { gate, asked } = makeNetGate(presetById('ask'), { plan: true });
+    await expect(
+      gate.checkNet({ tool: 'web_fetch', url: 'https://example.com/' }),
+    ).resolves.toBeUndefined();
+    expect(asked).toHaveLength(1);
+  });
+
+  it('allow-always 记进 allowNet 桶:同域第二次不再询问,导出可见', async () => {
+    const { gate, ask } = makeNetGate(presetById('ask'), {
+      decision: { type: 'allow-always', rule: 'WebFetch(domain:docs.foo.dev)' },
+    });
+    await gate.checkNet({ tool: 'web_fetch', url: 'https://docs.foo.dev/1' });
+    await gate.checkNet({ tool: 'web_fetch', url: 'https://docs.foo.dev/2' });
+    expect(ask).toHaveBeenCalledOnce();
+    expect(gate.exportSessionRules().allowNet).toEqual(['WebFetch(domain:docs.foo.dev)']);
+    // bash/write 桶不受污染
+    expect(gate.exportSessionRules().allowBash).toEqual([]);
+  });
+
+  it('read-only 沙箱下 suggestedRule 不被抑制(域名信任与沙箱档位无关)', async () => {
+    const { gate, asked } = makeNetGate(presetById('read-only'));
+    await gate.checkNet({ tool: 'web_fetch', url: 'https://example.com/' });
+    expect(asked[0]!.suggestedRule).toBe('WebFetch(domain:example.com)');
+  });
+
+  it('会话规则跨恢复还原:setSessionRules 带 allowNet,旧格式(无 allowNet)也兼容', async () => {
+    const { gate, ask } = makeNetGate(presetById('ask'));
+    gate.setSessionRules({ allowBash: [], allowWrite: [], allowNet: ['WebSearch'] });
+    await expect(gate.checkNet({ tool: 'web_search', query: 'q' })).resolves.toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+
+    // 旧会话文件没有 allowNet 字段:导入后清空,不残留上一段的授权。
+    gate.setSessionRules({ allowBash: [], allowWrite: [] });
+    expect(gate.exportSessionRules().allowNet).toEqual([]);
   });
 });

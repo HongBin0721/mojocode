@@ -183,8 +183,51 @@ export const permissionRulesSchema = z.object({
   allowWrite: z.array(z.string()).default([]),
   /** 永远不允许读或写的 glob。 */
   denyPath: z.array(z.string()).default([]),
+  /**
+   * 无需确认的联网规则:`WebSearch`(放行搜索)或 `WebFetch(domain:example.com)`
+   * (放行抓取某域名,支持 `*.example.com` 通配)。裸域名也接受,视同 WebFetch 规则。
+   * 私网/云元数据地址不受此列表影响——那是硬拒,任何档位都不放行。
+   */
+  allowNet: z.array(z.string()).default([]),
 });
 export type PermissionRules = z.infer<typeof permissionRulesSchema>;
+
+/**
+ * web_search 的后端选择。`auto` 按 glm → exa 的顺序取第一个能从预设环境变量
+ * 拿到 key 的;`off` 给"有 key 但不想让 agent 搜"的人一个显式关闭口。
+ */
+export const searchBackendSchema = z.enum(['auto', 'glm', 'exa', 'custom', 'off']);
+export type SearchBackendId = z.infer<typeof searchBackendSchema>;
+export const SEARCH_BACKENDS = searchBackendSchema.options;
+
+const searchConfigShape = {
+  /** 搜索后端专用的 API key。注意:`auto` 下会被忽略——见 resolveSearchBackend。 */
+  apiKey: z.string().optional(),
+  /** 读取搜索 key 的环境变量名,覆盖预设列表。 */
+  apiKeyEnv: z.string().optional(),
+  /** 覆盖预设端点;`custom` 后端必填(请求/响应契约与 GLM web_search 相同)。 */
+  baseURL: z.url().optional(),
+  /** GLM 的搜索引擎档位(search_std / search_pro / …),仅 glm/custom 后端使用。 */
+  engine: z.string().optional(),
+  /** 每次搜索返回的默认条数。 */
+  count: z.number().int().min(1).max(20).optional(),
+};
+
+export const searchConfigSchema = z.object({
+  backend: searchBackendSchema.default('auto'),
+  ...searchConfigShape,
+});
+export type SearchConfig = z.infer<typeof searchConfigSchema>;
+
+/**
+ * 分层文件用的无默认版本。zod 的 `.partial()` 不摘 `.default()`——项目层只写
+ * engine 时 backend 仍会被填成 'auto',深合并就把全局层显式配的后端抹掉了,
+ * 所以分层 parse 必须用 backend 裸 optional 的 schema。
+ */
+export const searchLayerSchema = z.object({
+  backend: searchBackendSchema.optional(),
+  ...searchConfigShape,
+});
 
 export const configSchema = z.object({
   /** 当前激活的 provider id——内置预设或 `providers` 中的键。 */
@@ -202,8 +245,11 @@ export const configSchema = z.object({
     denyBash: [],
     allowWrite: [],
     denyPath: [],
+    allowNet: [],
   }),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
+  /** web_search 的后端与凭据,见 config/search.ts。 */
+  search: searchConfigSchema.default({ backend: 'auto' }),
   /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
   maxSteps: z.number().int().positive().default(50),
   /**
@@ -238,5 +284,10 @@ export const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 
 /** 与 `Config` 形状相同但所有字段可选——即配置文件里可以写的内容。 */
-export const partialConfigSchema = configSchema.partial();
+export const partialConfigSchema = configSchema.partial().extend({
+  // 见 searchLayerSchema 的注释。(permissions 各字段有同样的既有问题——
+  // 项目层只写 allowBash 会把全局层的 denyPath 盖成空数组——但那是历史
+  // 行为,修它超出本次改动范围。)
+  search: searchLayerSchema.optional(),
+});
 export type PartialConfig = z.input<typeof partialConfigSchema>;
