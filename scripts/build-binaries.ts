@@ -135,6 +135,14 @@ for (const target of selected) {
   produced.push({ target, file: outfile });
 }
 
+// ---- 清扫 Bun 泄漏的编译临时文件 -------------------------------------------
+// `bun build --compile` 每次调用都会在 cwd 留下一个 `.{hash}-00000000.bun-build`
+// (约 60MB,带假 mtime,与产物无关——成品已改名挪进 outfile)。不清的话
+// 一次全平台构建就往仓库根堆 6 个共 ~370MB。已在 .gitignore,此处只管磁盘。
+for (const entry of await fs.readdir(root)) {
+  if (entry.endsWith('.bun-build')) await fs.rm(path.join(root, entry), { force: true });
+}
+
 // ---- 归档 + 校验和 ---------------------------------------------------------
 // 归档内的二进制统一叫 mojocode(.exe),用户解包即用;tar 用 -C 进临时
 // stage 目录取平名,避开 GNU/bsd tar 改名 flag 的差异。
