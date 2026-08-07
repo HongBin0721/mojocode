@@ -14,7 +14,7 @@
  * 预检),等于把整台机器交给任意网页。token 经环境变量传给受管子进程,
  * 不走 argv(ps 可见)。
  *
- * 本模块只依赖 agent 核心与 node:http,无 UI 框架、无 FFI:server 在 Node ≥ 20
+ * 本模块只依赖 agent 核心与 node:http,无 UI 框架、无 FFI:server 在 Node ≥ 22
  * 上照常工作,TUI 的 FFI 运行时门只管 client 进程。
  */
 

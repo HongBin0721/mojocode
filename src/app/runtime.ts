@@ -5,7 +5,7 @@ import { t } from '../i18n/index.js';
 /**
  * TUI 运行时门。OpenTUI 的渲染核心是原生 FFI:Bun 走 `bun:ffi`(一等公民,
  * 单二进制的路径);Node 需要 26.1+ 且开 `--experimental-ffi`。`-p` headless
- * 与全部子命令不经过这里,Node 20 照旧可用——TUI 模块必须保持动态 import,
+ * 与全部子命令不经过这里,Node 22 照旧可用——TUI 模块必须保持动态 import,
  * 这个检查在 import 之前跑。
  */
 export type TuiRuntime =

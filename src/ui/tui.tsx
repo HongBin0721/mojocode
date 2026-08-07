@@ -11,7 +11,7 @@ import type { SessionMeta } from '../session/store.js';
 /**
  * TUI 的动态 import 边界。cli.tsx 只能 `await import('./ui/tui.js')` 进来,
  * 不得静态引用本模块或其下游(kit → @opentui/core 在模块加载期就要拿原生
- * FFI):`-p` headless 与全部子命令必须在 Node 20 上照常工作,detect 与
+ * FFI):`-p` headless 与全部子命令必须在 Node 22 上照常工作,detect 与
  * import 的顺序见 src/app/runtime.ts。
  */
 

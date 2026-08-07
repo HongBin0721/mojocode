@@ -15,10 +15,12 @@
 | 安装方式 | 交互 TUI | `-p` 与子命令 |
 |---|---|---|
 | 单二进制 | ✅ 自带运行时，**完全不需要 Node** | ✅ |
-| npm / 源码 | 需 Node **≥ 26.1**（渲染器原生 FFI，启动时自动补 `--experimental-ffi`） | Node ≥ 20 即可 |
+| npm / 源码 | 需 Node **≥ 26.1**（渲染器原生 FFI，启动时自动补 `--experimental-ffi`） | Node **≥ 22** |
 
-`package.json` 的 `engines` 只写了 `node >= 20`——那是 `-p` 与子命令的下限，装得上不代表 TUI 跑得起来。
-Node 版本不够时直接运行 `mojocode` 不会崩，会打印一行提示让你装单二进制或升级 Node，`-p` 照常可用。
+两个门槛不一样：`engines` 里的 `node >= 22` 是整个 CLI 的硬下限（依赖 execa 10 用到
+`Set.prototype.union`，Node 20 上 import 期直接崩），装得上只代表 `-p` 与子命令能跑；
+TUI 另外需要 26.1+ 的原生 FFI。Node 在 22~25 之间时直接运行 `mojocode` 不会崩，
+会打印一行提示让你装单二进制或升级 Node，`-p` 照常可用。
 
 | 其它依赖 | 要求 | 检查方式 |
 |---|---|---|
@@ -49,12 +51,12 @@ npm install -g mojocode
 ```
 
 ⚠️ npm 只分发 JS 产物，**不含渲染器运行时**：交互 TUI 需要本机 Node ≥ 26.1，
-Node 20~25 上只有 `mojocode -p "..."` 与各子命令可用（CI、脚本场景够用）。
-想在旧 Node 上用 TUI 请改用方式 A。
+Node 22~25 上只有 `mojocode -p "..."` 与各子命令可用（CI、脚本场景够用）。
+Node < 22 装不上（`engines` 挡住）。想在旧 Node 上用 TUI 请改用方式 A。
 
 > 卸载：`npm uninstall -g mojocode`。
 
-**方式 C：从源码（`-p` 需 Node ≥ 20，TUI 需 ≥ 26.1）**
+**方式 C：从源码（`-p` 需 Node ≥ 22，TUI 需 ≥ 26.1）**
 
 ```bash
 cd agent_dev        # 项目目录

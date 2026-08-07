@@ -2,7 +2,7 @@
 
 `mojocode` — a terminal coding agent (full-screen OpenTUI TUI + headless `-p` mode) that
 works with any LLM via the Vercel AI SDK. ESM-only (`"type": "module"`), TypeScript with
-`strict` + `noUncheckedIndexedAccess`. Runtime split: `-p` and subcommands run on Node ≥ 20;
+`strict` + `noUncheckedIndexedAccess`. Runtime split: `-p` and subcommands run on Node ≥ 22;
 the TUI needs native FFI — Bun (primary, single-binary distribution) or Node ≥ 26.1 with
 `--experimental-ffi` (auto re-exec injects the flag).
 
@@ -75,7 +75,7 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
 - `src/session/` — append-only JSONL store; incremental `append` on pure extension, else
   full `snapshot`; `<id>.meta.json` sidecar makes `list()` O(1).
 - `src/server/` + `src/client/` — the client-server split (HTTP + SSE, Bearer-token auth,
-  loopback bind; server is FFI-free and runs on Node ≥ 20).
+  loopback bind; server is FFI-free and runs on Node ≥ 22).
 - `src/ui/` — **SolidJS** (`@opentui/solid`) components; `kit.tsx` is the renderer adapter
   exposing Ink-shaped `Box`/`Text`/`useInput`/`useApp`/`render` — components import kit,
   never `@opentui/*` directly. Solid discipline: never destructure props; derived values

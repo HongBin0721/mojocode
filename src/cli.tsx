@@ -31,7 +31,7 @@ type TuiModule = typeof import('./ui/tui.js');
 
 /**
  * TUI 运行时门 + 懒加载。TUI 模块(→ kit → @opentui/core)在模块加载期就
- * 需要原生 FFI,绝不能静态 import——`-p` 与全部子命令要在 Node 20 上照常
+ * 需要原生 FFI,绝不能静态 import——`-p` 与全部子命令要在 Node 22 上照常
  * 工作。Node ≥26.1 缺 flag 时整个进程带 `--experimental-ffi` 重执行;
  * 跑不了时向 stderr 给指引、置退出码并返回 undefined(调用方直接 return)。
  */
@@ -407,7 +407,7 @@ function serveArgsFrom(flags: MainFlags, root: string, resumeId?: string): strin
  *    环境变量注入,父进程退出(stdin 关闭)即自行收尾;
  *  - 独立运行:打印地址与 token,供 `mojocode --attach <url>` 连接。
  *
- * server 侧无 FFI,Node ≥ 20 即可;TUI 的 FFI 运行时门只管 client 进程。
+ * server 侧无 FFI,Node ≥ 22 即可;TUI 的 FFI 运行时门只管 client 进程。
  */
 async function runServe(opts: { host: string; port: string; managed?: boolean }): Promise<void> {
   // 与 doctor 同一手法:共享 flags 声明在根命令上,从 program.opts() 读,

@@ -12,7 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [20, 24]
+        # 22 是真实下限:execa 10 用了 Set.prototype.union(ES2024,Node 22+),
+        # 在 20 上 import 期就崩——engines 也是 >=22。
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
