@@ -1,6 +1,6 @@
 # 技术栈迁移评估：对齐 opencode 核心栈（Bun + OpenTUI）
 
-> 状态：**评估与规划**，未实施。分支 `spike/bun-opentui-migration`。
+> 状态：**P0 spike 已完成，结论 GO**（见 §6）。分支 `spike/bun-opentui-migration`。
 > 日期：2026-08-07。数据来自本仓库统计与 npm/上游仓库实查，引用处已标注。
 
 ## 0. 目标栈是什么
@@ -200,3 +200,66 @@ src/config、src/session、src/mcp、src/lsp）保持 runtime 与渲染器双重
   resize 简化。这是价值观选择而不是技术优劣:opencode 选了全屏,Claude Code
   默认保 scrollback、全屏可选。若对此仍有犹豫,P0/P1 全部工作在两条路线下
   通用,真正的分叉点在 P2 动工前。
+
+## 6. P0 spike 实测结果（2026-08-07，darwin-arm64 / Bun 1.3.14 / Node 24.18 与 26.7）
+
+**结论：GO。** 四项验证全部通过，且两项发现比预期更有利。
+
+### 6.1 P0-1 Bun 冒烟：通过，无 Bun 特有回归
+
+- `bun dist/cli.js`：--help / doctor 全流程正常——provider HTTP 探测、
+  **gopls LSP 真握手（子进程 spawn，108ms）**、会话存储均工作。
+- `-p` 管道端到端（DeepSeek 真实调用）：stdout/stderr 分流正确，exit 0。
+- TUI 在 PTY 下渲染完整（横幅+输入框），双 ctrl+c 正常退出（Node/Bun 行为一致）。
+- vitest 622 用例：Bun 与 Node 失败集同构（本机全量跑均有超时型 flaky，
+  单独跑同一用例两边一致失败/通过）——**零 Bun 特有失败**。
+
+### 6.2 P0-2 OpenTUI 原型：通过，性能远超需求
+
+- ScrollBox 时间线 + 底部 input：300 条流式追加（20ms/条）elapsed 6.9s
+  ≈ 理论 6s，**无积压**；alternate screen 进出干净（?1049h/l 均确认）。
+- 定量压测（createTestRenderer，追加一条的端到端耗时,含 React reconcile
+  + yoga 布局 + native 渲染）:
+  **N=300: 1.7ms · N=1000: 2.8ms · N=3000: 7.9ms**——线性增长,3000 条
+  仍在 60fps 预算内。**虚拟化从"P2 必做"降级为"5k+ 条的优化项"**
+  (mojocode 有 compaction,实际时间线极少到该量级)。
+- **重大发现:OpenTUI 官方支持 Node runtime**。`@opentui/core` exports 带
+  `node` 条件(index.node.js),原生层走 optionalDependencies 平台包
+  (8 平台齐,含 win32-arm64)。实测 **Node 26.7 + `--experimental-ffi`
+  完整跑通原型**,与 Bun 表现一致(Node ≤24 无 node:ffi,不可用)。
+  ⇒ **渲染器迁移与 Bun 解耦**:P2 不再依赖 P1,可保 npm+Node 分发
+  (engines ≥26.1 + bin 注入 flag),Bun 单二进制退为分发优化。
+  Node 26 于 2026-10 转 LTS。
+
+### 6.3 P0-3 UI 测试：通过，官方工具即 ink-testing-library 对等物
+
+- `@opentui/core/testing` 的 `createTestRenderer`:mockInput.typeText/
+  pressEnter 模拟键盘、waitForFrame 帧断言、captureCharFrame ≈ lastFrame(),
+  2 个测试 180ms 跑完。13 个 UI 测试文件的迁移路径明确,风险 #2 解除。
+- 两个必须记住的坑:
+  1. **React 19 首次 commit 是异步的**——render 后要 `await setTimeout(0)`
+     再 renderOnce(),否则 waitForFrame 见 scheduler 空闲会立即放弃;
+  2. **stickyScroll 语义是"粘住当前所在的边"**,初始在顶部就粘顶;
+     自动跟随底部要配 `stickyStart="bottom"`(用户上滚自动解粘,
+     `_hasManualScroll` 路径)——这正是流式时间线要的语义。
+
+### 6.4 P0-4 单二进制：通过
+
+- `bun build --compile dist/cli.js`(Ink 版):**67MB**,热启动 **0.11s**
+  (Node 版 0.41s,快约 4 倍),doctor 与 -p 全链路正常。
+- OpenTUI 原型同样 compile 通过(**72MB**,原生 Zig dylib 自动打进 bunfs,
+  PTY 下完整跑通)。
+- 两个待处理小项:ink 动态 import `react-devtools-core` 需 stub 或装
+  devDependency 才能 bundle;$bunfs 里读不到 package.json,版本号需
+  build-time define 注入。
+
+### 6.5 对规划的修订
+
+- **P1 与 P2 的依赖关系解除**(§6.2):两条独立可交付的线——
+  P1「Bun 单二进制分发」(维持 Ink)与 P2「OpenTUI 渲染器」(可跑在
+  Node 26+ 或 Bun 上)。先后皆可,亦可只做其一。
+- P2 的虚拟化工作量下调;测试重建工作量下调(官方 testing 可用)。
+- 风险表 #2(测试)解除;#4(Bun 子进程)解除;#1(0.x API)与
+  #3(scrollback 取舍)不变,仍是 P2 动工前的决策点。
+- spike 产物在 scratchpad(prototype/stress/ui.test/perf.test/proto-bin),
+  未入库;本仓库工作树未被 spike 污染。
