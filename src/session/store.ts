@@ -328,6 +328,13 @@ export class SessionStore {
    * eager 拷贝——即使用户什么都不发就退出,分叉文件也完整可恢复。
    */
   async fork(params: { provider: string; model: string }): Promise<SessionStore> {
+    // 先把源会话排队中的写入放干:轮末的 save 是 fire-and-forget,而 agent 在
+    // 触发它*之前*就已不再 isRunning——`/fork` 的忙碌拦截因此会放行,此刻
+    // persisted 可能还停在上一轮。不排干就会把最后一轮既漏出分叉快照,又在
+    // 分叉之后补写进源文件(与"源会话从此不再被写"相悖)。
+    // 排干失败不阻断分叉:那一轮本就没落盘,persisted 是磁盘上的真相。
+    await this.flush().catch(() => {});
+
     const now = new Date().toISOString();
     const meta: SessionMeta = {
       ...this.meta_,

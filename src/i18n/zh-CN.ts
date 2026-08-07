@@ -131,6 +131,9 @@ export const zhCN: Record<keyof typeof en, string> = {
   'cmd.doctor': '体检：配置与连通性（加 offline 跳过联网检查）',
   'cmd.cost': '查看本次会话 token 用量',
   'cmd.resume': '恢复本工作区之前的会话',
+  'cmd.fork': '把当前对话分叉进新会话（原会话保持不动）',
+  'notice.forked': '已分叉到新会话 {id}（源会话 {from}… 保持原样，/resume 可回去）。',
+  'notice.forkFailed': '会话分叉失败：{message}',
   'cmd.exit': '退出',
 
   'notice.unknownCommand': '未知命令 /{name}，试试 /help。',

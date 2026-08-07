@@ -44,6 +44,11 @@ export interface Session {
    * 失败会抛出,但此时历史已经载入——调用方据此提示"已恢复但没换模型"。
    */
   resumeSession: (idOrPrefix: string) => Promise<SessionStore>;
+  /**
+   * 把当前对话分叉进一个全新的会话 id(`/fork`):历史、状态、时间线原样
+   * 延续,只是从此写入新文件,源会话停在分叉点不再被写。
+   */
+  forkSession: () => Promise<SessionStore>;
   /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
   switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
   /** 切换两轴权限(用户显式操作:/approvals、shift+tab)。 */
@@ -437,6 +442,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         }
       }
       return opened;
+    },
+    forkSession: async () => {
+      // 与 --fork-session 同一条路:eager 拷贝进新文件,源会话从此不再被写。
+      // 内存里的历史/todos/权限一概不动——分叉的意义就是"一切照旧,换个 id"。
+      store = await store.fork({ provider: provider.id, model: provider.model });
+      // 与 newSession 同理:fork 带过来的是源 store 里*已落盘*的 state_,若它
+      // 落后于内存(saveState 静默失败过),分叉的 lastStateJson 也初始化成了
+      // 同一份旧值,脏检查会一直压住重写。这里按当前真实状态补一次。
+      persistState();
+      return store;
     },
     switch: switchProvider,
     setPermissions,

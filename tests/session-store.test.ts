@@ -322,6 +322,28 @@ describe('fork', () => {
     const reopened = await SessionStore.open(forked.id, dir);
     expect(reopened.messages).toHaveLength(3);
   });
+
+  // 轮末的 save 是 fire-and-forget,且 agent 在触发它之前就已不再 isRunning,
+  // `/fork` 的忙碌拦截会放行。fork 必须先把写队列排干,否则最后一轮既不在
+  // 分叉快照里,又会在分叉之后补写进源文件。
+  it('排干源会话排队中的写入再分叉,最后一轮不丢', async () => {
+    const src = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await src.save([msg('user', 'a')]);
+
+    // 不 await:模拟 onHistoryChange 的 void store.save(...)。
+    const pending = src.save([msg('user', 'a'), msg('assistant', 'b')]);
+    const forked = await src.fork({ provider: 'kimi', model: 'm' });
+    await pending;
+
+    expect(forked.messages).toHaveLength(2);
+    const reopened = await SessionStore.open(forked.id, dir);
+    expect(reopened.messages).toHaveLength(2);
+
+    // 排干发生在分叉之前:那一轮进了源文件,分叉之后源文件不再增长。
+    const srcSize = (await fs.stat(path.join(dir, `${src.id}.jsonl`))).size;
+    await forked.save([...forked.messages, msg('user', 'c')]);
+    expect((await fs.stat(path.join(dir, `${src.id}.jsonl`))).size).toBe(srcSize);
+  });
 });
 
 describe('list 与旁车', () => {

@@ -137,6 +137,9 @@ export const en = {
   'cmd.doctor': 'Check setup and connectivity (add "offline" to skip the network checks)',
   'cmd.cost': 'Show token usage for this session',
   'cmd.resume': 'Resume a previous session from this workspace',
+  'cmd.fork': 'Fork the conversation into a new session (the original stays put)',
+  'notice.forked': 'Forked into new session {id} (source {from}… is untouched; /resume to go back).',
+  'notice.forkFailed': 'Could not fork the session: {message}',
   'cmd.exit': 'Quit',
 
   'notice.unknownCommand': 'Unknown command /{name}. Try /help.',

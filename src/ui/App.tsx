@@ -83,6 +83,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'doctor', description: t('cmd.doctor') },
     { name: 'cost', description: t('cmd.cost') },
     { name: 'resume', description: t('cmd.resume') },
+    { name: 'fork', description: t('cmd.fork') },
     { name: 'exit', aliases: ['quit'], description: t('cmd.exit') },
   ];
 }
@@ -107,7 +108,7 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 };
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'init']);
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'fork', 'init']);
 
 /**
  * `/goal` 的取消词。它们是**参数**而不是命令别名(命令别名会进补全菜单,
@@ -1264,6 +1265,28 @@ export function App({ session }: Props): React.ReactElement {
               t('notice.costTranscript', { path: `~/.mojocode/sessions/${session.store.id}.jsonl` }),
           });
           break;
+
+        // 与 Claude Code 一致:把当前对话分叉进一个新会话 id 并切换过去。
+        // 屏幕上什么都不变——历史、todos、权限全部照旧,只是从此写入新文件;
+        // 源会话停在分叉点,之后可用 /resume 回去走另一条线。
+        case 'fork': {
+          const fromId = session.store.id;
+          try {
+            const forked = await session.forkSession();
+            push({
+              kind: 'notice',
+              level: 'info',
+              message: t('notice.forked', { id: forked.id, from: fromId.slice(0, 8) }),
+            });
+          } catch (err) {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.forkFailed', { message: (err as Error).message }),
+            });
+          }
+          break;
+        }
 
         case 'resume': {
           // 无参提交(如本工作区没有其他会话,选择器空表单直接回车)。
