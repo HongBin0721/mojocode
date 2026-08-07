@@ -24,14 +24,24 @@ UI tests need Bun because OpenTUI's test renderer is the real native renderer (F
 
 ## Architecture
 
-**The agent core never imports React.** `src/core/events.ts` defines the contract: the core
-emits typed `AgentEvent`s over an `EventBus` and awaits permission decisions via a
-`PermissionAsker` callback. One agent loop therefore drives both the OpenTUI TUI
-(`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
+**The agent core never imports the UI framework (SolidJS).** `src/core/events.ts` defines
+the contract: the core emits typed `AgentEvent`s over an `EventBus` and awaits permission
+decisions via a `PermissionAsker` callback. One agent loop therefore drives both the
+OpenTUI TUI (`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
+
+**Process model (opencode-style client-server).** By default the TUI is a thin client: it
+spawns a managed `mojocode serve --managed` child (agent, tools, MCP, LSP, session store
+all live there) and talks REST + SSE — `src/server/serve.ts` + `src/server/protocol.ts`
+(wire types, event replay via SSE `id:`/`Last-Event-ID`), `src/client/remote.ts` (SSE-driven
+state mirror + serialized RPC queue). The UI consumes the narrow `SessionHandle` interface
+(`src/app/session-handle.ts`); the local `Session` satisfies it structurally, so
+`MOJOCODE_NO_SERVER=1` and UI tests run in-process. `-p` stays in-process by design.
+Every awaited session call in UI code needs a `.catch` — they are RPCs and an unhandled
+rejection kills the TUI.
 
 Wiring lives in `src/app/bootstrap.ts`, which builds the `Session` object (agent + bus +
 gate + tools + MCP + session store) consumed by both frontends. `src/cli.tsx` is the
-commander entry (`auth`, `models`, `providers`, `sessions`, `config`, `doctor`
+commander entry (`auth`, `models`, `providers`, `sessions`, `config`, `doctor`, `serve`
 subcommands). The TUI is a lazy `import('./ui/tui.js')` — never import `src/ui/` (→ kit →
 `@opentui/core`, which needs FFI at module load) statically from anything on the `-p` path.
 
@@ -64,9 +74,16 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
 - `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs with a parity test asserting key sets match.
 - `src/session/` — append-only JSONL store; incremental `append` on pure extension, else
   full `snapshot`; `<id>.meta.json` sidecar makes `list()` O(1).
-- `src/ui/` — OpenTUI (`@opentui/react`) components; `kit.tsx` is the renderer adapter
+- `src/server/` + `src/client/` — the client-server split (HTTP + SSE, Bearer-token auth,
+  loopback bind; server is FFI-free and runs on Node ≥ 20).
+- `src/ui/` — **SolidJS** (`@opentui/solid`) components; `kit.tsx` is the renderer adapter
   exposing Ink-shaped `Box`/`Text`/`useInput`/`useApp`/`render` — components import kit,
-  never `@opentui/*` directly.
+  never `@opentui/*` directly. Solid discipline: never destructure props; derived values
+  are functions/memos; multi-signal updates observed by an effect must be `batch()`ed.
+  Two upstream traps: span (TextNode) styles only apply via the `style` prop (direct
+  `fg=`/`bg=` are silently ignored), and bare `solid-js` resolves to the non-reactive SSR
+  stub under Node/Bun native conditions — the build pins `solid-js/dist/solid.js`
+  everywhere (see tsup.config.ts / vitest.solid.ts); keep it pinned.
 
 ## Conventions
 
@@ -84,10 +101,10 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   ctrl+c before `useInput`, breaking double-ctrl+c-to-exit (startup wizard/picker opt back in).
 - **In-turn compaction shrinks only the messages sent to the model**; persistent history
   stays full, and `historyNeedsCompact` forces compaction at next turn start.
-- Timeline entries re-render every frame (scrollbox, sticky-bottom) — `TimelineEntry` is
-  `React.memo`'d and `renderMarkdownAnsi` is LRU-cached by `(key, width)` in `md-cache.ts`;
-  keep the wrap-safety margin and truncate by display width (`WIDTH_SAFETY` and
-  `truncateWidth` in `theme.ts`).
+- Timeline items are immutable once finalized — the `<For>` in App reuses entries by
+  reference (zero re-render under Solid's fine-grained updates) and `renderMarkdownAnsi`
+  is LRU-cached by `(key, width)` in `md-cache.ts`; keep the wrap-safety margin and
+  truncate by display width (`WIDTH_SAFETY` and `truncateWidth` in `theme.ts`).
 - Core tests live in `tests/*.test.ts` mirroring the module under test (`gate.test.ts`,
   `sandbox.test.ts`, `i18n.test.ts`, ...) on the Node lane; UI tests live in `tests/ui/`
   on the Bun lane with the `tests/support/otui.tsx` harness.

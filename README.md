@@ -208,6 +208,22 @@ mojocode --no-mcp                       # 跳过 MCP 连接，启动更快
 mojocode -C ~/另一个项目                # 指定工作区目录
 ```
 
+### server 模式（进阶）
+
+TUI 默认以 client-server 方式运行（与 opencode 相同的进程模型）：启动时自动拉起一个
+受管的 `mojocode serve` 子进程，agent 核心、工具、MCP、LSP、会话存储都在 server 侧，
+TUI 只是经 HTTP + SSE 连接的瘦客户端。这一切对日常使用完全透明；需要时也可以手动操作：
+
+```bash
+mojocode serve                          # 独立运行 server，打印地址与 token
+MOJOCODE_SERVER_TOKEN=<token> mojocode --attach http://127.0.0.1:<port>
+                                        # 另开终端，把 TUI 连到已运行的 server
+MOJOCODE_NO_SERVER=1 mojocode           # 排障逃生口：回到单进程模式
+```
+
+server 只绑定 127.0.0.1，所有请求都要 Bearer token 鉴权（它能执行任意命令，必须挡住
+本机上的其他程序与浏览器页面的盲发请求）。`-p` 非交互模式不走 server，管道语义不变。
+
 ---
 
 ## 三、配置
@@ -500,8 +516,11 @@ full-access、自由组合）时，按下落到 `plan`——它写不了任何�
 
 ## 五、架构
 
-核心原则：agent core 不 import React。core 通过事件总线发事件、通过回调等待授权决定，
-同一套循环同时驱动 TUI 和 headless 渲染器。
+核心原则：agent core 不 import UI 框架（SolidJS）。core 通过事件总线发事件、通过回调
+等待授权决定，同一套循环同时驱动 TUI 和 headless 渲染器。
+
+进程模型与 opencode 一致：TUI 是瘦客户端，默认自动拉起受管的 `mojocode serve` 子进程
+（agent 核心与所有工具都在 server 侧），经 REST + SSE 通信；`-p` headless 保持单进程。
 
 ```
 src/
@@ -513,24 +532,30 @@ src/
   mcp/         MCP 客户端 + AI SDK 工具桥接
   session/     追加式 JSONL 会话记录
   core/        事件总线契约
+  server/      HTTP + SSE server（serve.ts）与线上协议（protocol.ts）
+  client/      远程会话瘦客户端（SSE 状态镜像 + 串行化 RPC）
   i18n/        语言目录（en / zh-CN）
-  ui/          OpenTUI(@opentui/react)组件;kit.tsx 是渲染器适配层
+  ui/          OpenTUI + SolidJS(@opentui/solid)组件;kit.tsx 是渲染器适配层
 ```
 
-渲染层是 [OpenTUI](https://github.com/anomalyco/opentui)(opencode 同款,Zig 原生
-渲染核心 + React 绑定),运行在 alternate screen 全屏模式。`src/ui/kit.tsx` 以 Ink
-形状的 API(Box/Text/useInput)包住 OpenTUI:组件层不直接触碰上游 0.x API,
-破坏性变更只改 kit 一处。TUI 模块按需动态加载:Bun / 单二进制直接跑;npm + Node
-需要 26.1+(缺 `--experimental-ffi` 时自动重启注入);更老的 Node 只影响 TUI,
-`-p` 与全部子命令照常。
+渲染层是 [OpenTUI](https://github.com/anomalyco/opentui) + SolidJS(`@opentui/solid`,
+与 opencode 完全同款:Zig 原生渲染核心 + Solid 细粒度响应式)。运行在 alternate
+screen 全屏模式。`src/ui/kit.tsx` 以 Ink 形状的 API(Box/Text/useInput)包住
+OpenTUI:组件层不直接触碰上游 0.x API,破坏性变更只改 kit 一处。TUI 模块按需
+动态加载:Bun / 单二进制直接跑;npm + Node 需要 26.1+(缺 `--experimental-ffi`
+时自动重启注入);更老的 Node 只影响 TUI,`-p` 与全部子命令照常。
 
 容易踩的坑（都已处理，改代码时注意别退化）：
 
 - **GLM 的 baseURL 是 `/api/paas/v4`**，绝不能再拼 `/v1`，否则 404。
 - **模型 ID 一律不硬编码。** 三家迭代都快，预设只是起始默认值，`mojocode models` 看实时列表。
-- **时间线条目每帧都会重渲染**(scrollbox 粘底滚动),性能靠 `TimelineEntry` 的
-  React.memo + `renderMarkdownAnsi` 按 (key, width) 的 LRU 缓存(md-cache.ts),
-  别在条目渲染路径里加未缓存的重计算。
+- **时间线条目定稿后不可变**:App 的 `<For>` 按引用复用条目,Solid 细粒度更新下
+  天然零重渲染;`renderMarkdownAnsi` 按 (key, width) 走 LRU 缓存(md-cache.ts)。
+  别原位修改条目对象(要整条替换),也别在条目渲染路径里加未缓存的重计算。
+- **Solid 纪律**:组件内不解构 props(会断开响应式);span 的样式只能经
+  `style` prop 送达(直传 fg=/bg= 被上游静默忽略);裸 `solid-js` 会解析到
+  非响应式的 SSR 桩,构建链里把它钉到 dist/solid.js 的三处配置都不能动
+  (tsup.config.ts / vitest.solid.ts 有注释)。
 - **OpenTUI 的 `<text>` 不解析 ANSI 字符串**——所有定稿格式化资产(markdown/
   高亮/diff/表格)输出的 ANSI 由 kit 的 `<Text>` 经 `ansi-spans.ts` 转成 span;
   SGR 39/49 的语义是「继承外层」,Diff 的背景高亮依赖这一点。
@@ -558,8 +583,8 @@ npm run build:bin -- --target=darwin-arm64 --no-archive   # 只编本机平台
 npm run build:bin                                 # 全 6 平台 + tar.gz/zip + SHA256SUMS
 ```
 
-产物在 `dist/bin/`。版本号在编译期注入（`$bunfs` 里读不到 package.json），`@opentui/react`
-的可选依赖 `react-devtools-core` 被替换成空模块——细节见 `scripts/build-binaries.ts` 头注释。
+产物在 `dist/bin/`。版本号在编译期注入（`$bunfs` 里读不到 package.json）——细节见
+`scripts/build-binaries.ts` 头注释。
 发布：打 `v*` tag 触发 `.github/workflows/release.yml`，自动出全平台产物挂到 GitHub
 Releases（草稿，人工确认后发布）；npm 分发不受影响，仍是 `npm publish`。
 

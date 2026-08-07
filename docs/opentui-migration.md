@@ -1,6 +1,8 @@
 # 技术栈迁移评估：对齐 opencode 核心栈（Bun + OpenTUI）
 
-> 状态：**P0 spike 完成（GO，见 §6）；P1 已交付（见 §7）;P2 已交付(见 §8)**。
+> 状态：**P0 spike 完成（GO，见 §6）；P1 已交付（见 §7）;P2 已交付(见 §8);
+> 进程模型迁移已交付(见 §9,推翻 §2.4);SolidJS 迁移已交付(见 §10,
+> 推翻 §2.3)——与 opencode 的技术栈差异至此为零**。
 > 分支 `spike/bun-opentui-migration`。
 > 日期：2026-08-07。数据来自本仓库统计与 npm/上游仓库实查，引用处已标注。
 
@@ -368,3 +370,162 @@ Node,零变化),单二进制作为并行分发线新增。最终形态与 §1.4 
   OSC52 集成留作后续。
 - 消息导航(opencode 的按消息跳转)未做,scrollbox 子项已按条目建模,
   后续可加。
+
+## 9. 进程模型迁移交付记录(2026-08-08)
+
+§2.4 当时把 client-server 分离列为「不在本次范围」;应后续决策,本阶段把进程
+模型也对齐 opencode:**TUI 默认是瘦客户端**,启动时拉起受管 `serve --managed`
+子进程(agent 核心、工具、MCP、LSP、会话存储全在 server 侧),经 REST + SSE
+通信。`-p` headless 刻意保持单进程(管道语义、零 HTTP 开销);
+`MOJOCODE_NO_SERVER=1` 是单进程逃生口(UI 测试也走它的路径)。
+
+### 架构落点
+
+- **窄腰接口 `src/app/session-handle.ts`**:枚举 TUI 真正消费的 Session 成员
+  (从 App.tsx 实测 122 处访问收敛而来)。本地 `Session` 结构性满足;
+  远程会话由 `src/client/remote.ts` 镜像。App.tsx 只动了 11 处:
+  `switch`/`inject`/`steer` 一律 `await`(类型 `T | Promise<T>`),
+  `/think` 的直接改字段收编为 `session.setReasoningEffort()`,
+  `/doctor`、`/model` 列表收编为 `session.doctor()` / `session.listModels()`
+  (凭据只存在于 server 侧,顺带清掉了 UI 对 `session.lsp` 的触碰)。
+- **协议 `src/server/protocol.ts`**:三类下行消息——AgentEvent 原样转发
+  (error 的 Error 拆装)、state 快照(client 一切同步读取的数据源,
+  变化检测剔除 elapsedMs/sentAt 等易变字段)、call-result(长任务回执)。
+  provider/config 过线前抹除全部凭据。
+- **server `src/server/serve.ts`**:node:http,零新依赖,无 FFI(Node ≥ 20)。
+  只绑 127.0.0.1 + 全请求 Bearer token(能执行 bash 的 localhost 服务必须挡
+  浏览器盲发 POST);token 经环境变量传子进程,不走 argv。授权走
+  PermissionBroker:gate 的 ask 落在 server,请求经 bus 事件(SSE)到达
+  client,决定经 `POST /permission` 回来——与本地模式的 emit→ask 顺序同构。
+- **client `src/client/remote.ts`** 的四个关键设计,都是踩过再修的:
+  1. `run`/`goalRun`/`compact` 是 **deferred**:POST 立即 ack,完成经 SSE
+     call-result 兑现 promise——长连接会被 undici 的 300s 超时斩断;
+  2. `connectRemote` 必须**等首条 SSE 连接就位才返回**——早返回时紧跟的
+     事件广播给零个客户端,永久丢失(实测:permission 往返在快路径下 100%
+     超时,debug 脚本因多了 300ms 延迟而侥幸通过);
+  3. 所有 RPC 经**内部队列串行化**:App 存在 `goal.set` 紧跟 `goal.run`
+     这类顺序依赖,两条 fetch 并发可能乱序;
+  4. **乐观运行标志**:ack 与 state 推送之间 isRunning 镜像滞后一个来回,
+     期间 esc 会误开回退选择器;ack 即置位,首见 server 报 running 或任务
+     完成时清除。
+- **受管子进程生命周期**(`src/app/server-launch.ts` + serve 的 --managed):
+  stdout 单行 JSON 握手;stderr 握手前透传(配置警告、MCP 失败)、握手后
+  存尾部环形缓冲;退出三重保障——TUI dispose 发 shutdown RPC、父进程退出
+  即 stdin EOF、**ppid 看门狗兜底**(实测 Bun 下父进程被 SIGKILL 后 stdin
+  'end' 不触发,留过孤儿)。
+- **外部接入**:`mojocode serve` 独立运行打印地址与 token,
+  `MOJOCODE_SERVER_TOKEN=<t> mojocode --attach <url>` 连接;attach 的 TUI
+  退出不关别人的 server(ownsServer 区分)。
+
+### 测试与验证
+
+- `tests/server.test.ts`(Node 车道,10 用例):真 HTTP + 真 SSE + 假 Session,
+  覆盖镜像初始化与凭据抹除、事件过线与 Error 复原、state 推送驱动 todos、
+  deferred ack/完成、授权往返、回退链路、ProviderSwitchError 类型复原、
+  401 鉴权、调用顺序保序。全量回归:核心 549 + UI 167 全绿,typecheck 干净。
+- PTY 端到端(Bun,真实 DeepSeek 往返):TUI 自动拉起受管 server → 流式
+  回复经 SSE 渲染 → footer 上下文计数(step-end)→ 双 ctrl+c 退出 →
+  时间线 dump + resume 提示(会话 id 来自 server 侧 store)→ 无孤儿进程。
+  期间发现并修复上文的 SSE 时序与孤儿两个 bug。
+- 冒烟脚本教训:expect 用 `sleep` 等待时不读 PTY,缓冲区憋满会让 TUI 阻塞、
+  日志只剩尾巴——要用超时匹配块持续排水。
+
+### 代码审查后的修复(2026-08-08)
+
+client-server 层被审出 6 处真问题,均已修复并补了回归:
+
+- **提交路径的未捕获 rejection**(最严重):`handleSubmit` 的 void 异步 IIFE 里,
+  `inject`/`steer`/`run` 变成 RPC 之后任何 server 抖动都会 reject,Node ≥20
+  直接掀掉 TUI。`/init`、`/plan`、`/goal` 三处早有 `.catch`,唯独这条主路径
+  在方法转异步时被漏掉;`/think` 的 `setReasoningEffort` 同理。
+- **乐观运行标志会永久锁死**:标志原先在 ack 的 `.then` 里置位,而 server 的
+  `Agent.run` 有立即返回路径——call-result 可能先于 ack 落地,于是
+  「finally 清标志 → ack 置回 true」再无人清除,isRunning 恒真、会话废掉。
+  改为发起前同步置位。回归测试手写了一个**故意乱序回执**的最小 server
+  (环回下真 server 复现不出这个顺序)。
+- **授权请求只广播一次**:没有客户端在场的那一刻(断线、`--attach` 连上
+  跑到一半的 server)请求就永远丢了,gate 那边一直 await = 整轮挂死。
+  server 侧改为新连接重放待决请求,client 侧补了 asker 注册前的排队。
+- **MCP 凭据未抹除**:`mcpServers.*.env` / `.headers` 是 GITHUB_TOKEN、
+  Authorization 的常规落点,原先原样过线(`serve --host <非环回>` 是支持用法)。
+- **dispose 可能卡住**:shutdown 走同一条串行队列且 fetch 无超时,前面排着
+  慢调用时用户面对的是冻住的终端;改为 2s 超时后放手(还有 stdin EOF 与
+  ppid 看门狗兜底)。
+- **每条事件都全量序列化配置**:变化检测省的只是广播,`computeState +
+  snapshotKey` 本身挂在 text-delta 上就是每轮几千次全量 stringify;
+  纯流式事件现在直接跳过重算。
+
+最后一处缺口(断线丢事件)随后以 **SSE 标准的断点续传**彻底修复:每条
+event / call-result 帧带单调递增 `id:`,server 维护重放环形缓冲(1000 条 /
+4MB 双重封顶——delta 多而小、工具输出可能巨大,单一上限都不够),重连的
+client 以 `Last-Event-ID` 无缝续上。这同时治了一个比丢时间线更严重的连带
+问题:断线窗口里落地的 call-result 一旦丢失,client 侧 pending 的 run
+promise 永不 settle,状态行常亮。只有缓冲滚过头 server 才发 `gap` 认输,
+client 那时才告警「记录不完整」并刷新镜像;待决授权请求仅在非无缝路径
+重放(无缝续上时确认框还在屏幕上,再发一遍会让用户被问两次)。两条路径
+(无缝 / gap)的回归测试都做了双向验证(打掉机制 → 超时失败;恢复 → 通过)。
+
+### 与 opencode 的剩余差异(§10 之前)
+
+至此三层对齐:渲染引擎(OpenTUI)、分发(Bun 单二进制)、进程模型
+(server + 瘦客户端)。剩余差异:组件框架(React)与消息级导航等功能项。
+
+## 10. 组件框架迁移交付记录(React → SolidJS,2026-08-08)
+
+§0 当时判定"保 React 即可对齐基础核心栈";应后续决策,本阶段把最后一层也
+对齐:全部 UI 迁至 `@opentui/solid` + solid-js 1.9.12(opencode 同款同版),
+React/`@opentui/react` 依赖清零。核心零改动(它本来就不认识 UI 框架)。
+
+### 工具链(最曲折的部分)
+
+- **Solid JSX 必须走 babel**(dom-expressions 的 universal 变换,esbuild
+  编译不了):tsup 用 esbuild-plugin-solid,vitest 两条车道共用自写的
+  `vitest.solid.ts` 内联插件——**刻意不用 vite-plugin-solid**,它测试模式
+  注入 jsdom + 往 SSR 解析集塞 `browser` 条件,Bun fork worker 启动即崩。
+- **solid-js 的 server 桩陷阱**(全程最隐蔽的坑):裸 `solid-js` 在 Node 的
+  `node` 条件与 Bun 的 `worker` 条件下都解析到 dist/server.js——SSR 桩,
+  onMount/createEffect 全是空实现,**首帧正常、事件订阅静默失效**。上游
+  `@opentui/solid` 的 bun 变体依赖官方 Bun 加载器插件在运行期偷换文件内容,
+  我们的分发产物不带那层。解法三件套:tsup 的 renderChunk 把产物里的说明符
+  改写为 `solid-js/dist/solid.js`(用户 esbuild 插件排在 tsup 的 external
+  插件之后,onResolve 层面改写轮不到);`noExternal: ['@opentui/solid']` 把
+  **node 变体**(预钉客户端构建)冻进 TUI chunk;vitest 两个别名钉到同一
+  文件。双实例 = 信号建在 A、效果建在 B,更新永不追踪——单实例是响应式
+  能工作的前提。
+- tsconfig:`jsx: preserve` + `jsxImportSource: "@opentui/solid"`。
+
+### 移植与踩坑
+
+kit 保持 Ink 形状 API,组件层 JSX 结构基本原样,状态机械转换
+(useState→createSignal、useRef→普通变量、useMemo→createMemo/函数、
+React.memo→删除)。五个 Solid 特有的坑,全部实测踩到再修:
+
+1. **`children()` 助手是急切求值**:嵌套 `<Text>` 在外层 Provider 挂载前就
+   运行,读到 context=false 渲染成 `<text>`,被外层拒收崩溃。解法:children
+   解析挪进 Provider 内的独立组件(React 天然延迟渲染,没这问题)。
+2. **span(TextNode)样式只认 `style` prop**:上游 setProperty 对 TextNode
+   只处理 href/style 两个键,直接的 fg=/bg= **静默忽略**——文本落回默认白。
+   最初的断言(fg.r > 120)被白色 255 假阳性糊弄,后来收紧为"红高绿低"。
+3. **effect 在两次 set 之间同步运行**:粘贴图片时"图片入 map"与"占位符入
+   文本"分开提交,修剪 effect 在间隙里把刚存的图片当"无占位符"清掉
+   (React 的自动批处理掩盖了这个时序)。解法:`batch()`。
+4. **props 不可解构 / 派生值必须是函数**:全部组件按此纪律重写;
+   `useTerminalSize` 改为返回 getter 对象,解构即失去响应。
+5. **`/lang` 没有"整树重渲染"可用**:静态文案(占位符、提示、footer 标签)
+   创建后不会随 locale 变。解法:信号全部活在组件外层,JSX 体经
+   `<Show keyed>` 按 locale 重挂载——文案重新求值,状态一个不丢。
+
+收益兑现:React 时代的 flushSync/valueRef/cursorRef 旧闭包补丁全部删除
+(处理器读信号永远是当前值);TimelineEntry 的 React.memo 删除(条目不可变
++ `<For>` 按引用复用,细粒度更新天然零重渲染);测试 harness 删掉 act() 与
+异步首帧等待(Solid 首帧同步)。
+
+### 验证
+
+- 549 核心 + 171 UI 测试全绿(18 个 UI 测试文件全部移植,net 数量还多了
+  kit-smoke 一个);typecheck 干净;dist 产物零 React 引用,solid-js 22 处
+  import 全部钉在客户端构建。
+- PTY 端到端两条路径(npm+Bun 与 74→77MB 单二进制):真实 DeepSeek 往返、
+  流式渲染、思考行、双 ctrl+c、退出 dump、resume 提示、无孤儿 server。
+- 至此与 opencode 的技术栈差异为**零**(运行时、渲染引擎、组件框架、进程
+  模型、分发全部同款);剩余差异只在功能项(消息级导航等)。
