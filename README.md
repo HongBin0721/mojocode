@@ -10,10 +10,18 @@
 
 ### 0. 环境要求
 
-| 依赖 | 要求 | 检查方式 |
+运行时要求**取决于装法**，先看这张表再挑下面的安装方式：
+
+| 安装方式 | 交互 TUI | `-p` 与子命令 |
 |---|---|---|
-| Node.js | 交互 TUI 需 ≥ 26.1(渲染器原生 FFI,启动时自动补实验 flag);`-p` 与子命令 ≥ 20 即可。**单二进制安装则完全不需要 Node** | `node -v` |
-| npm | 随 Node 附带 | `npm -v` |
+| 单二进制 | ✅ 自带运行时，**完全不需要 Node** | ✅ |
+| npm / 源码 | 需 Node **≥ 26.1**（渲染器原生 FFI，启动时自动补 `--experimental-ffi`） | Node ≥ 20 即可 |
+
+`package.json` 的 `engines` 只写了 `node >= 20`——那是 `-p` 与子命令的下限，装得上不代表 TUI 跑得起来。
+Node 版本不够时直接运行 `mojocode` 不会崩，会打印一行提示让你装单二进制或升级 Node，`-p` 照常可用。
+
+| 其它依赖 | 要求 | 检查方式 |
+|---|---|---|
 | ripgrep（可选） | 有则代码搜索快 10~100 倍，没有自动降级 | `rg --version`，安装：`brew install ripgrep` |
 
 ### 1. 安装
@@ -27,11 +35,26 @@ curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.s
 ```
 
 装到 `~/.local/bin/mojocode`（`MOJOCODE_INSTALL_DIR` 可改，`MOJOCODE_VERSION` 可锁版本）。
+脚本会自动认平台、Alpine 切 musl 产物，并用 `SHA256SUMS` 校验后才落盘。
 Windows 到 [Releases](https://github.com/HongBin0721/mojocode/releases) 页下载 `mojocode-windows-x64.zip` 解压使用。
+
+> 该脚本从 GitHub Releases 拉产物，依赖仓库已发布过 `v*` Release（发布流程见「六、开发」）。
 
 > 卸载：删掉 `~/.local/bin/mojocode` 即可,配置在 `~/.mojocode/` 里,可一并删除。
 
-**方式 B：从源码（需要 Node ≥ 20）**
+**方式 B：npm 全局安装**
+
+```bash
+npm install -g mojocode
+```
+
+⚠️ npm 只分发 JS 产物，**不含渲染器运行时**：交互 TUI 需要本机 Node ≥ 26.1，
+Node 20~25 上只有 `mojocode -p "..."` 与各子命令可用（CI、脚本场景够用）。
+想在旧 Node 上用 TUI 请改用方式 A。
+
+> 卸载：`npm uninstall -g mojocode`。
+
+**方式 C：从源码（`-p` 需 Node ≥ 20，TUI 需 ≥ 26.1）**
 
 ```bash
 cd agent_dev        # 项目目录
@@ -585,8 +608,18 @@ npm run build:bin                                 # 全 6 平台 + tar.gz/zip + 
 
 产物在 `dist/bin/`。版本号在编译期注入（`$bunfs` 里读不到 package.json）——细节见
 `scripts/build-binaries.ts` 头注释。
-发布：打 `v*` tag 触发 `.github/workflows/release.yml`，自动出全平台产物挂到 GitHub
-Releases（草稿，人工确认后发布）；npm 分发不受影响，仍是 `npm publish`。
+
+**发布**（两条线互不依赖，二进制靠 tag 触发 CI，npm 手动发）：
+
+```bash
+npm version minor -m "release: v%s"   # bump + commit + 打 v* tag
+git push --follow-tags                # 触发 release.yml:测试 → build → 6 平台交叉编译
+                                      # → 归档 + SHA256SUMS → 建【草稿】Release
+# 到 GitHub Releases 页把草稿 Publish 出去 —— 不做这步,install.sh 会 404
+
+npm login && npm publish              # prepublishOnly 跑 typecheck + test + test:ui + build
+                                      # (所以本机必须有 Bun 才能发 npm)
+```
 
 ---
 
