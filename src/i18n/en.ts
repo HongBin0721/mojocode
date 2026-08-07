@@ -288,6 +288,18 @@ export const en = {
   'cli.cmd.doctor': 'Check the installation, configuration and provider connectivity',
   'cli.opt.doctorJson': 'emit the report as JSON',
   'cli.opt.doctorOffline': 'skip the network checks (endpoint probe, version check, MCP servers)',
+  'cli.cmd.serve': 'Run the mojocode server (HTTP + SSE) that TUI clients attach to',
+  'cli.opt.serveHost': 'address to bind (keep it loopback unless you know what you are doing)',
+  'cli.opt.servePort': 'port to listen on (0 = pick a free one)',
+  'cli.opt.serveManaged': 'managed mode: JSON handshake on stdout, exit when stdin closes',
+  'cli.opt.attach': 'connect the TUI to a running `mojocode serve` instead of spawning one',
+  'cli.serveListening': 'mojocode server listening at {url}',
+  'cli.serveToken': 'token: {token}  (clients: MOJOCODE_SERVER_TOKEN={token} mojocode --attach <url>)',
+  'cli.attachNeedsToken': '--attach needs the server token in MOJOCODE_SERVER_TOKEN.',
+  'cli.serverSpawnFailed': 'Could not start the mojocode server: {message}',
+  'notice.serverLost': 'Lost connection to the mojocode server — restart the TUI to continue.',
+  'notice.serverReconnected':
+    'Reconnected to the mojocode server. Some output from while the connection was down is missing from this transcript.',
 
   'doctor.title': 'mojocode doctor',
   'doctor.section.env': 'Environment',

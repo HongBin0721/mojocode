@@ -3,6 +3,10 @@ import process from 'node:process';
 import { bootstrap } from './app/bootstrap.js';
 import { headlessAsker, renderHeadless } from './app/headless.js';
 import { detectTuiRuntime, reexecWithFfi } from './app/runtime.js';
+import { spawnManagedServer, type SpawnedServer } from './app/server-launch.js';
+import type { SessionHandle } from './app/session-handle.js';
+import { connectRemote } from './client/remote.js';
+import { createPermissionBroker, startServer } from './server/serve.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from './config/providers.js';
 import {
@@ -57,7 +61,12 @@ interface GlobalFlags {
   dangerouslyBypassApprovalsAndSandbox?: boolean;
   maxContext?: string;
   maxSteps?: string;
-  noMcp?: boolean;
+  /**
+   * `--no-mcp` 的解析结果。commander 对 `--no-` 前缀的选项写的是**正名**:
+   * 不带 flag 时 `mcp` 为 true,带了才是 false——`noMcp` 这个字段它从来
+   * 不会赋值(写成 `noMcp === true` 的判断等于恒假,静默失效)。
+   */
+  mcp?: boolean;
   searchBackend?: string;
 }
 
@@ -68,6 +77,8 @@ interface MainFlags extends GlobalFlags {
   resume?: string | boolean;
   continue?: boolean;
   forkSession?: boolean;
+  /** 连接到外部已运行的 server(URL),不再自行拉起受管子进程。 */
+  attach?: string;
 }
 
 /**
@@ -164,6 +175,7 @@ program
   .option('-r, --resume [sessionId]', t('cli.opt.resume'))
   .option('-c, --continue', t('cli.opt.continue'))
   .option('--fork-session', t('cli.opt.forkSession'))
+  .option('--attach <url>', t('cli.opt.attach'))
   .action(async (opts) => {
     await runMain(opts as MainFlags);
   });
@@ -274,6 +286,16 @@ program
   });
 
 program
+  .command('serve')
+  .description(t('cli.cmd.serve'))
+  .option('--host <host>', t('cli.opt.serveHost'), '127.0.0.1')
+  .option('--port <port>', t('cli.opt.servePort'), '0')
+  .option('--managed', t('cli.opt.serveManaged'))
+  .action(async (opts: { host: string; port: string; managed?: boolean }) => {
+    await runServe(opts);
+  });
+
+program
   .command('config')
   .description(t('cli.cmd.config'))
   .action(async () => {
@@ -355,6 +377,154 @@ async function resolveResume(
   return undefined;
 }
 
+/**
+ * 把根命令的 flags 重放成受管 `serve` 子进程的参数。凭据(token)不在此列
+ * ——它经环境变量传递;`-r`/`-c` 在父进程已解析成具体会话 id(交互式选择器
+ * 只能在 TUI 侧跑),这里传定稿的 `--resume <id>`。
+ */
+function serveArgsFrom(flags: MainFlags, root: string, resumeId?: string): string[] {
+  const args: string[] = ['--cwd', root];
+  if (flags.provider) args.push('--provider', flags.provider);
+  if (flags.model) args.push('--model', flags.model);
+  if (flags.plan) args.push('--plan');
+  if (flags.sandbox) args.push('--sandbox', flags.sandbox);
+  if (flags.askForApproval) args.push('--ask-for-approval', flags.askForApproval);
+  if (flags.fullAuto) args.push('--full-auto');
+  if (flags.dangerouslyBypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
+  if (flags.maxContext) args.push('--max-context', flags.maxContext);
+  if (flags.maxSteps) args.push('--max-steps', flags.maxSteps);
+  if (flags.mcp === false) args.push('--no-mcp');
+  if (flags.searchBackend) args.push('--search-backend', flags.searchBackend);
+  if (resumeId) args.push('--resume', resumeId);
+  if (flags.forkSession) args.push('--fork-session');
+  return args;
+}
+
+/**
+ * `mojocode serve`:bootstrap 一个会话并以 HTTP + SSE 暴露(进程模型对齐
+ * opencode)。两种形态:
+ *  - `--managed`:TUI 拉起的受管子进程——stdout 单行 JSON 握手,token 经
+ *    环境变量注入,父进程退出(stdin 关闭)即自行收尾;
+ *  - 独立运行:打印地址与 token,供 `mojocode --attach <url>` 连接。
+ *
+ * server 侧无 FFI,Node ≥ 20 即可;TUI 的 FFI 运行时门只管 client 进程。
+ */
+async function runServe(opts: { host: string; port: string; managed?: boolean }): Promise<void> {
+  // 与 doctor 同一手法:共享 flags 声明在根命令上,从 program.opts() 读,
+  // `mojocode -C dir serve` 与 `mojocode serve -C dir` 都生效。
+  const globals = program.opts() as MainFlags;
+  const root = globals.cwd ? (await import('node:path')).resolve(globals.cwd) : process.cwd();
+  await applyConfigLocale(root);
+
+  // serve 是非交互进程:`-r <id>` 接受显式 id(受管模式下父进程已把选择器
+  // 的结果定稿成 id 传进来);裸 `-r` 与 `-c` 都退化为"本工作区最新"。
+  let resume: SessionStore | undefined;
+  try {
+    if (typeof globals.resume === 'string') {
+      resume = await SessionStore.open(await SessionStore.resolveId(globals.resume, { root }));
+    } else if (globals.resume === true || globals.continue) {
+      resume = await SessionStore.latest(root);
+      if (!resume) process.stderr.write(`${t('cli.noResume')}\n`);
+    }
+  } catch (error) {
+    if (error instanceof AmbiguousSessionError) {
+      return fail(new Error(t('cli.sessionAmbiguous', { id: error.query, list: error.matches.join(', ') })));
+    }
+    if (error instanceof SessionNotFoundError) {
+      return fail(new Error(t('cli.sessionNotFound', { id: error.query })));
+    }
+    return fail(error);
+  }
+
+  const flagPerms = permissionsFromFlags(globals);
+  const overrides: PartialConfig = {
+    ...(resume
+      ? resumeOverrides(resume.meta, resume.state, {
+          ...globals,
+          permissions:
+            flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
+        })
+      : {}),
+    ...overridesFromFlags(globals),
+  };
+
+  let loaded;
+  try {
+    // MissingKeyError 直接快速失败:配置向导是交互流程,归 TUI 侧(父进程
+    // 在拉起 server 之前已经跑过一轮 loadConfig + 向导)。
+    loaded = await loadConfig({ root, overrides });
+  } catch (error) {
+    return fail(error);
+  }
+  if (loaded.config.language !== 'auto') {
+    setLocale(detectLocale(loaded.config.language));
+  }
+
+  const broker = createPermissionBroker();
+  const session = await bootstrap({
+    root,
+    loaded,
+    ask: broker.ask,
+    resume,
+    fork: globals.forkSession === true,
+    skipMcp: globals.mcp === false,
+    onMcpStatus: (status) => {
+      if (!status.connected) {
+        process.stderr.write(`${t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' })}\n`);
+      }
+    },
+  });
+  for (const warning of loaded.warnings) {
+    process.stderr.write(`! ${warning}\n`);
+  }
+  void SessionStore.cleanup({
+    days: loaded.config.cleanupPeriodDays,
+    keepIds: resume ? [resume.id, session.store.id] : [session.store.id],
+  }).catch(() => {});
+
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await server.close().catch(() => {});
+    await session.dispose().catch(() => {});
+    // 受管/独立 server 都要显式退出:stdin 已 resume,事件循环不会自然清空。
+    process.exit(0);
+  };
+  const server = await startServer({
+    session,
+    broker,
+    host: opts.host,
+    port: Number(opts.port),
+    token: process.env.MOJOCODE_SERVER_TOKEN,
+    onShutdown: () => void shutdown(),
+  });
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
+
+  if (opts.managed) {
+    // 握手:单行 JSON。token 由父进程生成并经环境变量传入,不回显。
+    process.stdout.write(`${JSON.stringify({ url: server.url })}\n`);
+    // 父进程退出 → stdin 关闭 → 自行收尾,TUI 崩溃也不留孤儿 server。
+    process.stdin.resume();
+    process.stdin.on('end', () => void shutdown());
+    process.stdin.on('close', () => void shutdown());
+    // stdin EOF 在 Bun 下不总是触发(实测被 SIGKILL 的父进程留下过孤儿)。
+    // 兜底:父进程死掉后本进程会被过继给 init/launchd,ppid 变化即收尾——
+    // 运行时无关,轮询开销可忽略。
+    const parentPid = process.ppid;
+    const watchdog = setInterval(() => {
+      if (process.ppid !== parentPid) void shutdown();
+    }, 2000);
+    watchdog.unref?.();
+  } else {
+    process.stdout.write(`${t('cli.serveListening', { url: server.url })}\n`);
+    if (!process.env.MOJOCODE_SERVER_TOKEN) {
+      process.stdout.write(`${t('cli.serveToken', { token: server.token })}\n`);
+    }
+  }
+}
+
 async function runMain(flags: MainFlags): Promise<void> {
   const root = flags.cwd ? (await import('node:path')).resolve(flags.cwd) : process.cwd();
   await applyConfigLocale(root); // 选择器与报错也要本地化,尽早生效
@@ -426,13 +596,48 @@ async function runMain(flags: MainFlags): Promise<void> {
     setLocale(detectLocale(loaded.config.language));
   }
 
+  // 进程模型(对齐 opencode):TUI 默认是瘦客户端,agent 核心跑在受管的
+  // `serve --managed` 子进程里(或经 --attach 连外部实例)。单进程模式只剩
+  // 两条路:`-p` headless(管道语义、零 HTTP 开销),以及 MOJOCODE_NO_SERVER=1
+  // 的排障逃生口。
+  const inProcess = headless || process.env.MOJOCODE_NO_SERVER === '1';
+
+  if (!inProcess) {
+    let spawned: SpawnedServer | undefined;
+    let handle: SessionHandle;
+    try {
+      if (flags.attach) {
+        const token = process.env.MOJOCODE_SERVER_TOKEN;
+        if (!token) return fail(new Error(t('cli.attachNeedsToken')));
+        handle = await connectRemote({
+          url: flags.attach.replace(/\/+$/, ''),
+          token,
+          ownsServer: false,
+        });
+      } else {
+        // 配置警告与 MCP 失败提示由子进程 stderr 在握手前原样转发,这里不重复。
+        spawned = await spawnManagedServer(serveArgsFrom(flags, root, resume?.id));
+        handle = await connectRemote({ url: spawned.url, token: spawned.token, ownsServer: true });
+      }
+    } catch (error) {
+      return fail(error);
+    }
+    await tui!.runTui(handle);
+    await handle.dispose();
+    await spawned?.waitExit();
+    if (handle.agent.history.length > 0) {
+      process.stdout.write(`${t('cli.resumeHint', { id: handle.store.id })}\n`);
+    }
+    return;
+  }
+
   const session = await bootstrap({
     root,
     loaded,
     ask: headlessAsker({ sandbox: loaded.config.sandbox, approval: loaded.config.approval }),
     resume,
     fork: flags.forkSession === true,
-    skipMcp: flags.noMcp === true,
+    skipMcp: flags.mcp === false,
     onMcpStatus: (status) => {
       if (!status.connected && !headless) {
         process.stderr.write(`${t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' })}\n`);

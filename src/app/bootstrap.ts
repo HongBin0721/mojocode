@@ -9,9 +9,11 @@ import {
   planReturnFor,
   type Config,
   type Permissions,
+  type ReasoningEffort,
 } from '../config/schema.js';
+import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus, type PermissionAsker } from '../core/events.js';
-import { createModel } from '../model/registry.js';
+import { createModel, listModels, type ModelInfo } from '../model/registry.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
 import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
@@ -49,8 +51,24 @@ export interface Session {
    * 延续,只是从此写入新文件,源会话停在分叉点不再被写。
    */
   forkSession: () => Promise<SessionStore>;
-  /** 会话中途切换模型和/或 provider;返回新解析的 provider。 */
-  switch: (change: { provider?: string; model?: string }) => ResolvedProvider;
+  /**
+   * 会话中途切换模型和/或 provider;返回新解析的 provider。
+   * 远程会话(client-server 模式)下是异步的,调用方一律 await。
+   */
+  switch: (change: { provider?: string; model?: string }) => ResolvedProvider | Promise<ResolvedProvider>;
+  /**
+   * 调整当前 provider 的思考档位(`/think`)。直接改 provider/config 字段的
+   * 老写法在 client-server 模式下改的只是本地镜像,必须收进 Session 契约
+   * 才能落到真正跑模型的那个进程。
+   */
+  setReasoningEffort: (level: ReasoningEffort) => void | Promise<void>;
+  /** 拉取当前 provider 的模型列表。收进契约:凭据只存在于 server 侧。 */
+  listModels: () => Promise<ModelInfo[]>;
+  /**
+   * 会话内体检(`/doctor`):读会话此刻的配置、采信已连上的 MCP 状态、
+   * 复用已拉起的 LSP——收进契约后 TUI 不必再摸 session.lsp / mcpStatuses。
+   */
+  doctor: (options: { offline: boolean }) => Promise<DoctorReport>;
   /** 切换两轴权限(用户显式操作:/approvals、shift+tab)。 */
   setPermissions: (permissions: Permissions) => void;
   /** 进入/退出计划模式。退出即"未批准就放弃",批准走 exit_plan 的回调。 */
@@ -456,6 +474,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     switch: switchProvider,
     setPermissions,
     setPlan,
+    setReasoningEffort: (level: ReasoningEffort) => {
+      // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
+      // streamText 生效;同时写回内存配置,使 /model、/provider 重新 resolve
+      // 时不丢失本次选择。(从 App.tsx 的 /think 分支原样收编。)
+      provider.reasoningEffort = level;
+      config.providers[provider.id] = {
+        ...(config.providers[provider.id] ?? {}),
+        reasoningEffort: level,
+      };
+    },
+    listModels: () => listModels(provider),
+    doctor: ({ offline }) =>
+      runDoctor({
+        root,
+        config,
+        mcpStatuses: mcp.statuses,
+        // 会话内已拉起的服务器直接采信状态;没拉起过的由 doctor 做一次真握手
+        // 探测(探完即杀)。
+        lspStatuses: lsp?.statuses(),
+        offline,
+      }),
     refreshEnvironment: async () => {
       env = await gatherEnvironment(root);
       agent.updateSystemPrompt(

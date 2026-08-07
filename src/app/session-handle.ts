@@ -1,0 +1,96 @@
+/**
+ * TUI 消费会话的**窄腰接口**。
+ *
+ * client-server 进程模型(对齐 opencode)引入后,TUI 面对的可能是:
+ *  - 本进程 bootstrap 出来的完整 `Session`(MOJOCODE_NO_SERVER=1 的逃生口、
+ *    UI 测试),或
+ *  - `src/client/remote.ts` 里经 REST + SSE 镜像出来的远程会话。
+ *
+ * 两者都以**结构子类型**满足本接口——这里只声明 TUI 真正碰到的成员,是把
+ * UI 的依赖面钉死在类型里(与 GoalControllerOptions 用 Pick 的道理相同)。
+ * 给 Session 新增能力时,先想清楚 TUI 是否需要;需要才加进来,并同步在
+ * remote.ts 里实现镜像/RPC。
+ *
+ * 同步 vs 异步:远程会话把同步读取(isRunning、todos、goal…)做成 SSE 驱动
+ * 的本地镜像,读取保持同步;但**方法调用**是 RPC——凡是本地实现返回同步值
+ * 而远程必须跑一趟 HTTP 的(inject / steer / switch),类型写成
+ * `T | Promise<T>`,调用方一律 `await`(await 同步值是无害的)。
+ */
+
+import type { ModelMessage } from 'ai';
+import type { EventBus, GoalStopReason, PermissionAsker } from '../core/events.js';
+import type { Config, Permissions, ReasoningEffort } from '../config/schema.js';
+import type { ResolvedProvider } from '../config/load.js';
+import type { McpStatus } from '../mcp/client.js';
+import type { TodoItem } from '../tools/index.js';
+import type { GoalState, GoalStatus } from '../agent/goal.js';
+import type { ModelInfo } from '../model/registry.js';
+import type { DoctorReport } from './doctor.js';
+import type { ImageAttachment } from './attachments.js';
+
+export interface RunOptions {
+  display?: string;
+  images?: ImageAttachment[];
+}
+
+export interface AgentHandle {
+  readonly isRunning: boolean;
+  readonly isCompacting: boolean;
+  readonly history: ModelMessage[];
+  run(text: string, options?: RunOptions): Promise<void>;
+  inject(text: string, images?: ImageAttachment[]): boolean | Promise<boolean>;
+  abort(): void;
+  compact(): Promise<void>;
+  setHistory(messages: ModelMessage[]): void;
+}
+
+export interface GoalHandle {
+  readonly active: boolean;
+  readonly busy: boolean;
+  readonly state: Readonly<GoalState> | undefined;
+  set(condition: string): void;
+  clear(reason?: GoalStopReason): void;
+  snapshot(): GoalStatus | undefined;
+  steer(text: string, options?: RunOptions): boolean | Promise<boolean>;
+  run(text: string, options?: RunOptions): Promise<void>;
+}
+
+export interface TodosHandle {
+  get(): TodoItem[];
+  subscribe(listener: (items: TodoItem[]) => void): () => void;
+}
+
+export interface GateHandle {
+  setAsker(ask: PermissionAsker): void;
+}
+
+export interface StoreHandle {
+  readonly id: string;
+  readonly messages: ModelMessage[];
+  save(messages: ModelMessage[]): Promise<void>;
+}
+
+export interface SessionHandle {
+  root: string;
+  config: Config;
+  readonly provider: ResolvedProvider;
+  bus: EventBus;
+  agent: AgentHandle;
+  gate: GateHandle;
+  todos: TodosHandle;
+  goal: GoalHandle;
+  mcpStatuses: McpStatus[];
+  readonly store: StoreHandle;
+  /** 返回值 TUI 只用到 fork 的 id,故收窄到最小面。 */
+  newSession(): Promise<unknown>;
+  resumeSession(idOrPrefix: string): Promise<unknown>;
+  forkSession(): Promise<{ id: string }>;
+  switch(change: { provider?: string; model?: string }): ResolvedProvider | Promise<ResolvedProvider>;
+  setPermissions(permissions: Permissions): void;
+  setPlan(active: boolean): void;
+  setReasoningEffort(level: ReasoningEffort): void | Promise<void>;
+  listModels(): Promise<ModelInfo[]>;
+  doctor(options: { offline: boolean }): Promise<DoctorReport>;
+  refreshEnvironment(): Promise<void>;
+  dispose(): Promise<void>;
+}
