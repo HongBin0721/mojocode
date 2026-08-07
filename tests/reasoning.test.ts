@@ -111,7 +111,7 @@ describe('reasoningMapping', () => {
 });
 
 describe('providerOptionsKey', () => {
-  it('把带连字符的 provider id 转成 SDK 期望的 camelCase,避免弃用警告打进 Ink 画面', () => {
+  it('把带连字符的 provider id 转成 SDK 期望的 camelCase,避免弃用警告打进 TUI 画面', () => {
     expect(providerOptionsKey('glm-coding')).toBe('glmCoding');
     expect(providerOptionsKey('kimi-intl')).toBe('kimiIntl');
     expect(providerOptionsKey('glm')).toBe('glm');

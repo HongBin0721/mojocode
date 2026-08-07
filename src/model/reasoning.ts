@@ -19,7 +19,7 @@ function isKimiEffortModel(model: string): boolean {
 /**
  * openai-compatible 的 providerOptions 键。SDK 两种拼写都读,但带连字符的
  * 原名(glm-coding、kimi-intl)会触发弃用警告——它经 console.warn 输出,会
- * 直接打进 Ink 的全屏画面。统一用 SDK 期望的 camelCase 形式。
+ * 直接打进 TUI 的全屏画面。统一用 SDK 期望的 camelCase 形式。
  */
 export function providerOptionsKey(providerId: string): string {
   return providerId.replace(/[_-]([a-z])/g, (_, c: string) => c.toUpperCase());

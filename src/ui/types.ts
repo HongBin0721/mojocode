@@ -8,9 +8,8 @@ export type TimelineItem =
       continuation?: boolean;
     }
   /**
-   * 一次思考的收尾标记。正文只在流式期间的动态区实时可见,定稿进时间线的
-   * 只有这一行——<Static> 一旦画出就写进终端回滚缓冲区,再也擦不掉,整段
-   * 思考留在那里会淹没真正的回复和工具记录。
+   * 一次思考的收尾标记。正文只在流式期间的预览区实时可见,定稿进时间线的
+   * 只有这一行——整段思考留在时间线里只会淹没真正的回复和工具记录。
    */
   | { key: string; kind: 'reasoning'; durationMs?: number }
   | {
@@ -30,10 +29,9 @@ export type TimelineItem =
   | { key: string; kind: 'collapsed'; count: number }
   | {
       /**
-       * 启动横幅。终端非全屏模式下无法把组件钉在窗口顶部(Ink 动态区永远
-       * 贴着输入框),所以横幅作为第一条 Static 条目打进回滚区,固定在对话
-       * 最顶部随历史自然滚动——与 Claude Code 一致。字段是创建时的快照,
-       * 之后改 model/权限档不回写(实时值在 Footer 常驻)。
+       * 启动横幅。作为时间线的第一条条目固定在对话最顶部,随历史自然
+       * 滚动——与 Claude Code 一致。字段是创建时的快照,之后改 model/
+       * 权限档不回写(实时值在 Footer 常驻)。
        */
       key: string;
       kind: 'banner';

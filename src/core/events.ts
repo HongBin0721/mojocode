@@ -2,7 +2,7 @@
  * agent 核心与其渲染层之间的契约。
  *
  * 核心从不引入 React。它发出这些事件,并通过回调等待权限决定,因此同一个
- * 循环既驱动 Ink TUI,也驱动非交互式的 `-p` 模式。
+ * 循环既驱动 TUI,也驱动非交互式的 `-p` 模式。
  */
 
 import type { Permissions } from '../config/schema.js';
@@ -97,7 +97,7 @@ export type AgentEvent =
   // 渲染层只能靠这条事件跟上——否则状态栏会一直停在 plan。
   | { type: 'permission-change'; permissions: Permissions; plan: boolean }
   // `/goal` 的自动续跑循环。核心只发事件,渲染层(TUI / headless)自己决定
-  // 怎么呈现——GoalController 因此和 Ink 一样互不相识。
+  // 怎么呈现——GoalController 因此与渲染层互不相识。
   //
   // 目标已设定(`/goal <条件>`),或从会话记录中恢复(restored 为真时不自动开跑)。
   | { type: 'goal-start'; condition: string; restored: boolean }

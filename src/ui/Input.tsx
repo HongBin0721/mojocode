@@ -114,7 +114,7 @@ const MENU_WINDOW = 8;
 /**
  * 带历史记录、多行编辑和斜杠命令菜单的输入框。
  *
- * 手写而不用 ink-text-input,是因为多行输入、历史回溯、命令菜单和
+ * 手写而不套现成的文本输入组件,是因为多行输入、历史回溯、命令菜单和
  * 二级选择器需要共用同一个按键处理器——把这些叠加在受控的第三方
  * 输入组件上反而更乱。
  *
@@ -478,7 +478,7 @@ export function Input({
       }
 
       // 必须排除 shift:shift+tab 是切换权限模式的全局快捷键(App.tsx),
-      // ink 把它报成 tab + shift,不排除的话命令菜单一开就被补全吞掉。
+      // kit 把它报成 tab + shift,不排除的话命令菜单一开就被补全吞掉。
       if (key.tab && !key.shift && fileMatches.length > 0) {
         insertFileSelection();
         return;

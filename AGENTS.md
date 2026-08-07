@@ -1,33 +1,39 @@
 # AGENTS.md
 
-`mojocode` — a terminal coding agent (full-screen Ink TUI + headless `-p` mode) that works
-with any LLM via the Vercel AI SDK. ESM-only (`"type": "module"`), Node ≥ 20, TypeScript
-with `strict` + `noUncheckedIndexedAccess`.
+`mojocode` — a terminal coding agent (full-screen OpenTUI TUI + headless `-p` mode) that
+works with any LLM via the Vercel AI SDK. ESM-only (`"type": "module"`), TypeScript with
+`strict` + `noUncheckedIndexedAccess`. Runtime split: `-p` and subcommands run on Node ≥ 20;
+the TUI needs native FFI — Bun (primary, single-binary distribution) or Node ≥ 26.1 with
+`--experimental-ffi` (auto re-exec injects the flag).
 
 ## Commands (verified against package.json)
 
 ```bash
-npm run build       # tsup → dist/cli.js (bin entry, esm, deps kept external)
+npm run build       # tsup → dist/cli.js + lazy chunks (esm, splitting on, deps external)
 npm run dev         # tsup --watch
 npm run typecheck   # tsc --noEmit — tsup does NOT typecheck; this is the gate
-npm test            # vitest run — all tests in tests/**/*.test.{ts,tsx}
-npx vitest run tests/gate.test.ts       # single test file
+npm test            # core tests, Node lane (excludes tests/ui/)
+npm run test:ui     # UI tests — MUST run under Bun (= bun --bun x vitest run --config vitest.ui.config.ts)
+npx vitest run tests/gate.test.ts       # single core test file
 npx vitest run -t "name substring"      # single test by name
 node dist/cli.js    # run the built CLI
 ```
 
-There is no lint config; `npm run typecheck` + `npm test` are the correctness gates.
+There is no lint config; `npm run typecheck` + both test lanes are the correctness gates.
+UI tests need Bun because OpenTUI's test renderer is the real native renderer (FFI).
 
 ## Architecture
 
 **The agent core never imports React.** `src/core/events.ts` defines the contract: the core
 emits typed `AgentEvent`s over an `EventBus` and awaits permission decisions via a
-`PermissionAsker` callback. One agent loop therefore drives both the Ink TUI
+`PermissionAsker` callback. One agent loop therefore drives both the OpenTUI TUI
 (`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
 
 Wiring lives in `src/app/bootstrap.ts`, which builds the `Session` object (agent + bus +
 gate + tools + MCP + session store) consumed by both frontends. `src/cli.tsx` is the
-commander entry (`auth`, `models`, `providers`, `sessions`, `config` subcommands).
+commander entry (`auth`, `models`, `providers`, `sessions`, `config`, `doctor`
+subcommands). The TUI is a lazy `import('./ui/tui.js')` — never import `src/ui/` (→ kit →
+`@opentui/core`, which needs FFI at module load) statically from anything on the `-p` path.
 
 One turn: `Agent.run()` (`src/agent/loop.ts`, AI SDK `streamText` + `stepCountIs`) → tools
 call `PermissionGate` **inside** their `execute()` (deliberately not AI SDK `toolApproval`,
@@ -51,12 +57,16 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   (read-only+never promotes to ask). `full-access` and plan are session-only, never
   persisted. `shift+tab` cycles ask→auto→plan; from outside the cycle it lands on
   `plan`, so a stray keystroke can only tighten permissions, never loosen them.
-- `src/tools/` — builtin `read write edit glob grep bash todo exit_plan`.
+- `src/tools/` — builtin `read write edit glob grep bash web_fetch todo exit_plan`, plus
+  `web_search` when a search backend resolves, plus `task` (subagent — one recursion level).
 - `src/agent/` — loop, system prompt (`prompt.ts` injects this file), compaction (`compact.ts`).
 - `src/mcp/` — MCP client; MCP tools are wrapped as AI SDK tools through the same gate.
 - `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs with a parity test asserting key sets match.
 - `src/session/` — append-only JSONL store; incremental `append` on pure extension, else
   full `snapshot`; `<id>.meta.json` sidecar makes `list()` O(1).
+- `src/ui/` — OpenTUI (`@opentui/react`) components; `kit.tsx` is the renderer adapter
+  exposing Ink-shaped `Box`/`Text`/`useInput`/`useApp`/`render` — components import kit,
+  never `@opentui/*` directly.
 
 ## Conventions
 
@@ -70,13 +80,14 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   latter only holds the last step and silently drops earlier tool calls.
 - **Readonly mode enforces `gate.assertCanMutate()` before any work**, separate from
   `checkWrite`, because tools short-circuit and the guarantee must not depend on the branch.
-- **`render(<App/>, { exitOnCtrlC: false })` is required** — Ink's default swallows ctrl+c
-  before `useInput`, breaking double-ctrl+c-to-exit.
+- **Kit's `render()` defaults `exitOnCtrlC: false`** — the renderer would otherwise swallow
+  ctrl+c before `useInput`, breaking double-ctrl+c-to-exit (startup wizard/picker opt back in).
 - **In-turn compaction shrinks only the messages sent to the model**; persistent history
   stays full, and `historyNeedsCompact` forces compaction at next turn start.
-- Completed timeline entries render in Ink's `<Static>` (once, into scrollback). Text in
-  the dynamic region must keep a wrap-safety margin and truncate by display width
-  (`WIDTH_SAFETY` in `App.tsx`, `truncateWidth` in `theme.ts`).
-- Tests live in `tests/*.test.{ts,tsx}` mirroring the module under test
-  (`gate.test.ts`, `sandbox.test.ts`, `i18n.test.ts`, ...); UI tests use
-  `ink-testing-library`.
+- Timeline entries re-render every frame (scrollbox, sticky-bottom) — `TimelineEntry` is
+  `React.memo`'d and `renderMarkdownAnsi` is LRU-cached by `(key, width)` in `md-cache.ts`;
+  keep the wrap-safety margin and truncate by display width (`WIDTH_SAFETY` and
+  `truncateWidth` in `theme.ts`).
+- Core tests live in `tests/*.test.ts` mirroring the module under test (`gate.test.ts`,
+  `sandbox.test.ts`, `i18n.test.ts`, ...) on the Node lane; UI tests live in `tests/ui/`
+  on the Bun lane with the `tests/support/otui.tsx` harness.

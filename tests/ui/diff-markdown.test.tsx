@@ -77,7 +77,7 @@ describe('Markdown(流式)在 OpenTUI 下渲染', () => {
   });
 });
 
-describe('Markdown 语法覆盖(从 ink 版移植)', () => {
+describe('Markdown 语法覆盖', () => {
   it('渲染各类块级与行内语法,且不输出原始标记', async () => {
     const text = [
       '# Title',
@@ -135,7 +135,7 @@ describe('Markdown 语法覆盖(从 ink 版移植)', () => {
   });
 });
 
-describe('Diff 边界(从 ink 版移植)', () => {
+describe('Diff 边界', () => {
   const patch = [
     '--- src/app.ts',
     '+++ src/app.ts',

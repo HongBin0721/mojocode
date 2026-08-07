@@ -8,7 +8,7 @@
  * 两个 spike 里踩过的坑在这里处理(docs/opentui-migration.md §6.4):
  * - `$bunfs` 里读不到 package.json,版本号用 `define` 在编译期注入
  *   (见 src/config/version.ts 的 MOJOCODE_BUILD_VERSION);
- * - ink 的 devtools.js 静态 import 可选依赖 react-devtools-core(未安装),
+ * - @opentui/react 的 devtools 集成静态 import 可选依赖 react-devtools-core(未安装),
  *   用 plugin 把它替换成空模块。不能用 external:--compile 是单文件打包,
  *   动态 import 会被内联,external 的 import 就变成了启动期必然执行的
  *   顶层依赖,二进制一起跑就报 Cannot find package(实测)。

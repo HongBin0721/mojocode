@@ -112,7 +112,7 @@ function SwapHost({ onDecide }: { onDecide: (d: PermissionDecision) => void }) {
   return <PermissionPrompt request={req} onDecide={onDecide} />;
 }
 
-describe('PermissionPrompt 选项边界(从 ink 版移植)', () => {
+describe('PermissionPrompt 选项边界', () => {
   it('上下键移动到"拒绝"后回车', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(

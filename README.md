@@ -558,8 +558,8 @@ npm run build:bin -- --target=darwin-arm64 --no-archive   # 只编本机平台
 npm run build:bin                                 # 全 6 平台 + tar.gz/zip + SHA256SUMS
 ```
 
-产物在 `dist/bin/`。版本号在编译期注入（`$bunfs` 里读不到 package.json），ink 的可选
-依赖 `react-devtools-core` 被替换成空模块——细节见 `scripts/build-binaries.ts` 头注释。
+产物在 `dist/bin/`。版本号在编译期注入（`$bunfs` 里读不到 package.json），`@opentui/react`
+的可选依赖 `react-devtools-core` 被替换成空模块——细节见 `scripts/build-binaries.ts` 头注释。
 发布：打 `v*` tag 触发 `.github/workflows/release.yml`，自动出全平台产物挂到 GitHub
 Releases（草稿，人工确认后发布）；npm 分发不受影响，仍是 `npm publish`。
 

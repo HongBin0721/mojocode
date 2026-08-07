@@ -1,5 +1,5 @@
 /**
- * UI 测试公共 harness(OpenTUI 版,替代 ink-testing-library)。
+ * UI 测试公共 harness。
  *
  * 必须用 Bun 跑:`bun --bun x vitest run --config vitest.ui.config.ts`。
  * 原因见 vitest.ui.config.ts 头注释(原生 FFI 的运行时条件解析)。
@@ -78,7 +78,7 @@ export async function renderUi(
         if (name === 'return') mockInput.pressEnter(mods);
         else if (name === 'escape') {
           // 孤立 ESC 会被 stdin 解析器缓冲(等待可能的转义序列,还会污染
-          // 下一个键),必须等超时冲刷——与 Ink 的 20ms 缓冲同理。
+          // 下一个键),必须等超时冲刷。
           mockInput.pressEscape(mods);
           await sleep(60);
         } else if (name === 'tab') mockInput.pressTab(mods);

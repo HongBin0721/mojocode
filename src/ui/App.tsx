@@ -359,8 +359,8 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
         push({ kind: 'assistant', text: text.trimEnd(), continuation: textCommitted.current });
       textCommitted.current = false;
     };
-    // 定稿的只是一行"已思考 8.2s":正文在流式期间实时可见,进了 <Static>
-    // 就再也擦不掉,整段留在回滚区只会淹没回复和工具记录。
+    // 定稿的只是一行"已思考 8.2s":正文在流式期间实时可见,整段进时间线
+    // 只会淹没回复和工具记录(见 types.ts 的 reasoning 条目)。
     const flushReasoning = () => {
       const text = activeReasoningRef.current;
       const startedAt = reasoningStartedAt.current;
@@ -634,8 +634,8 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
   }, []);
 
   // ctrl+c 无论何时都要能退出(包括权限确认框打开时),所以单独一个
-  // 始终激活的处理器。依赖 cli.tsx 里 exitOnCtrlC: false——否则 ink 会在
-  // useInput 之前吞掉这个按键,这里永远收不到。
+  // 始终激活的处理器。依赖 kit render() 默认的 exitOnCtrlC: false——否则
+  // 渲染器会在 useInput 之前吞掉这个按键,这里永远收不到。
   useInput((input, key) => {
     // shift+tab 循环切权限档位(ask → auto → plan),与 Claude Code /
     // Codex 的手感一致。full-access 刻意不在循环里。授权确认框开着时不接:
@@ -732,9 +732,9 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
   );
 
   // 重放时间线:/resume 与 esc-esc 回退共用。全屏渲染下这只是一次普通的
-  // setState——OpenTUI 每帧整屏重画,没有 Ink <Static> 的累积输出要清,
-  // 也没有清屏序列要写;终端宽度变化同理由渲染器自行处理(条目按 columns
-  // 重新渲染,markdown 缓存按新宽度取新键)。
+  // setState——OpenTUI 每帧整屏重画,没有累积输出要清,也没有清屏序列
+  // 要写;终端宽度变化同理由渲染器自行处理(条目按 columns 重新渲染,
+  // markdown 缓存按新宽度取新键)。
   const resetTimeline = useCallback((nextItems: TimelineItem[]) => {
     setItems(nextItems);
   }, []);

@@ -7,7 +7,7 @@
  * 这个解析器把它们转成 {text, fg, bg, ...} 样式段,由 kit 的 <Text>
  * 渲染成 OpenTUI 的 <span>,让这些资产原样存活。
  *
- * 语义对齐 chalk(Ink 的渲染路径):39/49(重置前景/背景)把 fg/bg 置回
+ * 语义对齐 chalk:39/49(重置前景/背景)把 fg/bg 置回
  * undefined,渲染层解释为「继承外层」——Diff.tsx 的 +/- 背景高亮依赖
  * 这一行为(内层语法高亮的 reset-fg 恢复成外层 diff 前景色)。
  */

@@ -12,7 +12,7 @@ import { renderUi } from '../support/otui.js';
 
 // 注:旧版还有一组「终端 resize 触发清屏重放」测试(断言 \x1b[2J\x1b[3J\x1b[H
 // 清屏序列)。全屏 OpenTUI 渲染下该机制已整体移除——渲染器每帧整屏重画,
-// 宽度变化不再需要清屏与 <Static> 重放,那组测试随之删除,不做移植。
+// 宽度变化不再需要清屏重放,那组测试随之删除,不做移植。
 
 function makeSession(messages: ModelMessage[]): Session {
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };

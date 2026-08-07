@@ -44,7 +44,7 @@ export function Diff({ patch, maxLines = 40 }: Props): React.ReactElement {
 
 /**
  * 一行 diff。代码文本按文件类型做语法高亮,再整体套上 +/- 的背景色:
- * Ink(chalk)会把高亮里的"恢复默认前景色"替换成本行的前景色,因此
+ * ansi-spans 把高亮里的"恢复默认前景色"(SGR 39)解释为继承外层,因此
  * 未被着色的片段仍是 diff 的浅绿/浅红,背景也贯穿整行不断裂。
  */
 function DiffRow({
