@@ -208,6 +208,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'status.escAgainRewind': '再按一次 esc 回退历史',
   'status.modeCycled': '权限模式：{mode} — shift+tab 继续切换',
   'status.focusCycled': '时间线:{mode} — ctrl+o 继续切换',
+  'status.selectionCopied': '已复制 {n} 个字符',
   'picker.title': '恢复会话',
   'picker.hint': '↑/↓ 选择 · 回车恢复 · esc 新建会话',
   'rewind.title': '回退到之前的消息',

@@ -223,6 +223,7 @@ export const en = {
   'status.escAgainRewind': 'press esc again to rewind',
   'status.modeCycled': 'permission mode: {mode} — shift+tab to cycle',
   'status.focusCycled': 'timeline: {mode} — ctrl+o to cycle',
+  'status.selectionCopied': 'copied {n} characters',
   'picker.title': 'Resume a session',
   'picker.hint': '↑/↓ select · enter resume · esc start fresh',
   'rewind.title': 'Rewind to an earlier message',

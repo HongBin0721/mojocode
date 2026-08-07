@@ -35,6 +35,7 @@ export interface UiHandle {
   spans(): ReturnType<Awaited<ReturnType<typeof testRender>>['captureSpans']>;
   renderer: Awaited<ReturnType<typeof testRender>>['renderer'];
   mockInput: Awaited<ReturnType<typeof testRender>>['mockInput'];
+  mockMouse: Awaited<ReturnType<typeof testRender>>['mockMouse'];
 }
 
 export async function renderUi(
@@ -98,5 +99,6 @@ export async function renderUi(
     },
     renderer,
     mockInput,
+    mockMouse: setup.mockMouse,
   };
 }

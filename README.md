@@ -119,7 +119,11 @@ mojocode
 
 TUI 运行在 alternate screen(全屏,类似 vim):滚轮/`PageUp`/`PageDown` 回看时间线,
 上滚自动暂停跟随、滚回底部恢复;退出时整场会话以纯文本写回终端,历史仍可翻可复制。
-鼠标被 TUI 接管,想用终端原生选择复制时按住 `shift`(或 macOS 上 `option`)再拖选。
+
+**复制文本**:直接拖选即可——松手自动写入系统剪贴板(tmux copy-on-select 风格,
+footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm2 需在设置里允许
+「Applications may access clipboard」)。也可按住 `shift`(macOS 上 `option`)拖选走
+终端原生复制。
 
 | 操作 | 说明 |
 |---|---|

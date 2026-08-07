@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, ScrollArea, Text, useApp, useInput, useTerminalSize } from './kit.js';
+import { Box, ScrollArea, Text, useApp, useInput, useSelectionCopy, useTerminalSize } from './kit.js';
 import { Footer } from './Footer.js';
 import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
@@ -294,6 +294,9 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
   // ctrl+o 切换后在 footer 短暂回显新档位(与 modeFlash 同理:得有反馈)。
   const [focusFlash, setFocusFlash] = useState<TimelineMode | undefined>(undefined);
   const focusFlashTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  // 拖选自动复制后的回显(字符数)。
+  const [copyFlash, setCopyFlash] = useState<number | undefined>(undefined);
+  const copyFlashTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const [rewind, setRewind] = useState<RewindEntry[] | undefined>(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
@@ -700,7 +703,15 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
     if (escTimer.current) clearTimeout(escTimer.current);
     if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
     if (focusFlashTimer.current) clearTimeout(focusFlashTimer.current);
+    if (copyFlashTimer.current) clearTimeout(copyFlashTimer.current);
   }, []);
+
+  // 拖选松手自动复制到剪贴板(kit.useSelectionCopy),footer 回显字符数。
+  useSelectionCopy((chars) => {
+    setCopyFlash(chars);
+    if (copyFlashTimer.current) clearTimeout(copyFlashTimer.current);
+    copyFlashTimer.current = setTimeout(() => setCopyFlash(undefined), 2000);
+  });
 
   // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/model、
   // shift+tab 等会话中途的改动会反映进去。
@@ -1622,7 +1633,9 @@ export function App({ session, itemsRef }: Props): React.ReactElement {
                       ? t('status.modeCycled', { mode: modeFlash })
                       : focusFlash
                         ? t('status.focusCycled', { mode: focusFlash })
-                        : undefined
+                        : copyFlash !== undefined
+                          ? t('status.selectionCopied', { n: copyFlash })
+                          : undefined
               }
             />
           </Box>

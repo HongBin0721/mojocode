@@ -24,11 +24,13 @@ import {
   useKeyboard,
   usePaste,
   useRenderer,
+  useSelectionHandler,
   useTerminalDimensions,
 } from '@opentui/react';
 import { decodePasteBytes } from '@opentui/core';
 import React, { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import { hasAnsi, parseAnsiSpans, type AnsiSpan } from './ansi-spans.js';
+import { writeClipboardText } from '../app/clipboard.js';
 
 // ---------------------------------------------------------------------------
 // 键盘:Ink useInput 的形状
@@ -201,6 +203,61 @@ export function useInput(
     flush(true);
     ref.current.handler(text, emptyKey());
   });
+}
+
+// ---------------------------------------------------------------------------
+// 选择复制
+// ---------------------------------------------------------------------------
+
+/**
+ * 拖选自动复制(tmux copy-on-select 风格)。
+ *
+ * TUI 接管鼠标后终端原生拖选失效——这是滚轮滚动的固有代价。OpenTUI 自带
+ * 应用内选择层(拖动时自己画高亮),这里在选择稳定后把选中文本写进剪贴板:
+ * 本地经系统命令(pbcopy/wl-copy/xclip/clip),同时发 OSC 52 序列兜底——
+ * SSH 场景下系统命令写的是远端的"剪贴板",真正到达本机的是 OSC 52。
+ *
+ * 选择事件在拖动过程中连续触发,以 300ms 静默期判定"选完了"(等 mouse-up
+ * 语义,不依赖上游事件的 isDragging 时序);同一段文本只复制一次。
+ *
+ * @param onCopied 复制完成回调(字符数),App 用它在 footer 回显。
+ * @param writer  测试注入用的写入实现,缺省走系统剪贴板。
+ */
+export function useSelectionCopy(
+  onCopied?: (chars: number) => void,
+  writer: (text: string) => Promise<boolean> = writeClipboardText,
+): void {
+  const renderer = useRenderer();
+  const ref = useRef({ onCopied, writer });
+  ref.current = { onCopied, writer };
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastCopied = useRef('');
+
+  useSelectionHandler((selection) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      timer.current = undefined;
+      const text = selection.getSelectedText();
+      if (!text || text === lastCopied.current) return;
+      lastCopied.current = text;
+      void ref.current.writer(text).finally(() => {
+        try {
+          renderer.copyToClipboardOSC52(text);
+        } catch {
+          // OSC 52 只是兜底,失败(如测试渲染器)不影响主路径。
+        }
+        ref.current.onCopied?.(text.length);
+      });
+    }, 300);
+  });
+
+  // 卸载时清掉未触发的复制定时器(同 App 的定时器纪律:进程要能干净退出)。
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
 }
 
 // ---------------------------------------------------------------------------

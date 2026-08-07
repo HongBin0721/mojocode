@@ -18,6 +18,34 @@ export interface ClipboardImage {
 
 const TIMEOUT = 3000;
 
+/**
+ * 把文本写入系统剪贴板,TUI 内拖选自动复制用。成功返回 true;命令缺失、
+ * 超时等一律返回 false 不抛错——调用方(kit.useSelectionCopy)还有 OSC 52
+ * 兜底,SSH 场景下本地命令写的本来就是远端的剪贴板,靠的正是那条路。
+ */
+export async function writeClipboardText(text: string): Promise<boolean> {
+  const commands: [string, string[]][] =
+    process.platform === 'darwin'
+      ? [['pbcopy', []]]
+      : process.platform === 'linux'
+        ? [
+            ['wl-copy', []],
+            ['xclip', ['-selection', 'clipboard']],
+          ]
+        : process.platform === 'win32'
+          ? [['clip', []]]
+          : [];
+  for (const [command, args] of commands) {
+    const result = await execa(command, args, {
+      input: text,
+      reject: false,
+      timeout: TIMEOUT,
+    });
+    if (result.exitCode === 0) return true;
+  }
+  return false;
+}
+
 export async function readClipboardImage(): Promise<ClipboardImage | undefined> {
   try {
     const image = await readPlatform();
