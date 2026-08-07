@@ -1,11 +1,8 @@
-import React from 'react';
-import { render } from 'ink';
 import { Command } from 'commander';
 import process from 'node:process';
-import { App } from './ui/App.js';
-import { AuthWizard } from './ui/AuthWizard.js';
 import { bootstrap } from './app/bootstrap.js';
 import { headlessAsker, renderHeadless } from './app/headless.js';
+import { detectTuiRuntime, reexecWithFfi } from './app/runtime.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from './config/providers.js';
 import {
@@ -18,7 +15,6 @@ import {
 } from './config/schema.js';
 import { listModels } from './model/registry.js';
 import { AmbiguousSessionError, SessionNotFoundError, SessionStore } from './session/store.js';
-import { SessionPicker } from './ui/SessionPicker.js';
 import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
 import { packageVersion } from './config/version.js';
@@ -26,6 +22,29 @@ import { formatDoctor, runDoctor } from './app/doctor.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
 import { INIT_PROMPT } from './agent/init.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
+
+type TuiModule = typeof import('./ui/tui.js');
+
+/**
+ * TUI 运行时门 + 懒加载。TUI 模块(→ kit → @opentui/core)在模块加载期就
+ * 需要原生 FFI,绝不能静态 import——`-p` 与全部子命令要在 Node 20 上照常
+ * 工作。Node ≥26.1 缺 flag 时整个进程带 `--experimental-ffi` 重执行;
+ * 跑不了时向 stderr 给指引、置退出码并返回 undefined(调用方直接 return)。
+ */
+async function loadTuiOrExplain(): Promise<TuiModule | undefined> {
+  const runtime = await detectTuiRuntime();
+  if (runtime.kind === 'reexec') {
+    // 重执行会把整个 CLI 从头跑一遍;此处尚未启动任何子进程,直接以子进程
+    // 的退出码收尾。这是全代码库唯一一处 process.exit——没有定时器要等。
+    process.exit(reexecWithFfi());
+  }
+  if (runtime.kind === 'unsupported') {
+    process.stderr.write(`${runtime.message}\n`);
+    process.exitCode = 1;
+    return undefined;
+  }
+  return import('./ui/tui.js');
+}
 
 interface GlobalFlags {
   provider?: string;
@@ -159,8 +178,9 @@ program
       return;
     }
     await applyConfigLocale(process.cwd());
-    const instance = render(<AuthWizard />);
-    await instance.waitUntilExit();
+    const tui = await loadTuiOrExplain();
+    if (!tui) return;
+    await tui.runAuthWizard();
   });
 
 program
@@ -303,7 +323,12 @@ async function applyConfigLocale(root: string): Promise<void> {
  *
  * 返回 undefined 表示不恢复;显式失败直接抛错(由调用方 fail)。
  */
-async function resolveResume(flags: MainFlags, root: string): Promise<SessionStore | undefined> {
+async function resolveResume(
+  flags: MainFlags,
+  root: string,
+  /** 已就绪的 TUI 模块;交互式选择器要用它。调用方已做过运行时门检查。 */
+  tui: TuiModule | undefined,
+): Promise<SessionStore | undefined> {
   if (typeof flags.resume === 'string') {
     // 限定本工作区:恢复别处的会话会让它的 meta.root 继续指向旧项目,
     // 之后两边的 `mojocode sessions` 都列不到它(用 -C 切到那个目录即可)。
@@ -311,24 +336,13 @@ async function resolveResume(flags: MainFlags, root: string): Promise<SessionSto
     return SessionStore.open(id);
   }
 
-  const interactive = process.stdin.isTTY && typeof flags.print !== 'string';
-  if (flags.resume === true && interactive) {
+  if (flags.resume === true && tui) {
     const metas = await SessionStore.list(root);
     if (metas.length === 0) {
       process.stderr.write(`${t('cli.noResume')}\n`);
       return undefined;
     }
-    let picked: string | undefined;
-    const instance = render(
-      <SessionPicker
-        sessions={metas}
-        onSelect={(id) => {
-          picked = id;
-        }}
-      />,
-      { exitOnCtrlC: true },
-    );
-    await instance.waitUntilExit();
+    const picked = await tui.runSessionPicker(metas);
     return picked ? SessionStore.open(picked) : undefined;
   }
 
@@ -345,11 +359,27 @@ async function runMain(flags: MainFlags): Promise<void> {
   const root = flags.cwd ? (await import('node:path')).resolve(flags.cwd) : process.cwd();
   await applyConfigLocale(root); // 选择器与报错也要本地化,尽早生效
 
+  const headless = typeof flags.print === 'string';
+
+  // TTY 与 TUI 运行时的门放在最前面:`-r` 的交互式选择器本身就是 TUI,
+  // 跑不了就该在这里一次性说明白退出(而不是先恢复会话再发现没界面可进);
+  // 重执行(Node 补 flag)也会从头再跑一遍 CLI,不能先起 MCP 子进程。
+  let tui: TuiModule | undefined;
+  if (!headless) {
+    if (!process.stdin.isTTY) {
+      process.stderr.write(`${t('cli.needsTty')}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    tui = await loadTuiOrExplain();
+    if (!tui) return;
+  }
+
   // 恢复要在 loadConfig 之前解析:会话 meta/state 会并入配置层
   //(优先级:CLI flags > 会话身份 > env/配置文件)。
   let resume: SessionStore | undefined;
   try {
-    resume = await resolveResume(flags, root);
+    resume = await resolveResume(flags, root, tui);
   } catch (error) {
     if (error instanceof AmbiguousSessionError) {
       return fail(new Error(t('cli.sessionAmbiguous', { id: error.query, list: error.matches.join(', ') })));
@@ -383,8 +413,8 @@ async function runMain(flags: MainFlags): Promise<void> {
     if (!(error instanceof MissingKeyError) || !interactive) return fail(error);
 
     process.stderr.write(`${t('auth.noKeyLaunch')}\n`);
-    const wizard = render(<AuthWizard />);
-    await wizard.waitUntilExit();
+    // interactive 蕴含非 headless,上面的门已确保 tui 就绪。
+    await tui!.runAuthWizard();
     try {
       loaded = await loadConfig({ root, overrides });
     } catch (retryError) {
@@ -395,8 +425,6 @@ async function runMain(flags: MainFlags): Promise<void> {
   if (loaded.config.language !== 'auto') {
     setLocale(detectLocale(loaded.config.language));
   }
-
-  const headless = typeof flags.print === 'string';
 
   const session = await bootstrap({
     root,
@@ -485,17 +513,9 @@ async function runMain(flags: MainFlags): Promise<void> {
     return;
   }
 
-  if (!process.stdin.isTTY) {
-    process.stderr.write(`${t('cli.needsTty')}\n`);
-    process.exitCode = 1;
-    await session.dispose();
-    return;
-  }
-
-  // 关掉 ink 默认的"ctrl+c 立即退出":它会在 useInput 之前吞掉按键,
-  // 让 App 里"连按两次 ctrl+c 退出"的逻辑永远收不到输入。
-  const instance = render(<App session={session} />, { exitOnCtrlC: false });
-  await instance.waitUntilExit();
+  // runTui 内部关掉 exitOnCtrlC(保双 ctrl+c 退出),退出后把时间线 dump
+  // 回主屏 scrollback(alternate screen 的内容随退出消失)。
+  await tui!.runTui(session);
   await session.dispose();
   // 读 getter 而非启动时的快照:/new、/resume 会中途换 store,提示要指向
   // 退出那一刻真正在写的会话。空会话没有可恢复的内容,不打扰。

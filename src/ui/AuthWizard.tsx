@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from './kit.js';
 import {
   BUILTIN_PROVIDER_IDS,
   PROVIDER_PRESETS,

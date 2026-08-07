@@ -1,0 +1,62 @@
+# push/PR 质量门:Node 矩阵跑 typecheck + 核心测试;bun job 跑 UI 测试
+# (OpenTUI 原生渲染需 FFI,只能在 Bun 下跑)+ 单二进制冒烟。
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      # UI 测试:OpenTUI 真原生渲染器 + mock 键盘,必须 Bun(见 vitest.ui.config.ts)
+      - run: npm run test:ui
+      # 核心测试在 Bun 下也过一遍,守住双运行时兼容
+      - run: bun --bun x vitest run
+      - run: npm run build
+      - run: bun scripts/build-binaries.ts --target=linux-x64 --no-archive
+      - name: smoke compiled binary
+        # 假 key 只为让 doctor 的 API key 检查不 fail(--offline 不会真联网),
+        # 否则无凭据环境 doctor 按设计退出码 1。
+        env:
+          DEEPSEEK_API_KEY: ci-dummy
+        run: |
+          set -eux
+          version="$(./dist/bin/mojocode-linux-x64 --version)"
+          test "$version" = "$(node -p "require('./package.json').version")"
+          ./dist/bin/mojocode-linux-x64 --help > /dev/null
+          ./dist/bin/mojocode-linux-x64 doctor --offline --json | node -e "
+            let d = '';
+            process.stdin.on('data', (c) => (d += c));
+            process.stdin.on('end', () => {
+              const r = JSON.parse(d);
+              const node = r.sections[0].checks.find((c) => c.id === 'node');
+              if (!/Bun v/.test(node.detail)) throw new Error('runtime check missing Bun: ' + node.detail);
+            });
+          "

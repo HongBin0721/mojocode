@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useTerminalSize } from './kit.js';
 import stringWidth from 'string-width';
 import { Diff } from './Diff.js';
 import { Markdown } from './Markdown.js';
@@ -19,9 +19,8 @@ const PLAN_MAX_ROWS = 20;
  * 按折行后的实际占用行数截断。
  *
  * 不能只数换行符:方案正文是成段的散文,80 列下一个自然段就能折成七八行,
- * 数出来"才 24 行"的一帧真画出来能有六十多行。比视口还高的一帧会让 ink
- * 重放整段已累积的 <Static> 输出(见 App.tsx 里 staticEpoch 的注释),
- * 屏幕上就多出好几份历史。
+ * 数出来"才 24 行"的一帧真画出来能有六十多行——确认框会把输入框和状态栏
+ * 顶出视口,矮终端下用户看不到选项就没法决策。
  */
 function clampRows(text: string, maxRows: number, width: number): string {
   const lines = text.split('\n');
@@ -58,6 +57,7 @@ interface Option {
  * esc 拒绝。y/n 作为老习惯的快捷键保留。
  */
 export function PermissionPrompt({ request, onDecide }: Props): React.ReactElement {
+  const { columns } = useTerminalSize();
   const [cursor, setCursor] = useState(0);
 
   // 方案审批不是"某个工具要不要放行",而是"这个方案对不对":没有可记住的
@@ -153,15 +153,14 @@ export function PermissionPrompt({ request, onDecide }: Props): React.ReactEleme
       {request.detail ? (
         <Box marginTop={1} flexDirection="column">
           {isPlan ? (
-            // 方案正文是 markdown。必须限高:比视口还高的一帧会让 ink 重放
-            // 整段已累积的 <Static> 输出(见 App.tsx 里 staticEpoch 的注释)。
+            // 方案正文是 markdown。必须限高:不能让确认框比视口还高。
             // 截断不丢东西——完整方案随后会作为 exit_plan 的工具条目进时间线。
             <Markdown
               text={clampRows(
                 request.detail,
                 PLAN_MAX_ROWS,
                 // 圆角边框 + paddingX 各占 2 列。
-                (process.stdout.columns ?? 80) - 4 - WIDTH_SAFETY,
+                columns - 4 - WIDTH_SAFETY,
               )}
             />
           ) : isDiff ? (

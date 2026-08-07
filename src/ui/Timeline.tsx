@@ -1,8 +1,8 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './kit.js';
 import { Diff } from './Diff.js';
 import { Header } from './Header.js';
-import { renderMarkdownAnsi } from './markdown-ansi.js';
+import { renderMarkdownCached } from './md-cache.js';
 import {
   theme,
   glyphs,
@@ -12,15 +12,25 @@ import {
   truncateWidth,
   WIDTH_SAFETY,
 } from './theme.js';
+import { extractDiff, extractPlan, extractTodos } from './timeline-data.js';
 import type { TimelineItem } from './types.js';
 import type { TodoItem } from '../tools/todo.js';
 import { t } from '../i18n/index.js';
 
 /**
- * 一条已完成的时间线条目。渲染在 Ink 的 <Static> 内,因此该组件对每个
- * 条目只挂载一次,之后永不重新渲染——这正是长会话不会越来越卡的原因。
+ * 一条已完成的时间线条目。挂在 scrollbox 里,App 每次状态变化都会走到
+ * 这里——性能靠两层防线:React.memo(条目对象定稿后引用不变,宽度不变
+ * 即跳过重渲染)+ markdown 渲染按 (key, width) 缓存(md-cache.ts),
+ * 这正是长会话不会越来越卡的原因。
  */
-export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElement | null {
+export const TimelineEntry = React.memo(function TimelineEntry({
+  item,
+  columns,
+}: {
+  item: TimelineItem;
+  /** 终端宽度。从 App 统一下发,替代原来的 process.stdout.columns 直读。 */
+  columns: number;
+}): React.ReactElement | null {
   switch (item.kind) {
     case 'user':
       // 用户消息用高亮色,和 agent 的白色回复、灰色思考区分开;回看时靠
@@ -39,9 +49,7 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
           <Text color={theme.assistant}>{item.continuation ? '  ' : `${glyphs.bullet} `}</Text>
           <Box flexDirection="column" flexGrow={1}>
             {/* 前缀 2 列 + WIDTH_SAFETY 边距:与流式预览同宽,定稿前后折行一致。 */}
-            <Text>
-              {renderMarkdownAnsi(item.text, (process.stdout.columns ?? 80) - 2 - WIDTH_SAFETY)}
-            </Text>
+            <Text>{renderMarkdownCached(item.key, item.text, columns - 2 - WIDTH_SAFETY)}</Text>
           </Box>
         </Box>
       );
@@ -62,7 +70,7 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
       );
 
     case 'tool':
-      return <ToolEntry item={item} />;
+      return <ToolEntry item={item} columns={columns} />;
 
     case 'notice':
       return (
@@ -90,6 +98,14 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
         </Box>
       );
 
+    case 'collapsed':
+      // /focus compact 档:一段被折叠的工具调用的占位行。
+      return (
+        <Box marginTop={1}>
+          <Text color={theme.dim}>⋯ {t('ui.collapsedTools', { n: item.count })}</Text>
+        </Box>
+      );
+
     case 'banner':
       // 永远是时间线第一条(启动/清屏后紧贴屏幕顶部),不加 marginTop。
       return (
@@ -105,9 +121,15 @@ export function TimelineEntry({ item }: { item: TimelineItem }): React.ReactElem
     default:
       return null;
   }
-}
+});
 
-function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) {
+function ToolEntry({
+  item,
+  columns,
+}: {
+  item: Extract<TimelineItem, { kind: 'tool' }>;
+  columns: number;
+}) {
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
   const todos = extractTodos(item);
@@ -123,10 +145,9 @@ function ToolEntry({ item }: { item: Extract<TimelineItem, { kind: 'tool' }> }) 
       {todos ? (
         <TodoChecklist todos={todos} />
       ) : plan ? (
-        // 方案完整展开(时间线在 <Static> 里,只画一次,不占动态区高度),
-        // 后面再跟一行批准结果。
+        // 方案完整展开,后面再跟一行批准结果。渲染结果按条目缓存(见文件头)。
         <Box paddingLeft={2} flexDirection="column">
-          <Text>{renderMarkdownAnsi(plan, (process.stdout.columns ?? 80) - 2 - WIDTH_SAFETY)}</Text>
+          <Text>{renderMarkdownCached(`${item.key}:plan`, plan, columns - 2 - WIDTH_SAFETY)}</Text>
           <Box>
             <Text color={theme.dim}>{glyphs.branch}  </Text>
             <Text color={item.isError ? theme.error : theme.dim}>{item.summary}</Text>
@@ -203,35 +224,4 @@ function BashOutput({ output }: { output: unknown }) {
       {hidden > 0 && <Text color={theme.dim}>{t('ui.moreLines', { n: hidden })}</Text>}
     </Box>
   );
-}
-
-function extractDiff(item: Extract<TimelineItem, { kind: 'tool' }>): string | undefined {
-  if (item.isError) return undefined;
-  const output = item.output as { diff?: unknown } | undefined;
-  return typeof output?.diff === 'string' ? output.diff : undefined;
-}
-
-/**
- * exit_plan 调用里的方案正文。方案在**输入**里而不是结果里,所以无论批准
- * 与否都取得到——被打回的那版也留在时间线上,能看清模型改了什么。
- */
-function extractPlan(item: Extract<TimelineItem, { kind: 'tool' }>): string | undefined {
-  if (item.toolName !== 'exit_plan' || item.isError) return undefined;
-  // 非计划模式下的误调没有走过审批,把正文摊开会让它看起来像是提交过。
-  if ((item.output as { notApplicable?: unknown } | undefined)?.notApplicable) return undefined;
-  const plan = (item.input as { plan?: unknown } | undefined)?.plan;
-  return typeof plan === 'string' && plan.trim() ? plan : undefined;
-}
-
-/** 成功的 todo 调用返回其输入里的完整任务列表,用于渲染清单。 */
-function extractTodos(item: Extract<TimelineItem, { kind: 'tool' }>): TodoItem[] | undefined {
-  if (item.toolName !== 'todo' || item.isError) return undefined;
-  const todos = (item.input as { todos?: unknown } | undefined)?.todos;
-  if (!Array.isArray(todos)) return undefined;
-  const valid = todos.filter(
-    (todo): todo is TodoItem =>
-      typeof (todo as TodoItem | undefined)?.content === 'string' &&
-      typeof (todo as TodoItem | undefined)?.status === 'string',
-  );
-  return valid.length > 0 ? valid : undefined;
 }

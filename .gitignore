@@ -4,3 +4,4 @@ dist-test/
 *.tsbuildinfo
 .DS_Store
 .mojocode/
+*.bun-build

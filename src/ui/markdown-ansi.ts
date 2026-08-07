@@ -29,6 +29,7 @@ export function renderMarkdownAnsi(text: string, columns: number): string {
       tab: 2,
     });
     patchListRendering(extension);
+    patchLinkRendering(extension);
     patchTableRendering(extension, width);
     const instance = new Marked();
     instance.use(extension);
@@ -140,6 +141,26 @@ const COLON_REPLACER_RE = /\*#COLON\|\*/g;
  * 支持超链接时 marked-terminal 会展开成 `文本 (href)`,在按列折行的
  * 单元格里徒占宽度。
  */
+/**
+ * 链接一律渲染成 `文字 (url)`,不发 OSC 8 超链接转义。
+ *
+ * marked-terminal 见 `supports-hyperlinks` 报 true(iTerm2 / WezTerm / kitty /
+ * VS Code 都算)就改发 OSC 8 序列,而渲染器画的是自己的帧缓冲、并不解析
+ * 这些字节——终端里看到的会是 `]8;;https://…` 这样的可见乱码。写死成带
+ * 括号的形式还顺带让 URL 始终可见(全屏下没法点,能看见才能复制)。
+ * 将来若接 OpenTUI 的 `<a href>`,改这里即可。
+ */
+function patchLinkRendering(extension: MarkedExtension): void {
+  const renderer = extension.renderer;
+  if (!renderer) return;
+
+  renderer.link = function (token) {
+    const text = token.tokens?.length ? this.parser.parseInline(token.tokens).trim() : token.text;
+    if (!token.href) return text || '';
+    return text && text !== token.href ? `${text} (${token.href})` : token.href;
+  };
+}
+
 function patchTableRendering(extension: MarkedExtension, width: number): void {
   const renderer = extension.renderer;
   if (!renderer) return;

@@ -1,18 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from 'ink-testing-library';
-import { App } from '../src/ui/App.js';
-import { stubGoal } from './support/goal.js';
-import { EventBus } from '../src/core/events.js';
-import { setLocale } from '../src/i18n/index.js';
-import type { Session } from '../src/app/bootstrap.js';
+import React, { act } from 'react';
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+import { App } from '../../src/ui/App.js';
+import { stubGoal } from '../support/goal.js';
+import { EventBus } from '../../src/core/events.js';
+import { setLocale } from '../../src/i18n/index.js';
+import type { Session } from '../../src/app/bootstrap.js';
+import { renderUi, type UiHandle } from '../support/otui.js';
 
 beforeEach(() => {
   setLocale('en');
 });
 
-function setup(overrides: { forkSession?: () => Promise<unknown>; isRunning?: boolean } = {}) {
+async function setup(overrides: { forkSession?: () => Promise<unknown>; isRunning?: boolean } = {}) {
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   const forkSession =
     overrides.forkSession ?? vi.fn(async () => ({ id: 'forked-session-id', messages: [] }));
@@ -42,53 +43,53 @@ function setup(overrides: { forkSession?: () => Promise<unknown>; isRunning?: bo
     dispose: async () => {},
   } as unknown as Session;
 
-  const view = render(<App session={session} />);
-  return { forkSession, ...view };
+  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  return { forkSession, ui };
 }
 
-async function submit(stdin: { write: (s: string) => void }, text: string) {
-  stdin.write(text);
-  await tick();
-  stdin.write('\r');
-  await tick();
+/** forkSession 是异步命令,回车后在 act 里多等一拍再断言。 */
+async function submit(ui: UiHandle, text: string): Promise<void> {
+  await ui.type(text);
+  await ui.press('return');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
+  await ui.tick();
 }
 
 describe('/fork 命令', () => {
   it('调用 forkSession 并提示新旧会话 id,时间线不清空', async () => {
-    const { forkSession, stdin, frames, unmount } = setup();
-    await tick();
-    await submit(stdin, '/fork');
+    const { forkSession, ui } = await setup();
+    await submit(ui, '/fork');
 
     expect(forkSession).toHaveBeenCalledTimes(1);
-    const out = frames.join('\n');
+    const out = ui.frame();
     expect(out).toContain('forked-session-id');
     // 源会话 id 以前缀出现在提示里(截 8 位)。
     expect(out).toContain('source-s');
     // 时间线没有被重置:横幅(工作区路径)仍在。
     expect(out).toContain('/tmp/project');
-    unmount();
+    await ui.destroy();
   });
 
   it('分叉失败落警告,不吞错误', async () => {
-    const { stdin, frames, unmount } = setup({
+    const { ui } = await setup({
       forkSession: async () => {
         throw new Error('disk full');
       },
     });
-    await tick();
-    await submit(stdin, '/fork');
+    await submit(ui, '/fork');
 
-    expect(frames.join('\n')).toContain('disk full');
-    unmount();
+    expect(ui.frame()).toContain('disk full');
+    await ui.destroy();
   });
 
   it('agent 运行中被拦下', async () => {
-    const { forkSession, stdin, frames, unmount } = setup({ isRunning: true });
-    await tick();
-    await submit(stdin, '/fork');
+    const { forkSession, ui } = await setup({ isRunning: true });
+    await submit(ui, '/fork');
 
     expect(forkSession).not.toHaveBeenCalled();
-    expect(frames.join('\n')).toContain('running'); // notice.busyCommand
-    unmount();
+    expect(ui.frame()).toContain('running'); // notice.busyCommand
+    await ui.destroy();
   });
 });

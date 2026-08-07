@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './kit.js';
 import { theme, toolDisplayName } from './theme.js';
 import { t, type MessageKey } from '../i18n/index.js';
 

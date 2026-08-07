@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render } from 'ink-testing-library';
+import React from 'react';
 
 /**
  * 回车之后、run() 之前的窗口:@ 引用展开是异步的,这期间 agent 仍是
@@ -21,20 +21,19 @@ const { mockExpand, deferred } = vi.hoisted(() => {
   };
 });
 
-vi.mock('../src/app/attachments.js', () => ({
+vi.mock('../../src/app/attachments.js', () => ({
   expandAtReferences: mockExpand,
   warnableSkips: () => [],
 }));
 
-import { App } from '../src/ui/App.js';
-import { stubGoal } from './support/goal.js';
-import { EventBus } from '../src/core/events.js';
-import type { Session } from '../src/app/bootstrap.js';
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 40));
-const ESC = '\x1b';
+import { App } from '../../src/ui/App.js';
+import { stubGoal } from '../support/goal.js';
+import { EventBus } from '../../src/core/events.js';
+import type { Session } from '../../src/app/bootstrap.js';
+import { renderUi } from '../support/otui.js';
 
-function setup(options?: { isRunning?: boolean }) {
+async function setup(options?: { isRunning?: boolean }) {
   const bus = new EventBus();
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   const runCalls: string[] = [];
@@ -88,13 +87,13 @@ function setup(options?: { isRunning?: boolean }) {
     dispose: async () => {},
   } as unknown as Session;
 
-  const view = render(<App session={session} />);
+  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
   return {
     runCalls,
     injected,
     abortCount: () => aborts,
     newSessionCount: () => newSessions,
-    ...view,
+    ui,
   };
 }
 
@@ -105,101 +104,80 @@ beforeEach(() => {
 
 describe('提交受理后、run 发起前的窗口', () => {
   it('esc 取消这次提交,展开完成后也不再发起', async () => {
-    const { runCalls, stdin, unmount } = setup();
-    await tick();
+    const { runCalls, ui } = await setup();
 
-    stdin.write('你好');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('你好');
+    await ui.press('return');
     expect(mockExpand).toHaveBeenCalledTimes(1);
     expect(runCalls).toEqual([]); // 还卡在展开里
 
-    stdin.write(ESC);
-    await tick();
+    await ui.press('escape');
 
     deferred.resolve!({ expanded: '你好', attached: [], skipped: [], images: [] });
-    await tick();
+    await ui.tick();
 
     expect(runCalls).toEqual([]); // 已作废,不补发
-    unmount();
+    await ui.destroy();
   });
 
   it('未按 esc 时,展开完成后正常发起这一轮', async () => {
-    const { runCalls, stdin, unmount } = setup();
-    await tick();
+    const { runCalls, ui } = await setup();
 
-    stdin.write('你好');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('你好');
+    await ui.press('return');
 
     deferred.resolve!({ expanded: '你好', attached: [], skipped: [], images: [] });
-    await tick();
+    await ui.tick();
 
     expect(runCalls).toEqual(['你好']);
-    unmount();
+    await ui.destroy();
   });
 
   it('这段窗口里 /clear 被 busy 拦下,不会换掉会话', async () => {
-    const { newSessionCount, stdin, frames, unmount } = setup();
-    await tick();
+    const { newSessionCount, ui } = await setup();
 
-    stdin.write('你好');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('你好');
+    await ui.press('return');
 
-    stdin.write('/clear');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('/clear');
+    await ui.press('return');
 
     expect(newSessionCount()).toBe(0);
     // 拦下时会给出"任务运行中不能使用 /clear"的提示。
-    expect(frames.join('\n')).toContain('/clear');
-    unmount();
+    expect(ui.frame()).toContain('/clear');
+    await ui.destroy();
   });
 
   // 运行中提交的是引导消息,此时 esc 要的是中断那一轮;只取消引导会
   // 表现为"esc 按了没反应,状态栏却灭了"。
   it('turn 正在跑时 esc 仍然中断那一轮,并作废在途的引导', async () => {
-    const { abortCount, injected, stdin, unmount } = setup({ isRunning: true });
-    await tick();
+    const { abortCount, injected, ui } = await setup({ isRunning: true });
 
-    stdin.write('顺便改下这里');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('顺便改下这里');
+    await ui.press('return');
 
-    stdin.write(ESC);
-    await tick();
+    await ui.press('escape');
 
     expect(abortCount()).toBe(1);
 
     deferred.resolve!({ expanded: '顺便改下这里', attached: [], skipped: [], images: [] });
-    await tick();
+    await ui.tick();
     expect(injected).toEqual([]); // 在途引导已作废
-    unmount();
+    await ui.destroy();
   });
 
   it('提交完成后 /clear 恢复可用(拦截不是永久的)', async () => {
-    const { newSessionCount, stdin, unmount } = setup();
-    await tick();
+    const { newSessionCount, ui } = await setup();
 
-    stdin.write('你好');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('你好');
+    await ui.press('return');
     deferred.resolve!({ expanded: '你好', attached: [], skipped: [], images: [] });
-    await tick();
+    await ui.tick();
 
-    stdin.write('/clear');
-    await tick();
-    stdin.write('\r');
-    await tick();
+    await ui.type('/clear');
+    await ui.press('return');
 
     expect(newSessionCount()).toBe(1);
-    unmount();
+    await ui.destroy();
   });
 });

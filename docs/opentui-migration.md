@@ -1,6 +1,7 @@
 # 技术栈迁移评估：对齐 opencode 核心栈（Bun + OpenTUI）
 
-> 状态：**P0 spike 已完成，结论 GO**（见 §6）。分支 `spike/bun-opentui-migration`。
+> 状态：**P0 spike 完成（GO，见 §6）；P1 已交付（见 §7）;P2 已交付(见 §8)**。
+> 分支 `spike/bun-opentui-migration`。
 > 日期：2026-08-07。数据来自本仓库统计与 npm/上游仓库实查，引用处已标注。
 
 ## 0. 目标栈是什么
@@ -263,3 +264,107 @@ src/config、src/session、src/mcp、src/lsp）保持 runtime 与渲染器双重
   #3(scrollback 取舍)不变,仍是 P2 动工前的决策点。
 - spike 产物在 scratchpad(prototype/stress/ui.test/perf.test/proto-bin),
   未入库;本仓库工作树未被 spike 污染。
+
+## 7. P1 交付记录（2026-08-07,Bun 1.3.14）
+
+按 §6.5 修订后的独立路线交付:**npm 包保持纯 JS 不动**(dist/cli.js + 系统
+Node,零变化),单二进制作为并行分发线新增。最终形态与 §1.4 的「npm 壳」设想
+不同——经权衡选择两线并存,npm 用户无感知。
+
+### 落地内容
+
+- **版本注入**(`src/config/version.ts`):`MOJOCODE_BUILD_VERSION` 由
+  `--define` 编译期替换,`typeof` 守卫让 Node/tsup 路径零影响;
+  `packageRoot()` 二进制模式退回 `dirname(process.execPath)`;新增
+  `isCompiledBinary()`。
+- **构建脚本**(`scripts/build-binaries.ts`,`npm run build:bin`):
+  `Bun.build()` compile API 交叉编译 6 平台(darwin-arm64/x64、
+  linux-x64/arm64/x64-musl、windows-x64),入口复用 tsup 产物 dist/cli.js;
+  tar.gz/zip 归档(内含平名 `mojocode(.exe)`)+ SHA256SUMS。
+  **§6.4 的 devtools 坑实测修正**:`--external react-devtools-core` 不可行
+  ——compile 单文件打包会内联动态 import,external 变成启动期顶层依赖直接
+  崩;必须用 onResolve/onLoad plugin 替换成空模块。
+- **doctor 运行时感知**(`src/app/doctor.ts`):`node` 检查在
+  `process.versions.bun` 存在时显示 Bun 版本、跳过 Node 最低版本判断
+  (runtime 打包在二进制里,系统 Node 无关);`install` 检查标注单二进制;
+  升级提示指向 GitHub Releases 而非 `npm i -g`。check id 契约未动。
+- **install.sh**:平台探测(含 musl)→ Releases 下载 → sha256 校验 →
+  `~/.local/bin`。Windows 手动下载 zip。
+- **CI**(从零新建 `.github/workflows/`):`test.yml` = Node 20/24 矩阵
+  (typecheck + vitest)+ bun-smoke(编 linux-x64 断言注入版本、doctor
+  --json 断言 Bun runtime、`bun x vitest run` 全量);`release.yml` =
+  `v*` tag 全平台编译挂 Releases 草稿。npm 发布仍手动。
+
+### 实测数据(darwin-arm64)
+
+- 二进制 64.8MB(tar.gz 22.4MB),单平台编译 0.1-0.2s,6 平台全量 + 归档
+  约 40s(首次含下载各平台 bun runtime)。
+- `--version` 正确输出注入版本(裸 dist/cli.js 在 $bunfs 下会退化成
+  0.0.0-dev,已由 CI 断言锁住)。
+- doctor 无凭据环境按设计 exit 1(API key fail),CI smoke 用假 key +
+  `--offline` 取 exit 0。
+
+## 8. P2 交付记录(2026-08-07,OpenTUI 0.5.1 / Bun 1.3.14)
+
+渲染器迁移完成:Ink 7 全部移除,TUI 运行在 OpenTUI alternate-screen 全屏,
+`/focus` 三档折叠随本阶段一并落地。核心与 `-p` headless 零改动。
+
+### 架构落点
+
+- **适配层 `src/ui/kit.tsx`**:Ink 形状的 Box/Text/useInput/useApp/render 包住
+  OpenTUI。组件层只改 import,JSX/键盘逻辑原样保留;上游 0.x 破坏性变更
+  收敛到一个文件。三个抹平的语义差异:
+  1. `<text>` 不解析 ANSI(探针①实测)→ `ansi-spans.ts` SGR 解析器把
+     markdown/高亮/diff/表格的 ANSI 输出转 `<span>`;39/49 =「继承外层」,
+     与 chalk 嵌套语义一致,Diff 背景高亮直接存活;
+  2. 嵌套 `<Text>` 按 context 自动降为 `<span>`(上游 #438);
+  3. **同批可打印字符合并为一次 input 派发**(Ink 的 stdin-chunk 语义)——
+     OpenTUI 逐字符同步连发会让闭包旧 state 覆盖前字,快速输入丢字(实测)。
+- **时间线**:`<Static>` → `<scrollbox stickyScroll stickyStart="bottom">`;
+  粘底跟随、上滚解粘。布局必须 flexGrow+flexShrink+flexBasis:0+minHeight:0
+  四件套(Yoga 裸默认 shrink=0,内容超高会把底部输入区顶出屏幕,探针②)。
+  性能:TimelineEntry memo + renderMarkdownAnsi 按 (key,width) LRU(md-cache)。
+- **删除清单全量执行**:staticEpoch、resize 200ms settle 重放、4 处
+  `\x1b[2J\x1b[3J\x1b[H`、RESERVED_ROWS 高度预算——共约 120 行 hack 消失,
+  resize 由渲染器天然处理。
+- **运行时门 `src/app/runtime.ts` + tsup `splitting:true`**:TUI 是
+  `import('./ui/tui.js')` 懒加载 chunk,dist/cli.js 零 FFI 引用;Bun 直跑,
+  Node≥26.1 自动重执行注入 `--experimental-ffi`,老 Node 得到指引,
+  `-p`/子命令保持 Node 20。
+- **退出 dump `src/ui/transcript.ts`**:alt screen 内容随退出消失,时间线
+  以带色纯文本写回主屏,接在原生 scrollback 之后(实测含 CJK 完好)。
+- **/focus**(`src/ui/focus.ts`):full/compact/result,ctrl+o 循环、
+  `/focus <mode>` 落盘。铁律——user/assistant/error/banner 与全部 notice
+  任何档位不隐藏(/doctor 等命令的回执正是 info 提示)(Claude Code #50894 的教训),tests/focus.test.ts 锁死。
+
+### 测试与工具链
+
+- 双测试线:`npm test` = Node 跑核心 34 文件 521 用例;`npm run test:ui` =
+  `bun --bun x vitest`(必须 `--bun`,否则 shebang 落回 Node)跑 tests/ui
+  15 文件 155 用例——13 个旧 ink 测试全部移植(唯一删除项:resize 重放
+  测试,机制已不存在),harness 为 tests/support/otui.tsx。
+- 三个踩过的坑:① vitest 需 `resolve.conditions: ['bun']` 才拿到
+  @opentui 的 bun 实现;② `ssr.resolve.conditions` 是整组替换,丢掉
+  module/import 会把依赖解析进 CJS;③ zod 的「命名空间再导出 z」绑定在
+  该组合下丢失,alias 到 index.cjs 解决(见 vitest.ui.config.ts 注释)。
+- 交叉编译:8 个 `@opentui/core-<platform>` 以 `--force` 装成 devDeps
+  (CI `npm ci --force`);Bun 按 target 消除平台死分支,linux 目标另需
+  define `process.env.OPENTUI_LIBC` 钉死 libc,否则 glibc+musl 双库同捆
+  (+18MB,实测)。
+
+### 实测数据(darwin-arm64)
+
+- 二进制 74.3MB(P1 Ink 版 64.8MB,+9.5MB = OpenTUI 原生库 + web-tree-sitter);
+  linux-x64 119MB。6 平台全部编译、归档、校验通过。
+- PTY 全链路:alt screen 进出干净、CJK 输入渲染正确、双 ctrl+c 退出、
+  ctrl+o 档位切换、退出 dump 落主屏——npm+Bun 与单二进制两条路径均验证。
+- `-p` 真实调用在系统 Node 22 正常(cli 主包无 FFI 依赖)。
+
+### 遗留与观察项
+
+- CJK 上游缺陷(#799 折行、#479 滚动乱码)在探针与冒烟中未复现,但上游
+  自认宽字符模型未完工——真实长会话使用中留意,必要时 `OPENTUI_FORCE_WCWIDTH`。
+- 文本选择复制:鼠标被 TUI 接管,原生拖选需 shift/option(README 已注明);
+  OSC52 集成留作后续。
+- 消息导航(opencode 的按消息跳转)未做,scrollbox 子项已按条目建模,
+  后续可加。

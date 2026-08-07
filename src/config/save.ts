@@ -118,6 +118,13 @@ export async function saveStatusBar(segments: string[], file?: string): Promise<
   }, file);
 }
 
+/** 保存 `/focus` 选择的时间线显示密度。 */
+export async function saveTimelineMode(mode: string, file?: string): Promise<string> {
+  return updateGlobalConfig((config) => {
+    config.timeline = mode;
+  }, file);
+}
+
 /**
  * 保存 `/approvals` 切换的两轴权限,写**项目级** `<root>/.mojocode/config.json`。
  *

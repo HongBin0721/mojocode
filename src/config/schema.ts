@@ -135,6 +135,11 @@ export const statusSegmentSchema = z.enum(['mode', 'model', 'cwd', 'think', 'con
 export type StatusSegment = z.infer<typeof statusSegmentSchema>;
 export const STATUS_SEGMENTS = statusSegmentSchema.options;
 
+/** 时间线显示密度(/focus)。 */
+export const timelineModeSchema = z.enum(['full', 'compact', 'result']);
+export type TimelineMode = z.infer<typeof timelineModeSchema>;
+export const TIMELINE_MODES = timelineModeSchema.options;
+
 /** 模型思考强度档位。auto = 不传任何参数、交给服务端默认;off = 显式关闭思考。 */
 export const reasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'high', 'max']);
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
@@ -326,6 +331,12 @@ export const configSchema = z.object({
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
   /** 状态栏显示的信息段,可用 /statusbar 调整。 */
   statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),
+  /**
+   * 时间线显示密度,/focus 或 ctrl+o 切换。full = 全量;compact = 折叠
+   * 工具调用过程;result = 只看问答。`user/assistant/error/banner` 与
+   * warn 级提示在任何档位都不隐藏(见 src/ui/focus.ts 的铁律注释)。
+   */
+  timeline: timelineModeSchema.default('full'),
   /** 会话文件保留天数,启动时清理超期未活动的会话。 */
   cleanupPeriodDays: z.number().int().positive().default(30),
 });
@@ -339,5 +350,9 @@ export const partialConfigSchema = configSchema.partial().extend({
   // 行为,修它超出本次改动范围。)
   search: searchLayerSchema.optional(),
   lsp: lspLayerSchema.optional(),
+  // timeline 同理:`.partial()` 不摘 `.default('full')`,项目层只要存在任意
+  // 配置文件,幻影 timeline:'full' 就会以更高优先级把全局保存的 /focus
+  // 偏好在每次启动时静默重置。裸 optional 让「没写」真正表示「没写」。
+  timeline: timelineModeSchema.optional(),
 });
 export type PartialConfig = z.input<typeof partialConfigSchema>;

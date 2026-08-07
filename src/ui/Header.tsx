@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './kit.js';
 import { theme, modeColor, shortenHome } from './theme.js';
 import { APP_NAME } from '../config/paths.js';
 import { t } from '../i18n/index.js';

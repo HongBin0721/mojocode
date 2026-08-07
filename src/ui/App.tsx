@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Static, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, ScrollArea, Text, useApp, useInput, useTerminalSize } from './kit.js';
 import { Footer } from './Footer.js';
 import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkPhase, type WorkState } from './StatusLine.js';
-import { TodoPanel, todoPanelRows } from './TodoPanel.js';
+import { TodoPanel } from './TodoPanel.js';
 import { GoalLine } from './GoalLine.js';
 import { TimelineEntry } from './Timeline.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
@@ -18,6 +18,7 @@ import {
   WIDTH_SAFETY,
 } from './theme.js';
 import { Markdown } from './Markdown.js';
+import { collapseItems } from './focus.js';
 import { splitCommitted, tailWithinRows } from './preview.js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type {
@@ -40,10 +41,12 @@ import {
   permissionsLabel,
   presetById,
   reasoningEffortSchema,
+  TIMELINE_MODES,
   type ApprovalPresetId,
   type Permissions,
   type ReasoningEffort,
   type StatusSegment,
+  type TimelineMode,
 } from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
 import {
@@ -53,6 +56,7 @@ import {
   saveProviderChoice,
   saveReasoningEffort,
   saveStatusBar,
+  saveTimelineMode,
 } from '../config/save.js';
 import { listModels } from '../model/registry.js';
 import { supportedEfforts } from '../model/reasoning.js';
@@ -76,6 +80,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'think', description: t('cmd.think') },
     { name: 'lang', description: t('cmd.lang') },
     { name: 'statusbar', description: t('cmd.statusbar'), multi: true },
+    { name: 'focus', description: t('cmd.focus') },
     { name: 'compact', description: t('cmd.compact') },
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
@@ -128,6 +133,13 @@ const GOAL_STOP_MESSAGES: Record<GoalStopReason, MessageKey> = {
   'plan-mode': 'notice.goalStopPlanMode',
 };
 
+/** `/focus` 二级选择器里各档位的说明。 */
+const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
+  full: 'focusopt.full',
+  compact: 'focusopt.compact',
+  result: 'focusopt.result',
+};
+
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
   mode: 'statusopt.mode',
   model: 'statusopt.model',
@@ -145,26 +157,15 @@ const LOCALE_LABELS: Record<Locale, string> = {
 };
 
 /**
- * 流式预览占用的终端行数上限。动态区域(预览 + 输入框 + 状态栏)的总高度
- * 一旦超过终端窗口高度,Ink 就擦不掉上一帧,每次重绘都会往回滚区漏一份
- * 旧帧。完整文本在 text-end 时会进入 <Static> 时间线,预览截断不丢内容。
+ * 流式预览占用的终端行数上限。全屏布局下这不再是防漏帧的硬约束,只是
+ * 视觉取舍:预览太高会把时间线挤得只剩一条缝。完整文本在 text-end 时
+ * 进入时间线,预览截断不丢内容。
  *
  * 思考不同:定稿只留一行"已思考 8.2s",正文**只在这个预览里出现过一次**,
  * 之后再无回看途径,所以行数给得比正文预览的道理更足——它是唯一的窗口。
  */
 const STREAM_PREVIEW_ROWS = 5;
 const REASONING_PREVIEW_ROWS = 5;
-/** 留给状态行、输入框、信息栏、进行中的工具行和各处 marginTop 的余量。 */
-const RESERVED_ROWS = 13;
-
-/** 宽度拖动期间 <Static> 的空条目列表;模块级常量保证引用稳定。 */
-const NO_ITEMS: TimelineItem[] = [];
-
-/**
- * 宽度拖动期间在动态区实时渲染的时间线尾部条数。足够铺满一屏(更早的
- * 内容本来就在视口外),又给长会话的每次宽度变化重渲染封住了成本上限。
- */
-const RESIZE_TAIL_ITEMS = 12;
 
 
 let itemCounter = 0;
@@ -209,11 +210,17 @@ function buildResumeItems(session: Session): TimelineItem[] {
 
 interface Props {
   session: Session;
+  /**
+   * 退出 dump 用:App 每次渲染把当前时间线同步进来,cli.tsx 在 TUI 退出、
+   * 主屏恢复后据此把整场会话以纯文本写回终端 scrollback(alternate screen
+   * 里画过的东西随退出消失,这是唯一的留痕通道)。
+   */
+  itemsRef?: { current: TimelineItem[] };
 }
 
-export function App({ session }: Props): React.ReactElement {
+export function App({ session, itemsRef }: Props): React.ReactElement {
   const { exit } = useApp();
-  const { stdout, write: writeStdout } = useStdout();
+  const { columns, rows } = useTerminalSize();
 
   // 惰性初始化:`mojocode -r` 恢复的会话在首帧就带着回放的历史时间线。
   // 横幅永远是第一条(见 types.ts 的 banner 注释)。
@@ -221,20 +228,6 @@ export function App({ session }: Props): React.ReactElement {
     sessionBanner(session),
     ...buildResumeItems(session),
   ]);
-  /**
-   * 每次清空时间线时递增,作为 <Static> 的 key 强制重挂载。
-   *
-   * Ink 自己攒了一份 fullStaticOutput,只在 <Static> 节点身份变化时才重置,
-   * 并会在任何撑出视口的帧、以及终端恢复时原样重播它。只把 items 置空不换
-   * 节点身份,于是 /clear 之后随便来一帧高内容(大 diff 的授权框、窄窗口下
-   * 的长预览)就会把清掉的整份记录重新打回屏幕。
-   */
-  const [staticEpoch, setStaticEpoch] = useState(0);
-  // 终端宽度正在拖动调节中:时间线暂时从 <Static> 摘下,尾部条目改在动态区
-  // 实时渲染,停稳后整体重放(见下方 resize 监听的注释)。
-  const [resizing, setResizing] = useState(false);
-  // 拖动期间每个宽度变化递增一次,专门用来触发重渲染;值本身不被读取。
-  const [, setResizeTick] = useState(0);
   const [activeText, setActiveText] = useState('');
   const [activeReasoning, setActiveReasoning] = useState('');
   const [activeTools, setActiveTools] = useState<ActiveToolCall[]>([]);
@@ -293,6 +286,14 @@ export function App({ session }: Props): React.ReactElement {
   // Header 又只在默认档时不显示且早已滚出屏幕——没有这个回显,按下去会毫无反馈。
   const [modeFlash, setModeFlash] = useState<string | undefined>(undefined);
   const modeFlashTimer = useRef<NodeJS.Timeout | undefined>(undefined);
+  // /focus 时间线密度;ctrl+o 会话内循环切换,/focus <mode> 落盘。
+  // `?? 'full'` 防御测试里的精简版 fake session(config 缺字段)。
+  const [timelineMode, setTimelineMode] = useState<TimelineMode>(
+    session.config.timeline ?? 'full',
+  );
+  // ctrl+o 切换后在 footer 短暂回显新档位(与 modeFlash 同理:得有反馈)。
+  const [focusFlash, setFocusFlash] = useState<TimelineMode | undefined>(undefined);
+  const focusFlashTimer = useRef<NodeJS.Timeout | undefined>(undefined);
   const [rewind, setRewind] = useState<RewindEntry[] | undefined>(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
@@ -636,7 +637,9 @@ export function App({ session }: Props): React.ReactElement {
     // shift+tab 循环切权限档位(ask → auto → plan),与 Claude Code /
     // Codex 的手感一致。full-access 刻意不在循环里。授权确认框开着时不接:
     // 那会在你决定"要不要放行这一次"的中途改掉规则本身。
-    if (key.tab && key.shift && !permission) {
+    // 回退选择器打开时同样不接:它渲染期间 Footer 已卸载,切了档位没有任何
+    // 反馈,之后的写操作会在用户不知情的模式下放行。
+    if (key.tab && key.shift && !permission && !rewind) {
       const step = nextCycleStep(
         { sandbox: session.config.sandbox, approval: session.config.approval },
         session.config.plan,
@@ -663,6 +666,19 @@ export function App({ session }: Props): React.ReactElement {
       setTodoPanelOpen((open) => !open);
       return;
     }
+    // ctrl+o 循环时间线密度(/focus)。全屏渲染下切换 = 重画,随时可逆。
+    // 副作用一律留在 updater 外:updater 必须是纯函数(React 可能重复调用它),
+    // 在里面开定时器会漏一份、setState 又发生在渲染期。与上面 shift+tab 同形。
+    if (key.ctrl && input === 'o') {
+      const next =
+        TIMELINE_MODES[(TIMELINE_MODES.indexOf(timelineMode) + 1) % TIMELINE_MODES.length]!;
+      setTimelineMode(next);
+      session.config.timeline = next;
+      setFocusFlash(next);
+      if (focusFlashTimer.current) clearTimeout(focusFlashTimer.current);
+      focusFlashTimer.current = setTimeout(() => setFocusFlash(undefined), 2000);
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (ctrlCArmed) {
         // 必须清掉待触发的定时器:cli.tsx 只设置 process.exitCode 而不调用
@@ -683,6 +699,7 @@ export function App({ session }: Props): React.ReactElement {
     if (ctrlCTimer.current) clearTimeout(ctrlCTimer.current);
     if (escTimer.current) clearTimeout(escTimer.current);
     if (modeFlashTimer.current) clearTimeout(modeFlashTimer.current);
+    if (focusFlashTimer.current) clearTimeout(focusFlashTimer.current);
   }, []);
 
   // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/model、
@@ -703,71 +720,13 @@ export function App({ session }: Props): React.ReactElement {
     [providerLabel, model, modeLabel, session],
   );
 
-  // 清屏 + 换 <Static> 身份 + 重放:/resume 与 esc-esc 回退共用。
-  // 不清屏直接换内容的话,ink 攒下的 fullStaticOutput 会把旧时间线重播回来
-  // (见 staticEpoch 的注释)。
-  const resetTimeline = useCallback(
-    (nextItems: TimelineItem[]) => {
-      writeStdout('\x1b[2J\x1b[3J\x1b[H');
-      setItems(nextItems);
-      setStaticEpoch((epoch) => epoch + 1);
-    },
-    [writeStdout],
-  );
-
-  // 终端宽度变化时的时间线处理。<Static> 里的条目按定稿时的宽度排版、
-  // 只打印一次;宽度一变,终端自己把这些历史行重新折行——表格框线被拦腰
-  // 切碎,拖动过程中滚进回滚缓冲的旧动态帧(输入框边框)也留成鬼影。ink
-  // 的 resize 处理只重画动态区,救不了 <Static> 那部分。
-  //
-  // 节奏是"开始时搬进动态区、停稳后放回 <Static>":首次宽度变化立即清屏、
-  // 把时间线从 <Static> 摘下,改为在动态区渲染其尾部若干条(resizing 分支,
-  // 见 JSX);此后每个宽度变化都触发一次 React 重渲染,尾部条目跟着按新
-  // 宽度重排——动态区完全归 ink 掌控,重写包在同步输出(DEC 2026)里,
-  // 内容全程可见、排版正确、几乎不闪。宽度停稳后再清屏、恢复条目并换
-  // <Static> 身份,全部按最终宽度重放。之前试过两版:拖动期间节流清屏
-  // 重放整份时间线,重画本身闪得比错乱还凶;拖动期间整条藏起来,又变成
-  // 内容全程不可见。
-  //
-  // 只看列数:高度伸缩不影响已定稿行的折行,不值得为它清一次屏。
-  useEffect(() => {
-    if (!stdout) return;
-    // 最后一次宽度变化后多久算"停稳"。太短会在慢速拖动中反复重放,太长
-    // 则松手后时间线迟迟不回来。
-    const SETTLE_MS = 200;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let lastColumns = stdout.columns;
-    let dragging = false;
-    const onResize = () => {
-      if (stdout.columns === lastColumns) return;
-      lastColumns = stdout.columns;
-      if (!dragging) {
-        dragging = true;
-        writeStdout('\x1b[2J\x1b[3J\x1b[H');
-        // 同一批 setState:摘下条目 + 换 <Static> 身份,让 ink 丢掉已累积
-        // 的静态输出,否则拖动中随便一个撑出视口的帧会把旧时间线重播回来。
-        setResizing(true);
-        setStaticEpoch((epoch) => epoch + 1);
-      } else {
-        // 拖动进行中:每个宽度变化都要一次重渲染,动态区里的尾部条目才会
-        // 按新宽度重排(ink 的 resize 只重排 yoga 布局,不重跑组件,
-        // renderMarkdownAnsi 的输出不触发 React 渲染就不会更新)。
-        setResizeTick((tick) => tick + 1);
-      }
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        dragging = false;
-        writeStdout('\x1b[2J\x1b[3J\x1b[H');
-        setResizing(false);
-        setStaticEpoch((epoch) => epoch + 1);
-      }, SETTLE_MS);
-    };
-    stdout.on('resize', onResize);
-    return () => {
-      clearTimeout(timer);
-      stdout.off('resize', onResize);
-    };
-  }, [stdout, writeStdout]);
+  // 重放时间线:/resume 与 esc-esc 回退共用。全屏渲染下这只是一次普通的
+  // setState——OpenTUI 每帧整屏重画,没有 Ink <Static> 的累积输出要清,
+  // 也没有清屏序列要写;终端宽度变化同理由渲染器自行处理(条目按 columns
+  // 重新渲染,markdown 缓存按新宽度取新键)。
+  const resetTimeline = useCallback((nextItems: TimelineItem[]) => {
+    setItems(nextItems);
+  }, []);
 
   /** esc 的总入口:运行中 → 中断;空闲二连 esc → 回退选择器。 */
   const handleEscape = useCallback(() => {
@@ -888,18 +847,10 @@ export function App({ session }: Props): React.ReactElement {
             });
             break;
           }
-          if (name === 'clear') {
-            // 必须走 ink 的 writeToStdout(useStdout().write)而不是直接写
-            // process.stdout:它会先擦掉当前帧并重置 ink 的"上一帧"缓存,
-            // 写入清屏序列(2J 清屏、3J 清回滚缓冲、H 归位)后再重画帧。
-            // 直接写 stdout 的话 ink 不知道屏幕被清了——若下一帧输出内容
-            // 恰好没变(如时间线本就为空),ink 会跳过重绘,屏幕停在全空。
-            writeStdout('\x1b[2J\x1b[3J\x1b[H');
-          }
-          // 清空时间线,只留横幅,回到和启动时一致的界面。
+          // 清空时间线,只留横幅,回到和启动时一致的界面。全屏渲染下
+          // /clear 与 /new 的屏幕表现相同(没有终端回滚缓冲可清),差异
+          // 只剩语义上的会话文件切换,都由上面的 newSession 完成。
           setItems([bannerItem()]);
-          // 同时换掉 <Static> 的身份,让 ink 丢掉已累积的静态输出。
-          setStaticEpoch((epoch) => epoch + 1);
           setUsage((prev) => ({ ...prev, used: 0, total: 0 }));
           break;
         }
@@ -1109,6 +1060,32 @@ export function App({ session }: Props): React.ReactElement {
           push({ kind: 'notice', level: 'info', message: t('notice.langSet', { lang: arg }) });
           await saveLanguage(arg).catch((err: Error) => {
             push({ kind: 'notice', level: 'warn', message: t('notice.langSaveFailed', { message: err.message }) });
+          });
+          break;
+        }
+
+        case 'focus': {
+          if (!arg || !(TIMELINE_MODES as readonly string[]).includes(arg)) {
+            push({
+              kind: 'notice',
+              level: arg ? 'warn' : 'info',
+              message: t('notice.focusUsage', {
+                list: TIMELINE_MODES.join(' | '),
+                current: timelineMode,
+              }),
+            });
+            break;
+          }
+          const next = arg as TimelineMode;
+          setTimelineMode(next);
+          session.config.timeline = next;
+          push({ kind: 'notice', level: 'info', message: t('notice.focusSet', { mode: next }) });
+          await saveTimelineMode(next).catch((err: Error) => {
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: t('notice.focusSaveFailed', { message: err.message }),
+            });
           });
           break;
         }
@@ -1336,7 +1313,7 @@ export function App({ session }: Props): React.ReactElement {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session, perms, planActive, modeLabel, think, usage, statusSegments, push, exit, writeStdout, resetTimeline, bannerItem],
+    [session, perms, planActive, modeLabel, think, usage, statusSegments, timelineMode, push, exit, resetTimeline, bannerItem],
   );
 
   // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
@@ -1453,6 +1430,12 @@ export function App({ session }: Props): React.ReactElement {
           label: t(SEGMENT_DESCRIPTIONS[s]),
           current: statusSegments.includes(s),
         })),
+      focus: () =>
+        TIMELINE_MODES.map((m) => ({
+          value: m,
+          label: t(FOCUS_DESCRIPTIONS[m]),
+          current: m === timelineMode,
+        })),
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
           value: id,
@@ -1484,40 +1467,33 @@ export function App({ session }: Props): React.ReactElement {
   const todoPanelActive = Boolean(work) && todos.length > 0;
   const todoPanelVisible = todoPanelActive && todoPanelOpen;
 
-  // 预览高度按实际终端尺寸收敛,窄/矮窗口下也不会撑爆动态区域。
-  // 任务面板同处动态区,它占的行也要从预算里扣掉。
-  const columns = stdout?.columns ?? 80;
-  const panelRows = todoPanelVisible ? todoPanelRows(todos).length : 0;
-  // 目标进度那一行同处动态区,它占的一行也要从预算里扣掉——但它和输入框
-  // 同属一个三元分支,授权确认框或回退选择器占着位置时压根不渲染。不带上
-  // 这个条件的话,矮终端下弹确认框时预览会比实际可用空间少截一行。
-  const goalLineVisible = goalActive && !permission && !rewind;
-  const budget = Math.max(
-    1,
-    (stdout?.rows ?? 24) - RESERVED_ROWS - panelRows - (goalLineVisible ? 1 : 0),
-  );
-  const textRows = Math.min(STREAM_PREVIEW_ROWS, budget);
-  const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, budget);
+  // 预览行数仍要看终端高度:底部固定区(flexShrink 0,见 JSX)在矮终端上
+  // 不能把输入框和权限选项顶出视口。留 12 行给输入框边框、状态栏、footer
+  // 与各处 marginTop,剩余空间双预览均分,最少各 1 行。
+  const previewBudget = Math.max(1, Math.floor((rows - 12) / 2));
+  const textRows = Math.min(STREAM_PREVIEW_ROWS, previewBudget);
+  const reasoningRows = Math.min(REASONING_PREVIEW_ROWS, previewBudget);
+
+  // 退出 dump 的数据通道(见 Props.itemsRef)。始终存全量:dump 是留档,
+  // 不跟随 /focus 的显示密度。
+  if (itemsRef) itemsRef.current = items;
+
+  // /focus 过滤在渲染层做,items 数据全量保留——切换档位只是换谓词重画。
+  const visibleItems = collapseItems(items, timelineMode);
 
   return (
-    <Box flexDirection="column">
-      {/* 已完成的条目只渲染一次,留在终端回滚缓冲区中。宽度拖动调节期间
-          整体摘下(见 resize 监听),停稳后按最终宽度重放。 */}
-      <Static key={staticEpoch} items={resizing ? NO_ITEMS : items}>
-        {(item) => <TimelineEntry key={item.key} item={item} />}
-      </Static>
+    <Box flexDirection="column" width="100%" height="100%">
+      {/* 时间线:粘底滚动,流式期间自动跟随,上滚回看自动解粘。条目组件
+          React.memo + markdown 按 (key, width) 缓存,重渲染开销恒定。 */}
+      <ScrollArea>
+        {visibleItems.map((item) => (
+          <TimelineEntry key={item.key} item={item} columns={columns} />
+        ))}
+      </ScrollArea>
 
-      {/* 宽度拖动期间的时间线尾部:在动态区实时渲染,每次宽度变化随
-          React 重渲染按新宽度重排,内容保持可见且不被终端折坏。 */}
-      {resizing ? (
-        <Box flexDirection="column">
-          {items.slice(-RESIZE_TAIL_ITEMS).map((item) => (
-            <TimelineEntry key={item.key} item={item} />
-          ))}
-        </Box>
-      ) : null}
-
-      <Box flexDirection="column" marginTop={1}>
+      {/* 底部固定区不参与收缩:空间不足时塌缩的是上面的时间线视口,
+          输入框与权限选项永远可见(矮终端保障,替代旧的 RESERVED_ROWS)。 */}
+      <Box flexDirection="column" marginTop={1} flexShrink={0}>
         {activeReasoning.trim() ? (
           <Box marginTop={1} paddingRight={WIDTH_SAFETY}>
             <Text color={theme.dim} italic>
@@ -1644,7 +1620,9 @@ export function App({ session }: Props): React.ReactElement {
                     ? t('status.escAgainRewind')
                     : modeFlash
                       ? t('status.modeCycled', { mode: modeFlash })
-                      : undefined
+                      : focusFlash
+                        ? t('status.focusCycled', { mode: focusFlash })
+                        : undefined
               }
             />
           </Box>

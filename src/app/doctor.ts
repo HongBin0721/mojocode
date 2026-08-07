@@ -14,7 +14,7 @@ import {
 import { PROVIDER_PRESETS, isBuiltinProvider } from '../config/providers.js';
 import { SEARCH_PRESETS, resolveSearchBackend } from '../config/search.js';
 import { permissionsLabel, type Config } from '../config/schema.js';
-import { packageRoot, packageVersion } from '../config/version.js';
+import { REPO_URL, isCompiledBinary, packageRoot, packageVersion } from '../config/version.js';
 import { resolveLspServers, type LspRuntimeStatus } from '../lsp/manager.js';
 import { LspClient } from '../lsp/client.js';
 import { connectMcpServers, type McpStatus } from '../mcp/client.js';
@@ -184,18 +184,36 @@ async function envChecks(opts: {
           : outdated
             ? ` · ${t('doctor.updateAvailable', { latest })}`
             : ` · ${t('doctor.upToDate')}`),
-    ...(outdated ? { hint: t('doctor.updateHint', { name: APP_NAME }) } : {}),
+    ...(outdated
+      ? {
+          hint: isCompiledBinary()
+            ? t('doctor.updateHintBinary', { url: `${REPO_URL}/releases` })
+            : t('doctor.updateHint', { name: APP_NAME }),
+        }
+      : {}),
   });
 
-  const major = Number(process.versions.node.split('.')[0]);
-  const tooOld = Number.isFinite(major) && major < NODE_MIN_MAJOR;
-  checks.push({
-    id: 'node',
-    label: t('doctor.check.node'),
-    level: tooOld ? 'fail' : 'ok',
-    detail: `v${process.versions.node}`,
-    ...(tooOld ? { hint: t('doctor.nodeTooOld', { required: String(NODE_MIN_MAJOR) }) } : {}),
-  });
+  // 单二进制里 runtime 是打包进来的 Bun,系统装没装 Node、装的多老都无关紧要;
+  // `process.versions.node` 此时只是 Bun 的兼容层版本号,最低版本检查不适用。
+  const bunVersion = process.versions.bun;
+  if (bunVersion !== undefined) {
+    checks.push({
+      id: 'node',
+      label: t('doctor.check.runtime'),
+      level: 'ok',
+      detail: `Bun v${bunVersion} · Node compat v${process.versions.node}`,
+    });
+  } else {
+    const major = Number(process.versions.node.split('.')[0]);
+    const tooOld = Number.isFinite(major) && major < NODE_MIN_MAJOR;
+    checks.push({
+      id: 'node',
+      label: t('doctor.check.node'),
+      level: tooOld ? 'fail' : 'ok',
+      detail: `v${process.versions.node}`,
+      ...(tooOld ? { hint: t('doctor.nodeTooOld', { required: String(NODE_MIN_MAJOR) }) } : {}),
+    });
+  }
 
   checks.push({
     id: 'platform',
@@ -208,7 +226,8 @@ async function envChecks(opts: {
     id: 'install',
     label: t('doctor.check.install'),
     level: 'info',
-    detail: packageRoot(),
+    // 单二进制模式下 packageRoot() 已退回二进制所在目录,补一个标注说明形态。
+    detail: packageRoot() + (isCompiledBinary() ? ` · ${t('doctor.installBinary')}` : ''),
   });
 
   return checks;

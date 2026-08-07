@@ -10,16 +10,39 @@ import { APP_NAME } from './paths.js';
  * (`--version` 曾长期停在 0.1.0,而发布的是 0.1.1)。源码目录
  * (`src/config/`)与打包产物(`dist/`)到包根的层级不同,所以逐级向上找,
  * 并用 `name` 字段确认找到的确实是本包,而不是恰好在上层的宿主项目。
+ *
+ * 单二进制(`bun build --compile`)里没有 package.json 可读——模块被打进
+ * `$bunfs`,向上找只会得到 `0.0.0-dev`。因此构建脚本用 `--define` 把
+ * `MOJOCODE_BUILD_VERSION` 替换成字面量,这里优先读它;Node/tsup 路径下
+ * 该标识符不存在,`typeof` 守卫安全返回 undefined,继续走 fs 查找。
  */
+declare const MOJOCODE_BUILD_VERSION: string | undefined;
+
+/** build-time 注入的版本号;非编译产物里为 undefined。 */
+const injectedVersion: string | undefined =
+  typeof MOJOCODE_BUILD_VERSION === 'string' ? MOJOCODE_BUILD_VERSION : undefined;
+
+/** 是否运行在 `bun build --compile` 出的单二进制里(以版本注入为标志)。 */
+export function isCompiledBinary(): boolean {
+  return injectedVersion !== undefined;
+}
+
+/** 仓库主页。写死而非读 package.json:单二进制里没有 package.json 可读。 */
+export const REPO_URL = 'https://github.com/HongBin0721/mojocode';
+
 let cached: string | undefined;
 
 export function packageVersion(): string {
-  if (cached === undefined) cached = findPackage()?.version ?? '0.0.0-dev';
+  if (cached === undefined) cached = injectedVersion ?? findPackage()?.version ?? '0.0.0-dev';
   return cached;
 }
 
-/** 包根目录(含 package.json 的那一层);找不到时退回当前模块所在目录。 */
+/**
+ * 包根目录(含 package.json 的那一层);找不到时退回当前模块所在目录。
+ * 单二进制里不存在包根,退回二进制自身所在目录(doctor 的安装位置检查用)。
+ */
 export function packageRoot(): string {
+  if (isCompiledBinary()) return path.dirname(process.execPath);
   return findPackage()?.dir ?? path.dirname(fileURLToPath(import.meta.url));
 }
 

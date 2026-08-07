@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './kit.js';
 import { theme, glyphs, inputModeStyle } from './theme.js';
 import { t } from '../i18n/index.js';
 import { fuzzyFilter } from '../app/file-index.js';

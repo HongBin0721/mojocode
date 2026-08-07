@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from './kit.js';
 import type { RewindEntry } from '../session/replay.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';

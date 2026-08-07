@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './kit.js';
 import { theme, glyphs, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import { t } from '../i18n/index.js';
 import type { GoalStatus } from '../agent/goal.js';

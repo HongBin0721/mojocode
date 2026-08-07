@@ -4,29 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`mojocode` — a terminal coding agent (full-screen Ink TUI + headless `-p` mode) that works with any LLM via the Vercel AI SDK (Kimi / DeepSeek / GLM presets + any OpenAI-compatible endpoint). ESM-only, Node ≥ 20, TypeScript with `strict` and `noUncheckedIndexedAccess`.
+`mojocode` — a terminal coding agent (full-screen OpenTUI TUI + headless `-p` mode) that works with any LLM via the Vercel AI SDK (Kimi / DeepSeek / GLM presets + any OpenAI-compatible endpoint). ESM-only, TypeScript with `strict` and `noUncheckedIndexedAccess`. Runtime split: `-p`/subcommands run on Node ≥ 20; the TUI needs native FFI — Bun (primary, single-binary distribution) or Node ≥ 26.1 with `--experimental-ffi` (auto re-exec injects the flag, see `src/app/runtime.ts`).
 
 **Code comments and the README are written in Simplified Chinese** — keep new comments in Chinese to match.
 
 ## Commands
 
 ```bash
-npm run build       # tsup → dist/cli.js (bin entry, esm, deps external)
+npm run build       # tsup → dist/cli.js + lazy chunks (esm, splitting on, deps external)
 npm run dev         # tsup --watch
 npm run typecheck   # tsc --noEmit (tsup does not typecheck)
-npm test            # vitest run (all tests in tests/**/*.test.{ts,tsx})
-npx vitest run tests/gate.test.ts          # single test file
-npx vitest run -t "test name substring"    # single test by name
+npm test            # core tests, Node lane (excludes tests/ui/)
+npm run test:ui     # UI tests, MUST run under Bun (= bun --bun x vitest run --config vitest.ui.config.ts)
+npm run build:bin   # bun scripts/build-binaries.ts — cross-compile single binaries (6 platforms)
+npx vitest run tests/gate.test.ts          # single core test file
+bun --bun x vitest run --config vitest.ui.config.ts tests/ui/input.test.tsx   # single UI test file
 node dist/cli.js    # run the built CLI (or `mojocode` after npm link)
 ```
 
-There is no lint config; `npm run typecheck` is the correctness gate alongside tests.
+There is no lint config; `npm run typecheck` is the correctness gate alongside tests. UI tests need Bun because OpenTUI's test renderer is the real native renderer (FFI); `vitest.ui.config.ts` forces the `bun` export condition and the `bun --bun` prefix forces the Bun runtime (plain `bunx vitest` silently runs Node via the shebang).
 
 ## Architecture
 
-Core principle: **the agent core never imports React.** `src/core/events.ts` defines the contract — the core emits typed `AgentEvent`s over a minimal `EventBus` and awaits permission decisions through a `PermissionAsker` callback. The same agent loop therefore drives both the Ink TUI (`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
+Core principle: **the agent core never imports React.** `src/core/events.ts` defines the contract — the core emits typed `AgentEvent`s over a minimal `EventBus` and awaits permission decisions through a `PermissionAsker` callback. The same agent loop therefore drives both the OpenTUI TUI (`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
 
-Wiring happens in `src/app/bootstrap.ts`: it builds the `Session` object (agent + bus + gate + tools + MCP connections + session store) that both frontends consume. `src/cli.tsx` is the commander entry point (subcommands: `auth`, `models`, `providers`, `sessions`, `config`, `doctor`).
+Wiring happens in `src/app/bootstrap.ts`: it builds the `Session` object (agent + bus + gate + tools + MCP connections + session store) that both frontends consume. `src/cli.tsx` is the commander entry point (subcommands: `auth`, `models`, `providers`, `sessions`, `config`, `doctor`). **The TUI is a lazy `import('./ui/tui.js')` behind `loadTuiOrExplain()`** — never import `src/ui/` (→ kit → `@opentui/core`, which needs FFI at module load) statically from `cli.tsx` or anything on the `-p` path; tsup `splitting: true` keeps the TUI in its own chunk so `dist/cli.js` stays FFI-free.
 
 `src/app/doctor.ts` powers both `mojocode doctor` and the TUI's `/doctor`: `collectDoctor()` gathers levelled checks (env / config / provider / search / permissions / MCP / sessions / workspace) into a `DoctorReport`, `formatDoctor()` renders it. Check `id`s are the stable contract for `--json` and tests; `label`/`detail` are localized. A `fail` check sets exit code 1. Two things to keep in mind when touching it: commander lets the *root* command swallow `-C` and `--json` when a subcommand declares the same names, so the doctor action reads them off `program.opts()`; and the TUI passes `session.config` plus `session.mcpStatuses` into `runDoctor()` so the report reflects in-session `/approvals`, `/model` changes and does **not** re-connect MCP servers (that would spawn a second child process per stdio server).
 
@@ -41,13 +43,14 @@ Module map:
 - `src/agent/` — the streamText loop, system prompt assembly (`prompt.ts` injects `AGENTS.md`/`MOJOCODE.md` from the project root), context compaction (`compact.ts`). Mid-turn guidance messages are queued and injected at step boundaries.
 - `src/mcp/` — MCP client + bridge that wraps MCP tools as AI SDK tools, routed through the same PermissionGate.
 - `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs; a parity test asserts the two key sets match. Resolution: config `language` → `MOJOCODE_LANG` → `LC_ALL`/`LANG`. **UI strings are localized; text fed to the model (tool errors, denial reasons) is intentionally English-only** — mixed language degrades function calling.
-- `src/ui/` — Ink components. Completed timeline entries go in Ink's `<Static>` so they render once into the scrollback buffer.
+- `src/ui/` — OpenTUI (`@opentui/react` 0.5.1, exact-pinned with `@opentui/core` and `web-tree-sitter`) components in alternate-screen fullscreen mode. `kit.tsx` is the renderer adapter: Ink-shaped `Box`/`Text`/`useInput`/`useApp`/`render` over OpenTUI — components import kit, never `@opentui/*` directly (upstream 0.x breakage lands in one file). Kit absorbs three semantic gaps: OpenTUI `<text>` does not parse ANSI (kit's `Text` routes ESC-containing strings through `ansi-spans.ts` → `<span>`s; SGR 39/49 mean "inherit outer", which Diff's background highlight relies on); nested `<Text>` must be `<span>` (context-switched); plain printable keypresses arriving in one synchronous burst are merged into a single `input` string (Ink's stdin-chunk semantics — without this, fast typing drops characters because handlers close over stale state). Timeline lives in a `<scrollbox stickyStart="bottom">` (`ScrollArea` in kit — the flexGrow/flexShrink/flexBasis:0/minHeight:0 quartet is load-bearing); entries re-render every frame, so `TimelineEntry` is `React.memo`'d and `renderMarkdownAnsi` is LRU-cached by `(item.key, width)` in `md-cache.ts`. `/focus` (`focus.ts` `collapseItems`) filters the timeline at render time — `user`/`assistant`/`error`/`banner` and ALL notices are NEVER hidden (slash-command replies such as /doctor's whole report are `info` notices) (iron law, locked by `tests/focus.test.ts`). On exit, `tui.tsx` dumps the timeline as text to the restored main screen via `transcript.ts` (alt-screen content vanishes otherwise). UI tests live in `tests/ui/` on the Bun lane with the `tests/support/otui.tsx` harness (handles React 19's async first commit and the stdin parser's lone-ESC buffering).
 
 ## Gotchas (documented in README, do not regress)
 
 - GLM's baseURL is `/api/paas/v4` — never append `/v1` (404s).
 - Never hardcode model IDs; presets are only starting defaults, `mojocode models` fetches the live list.
 - Use `result.responseMessages` for history, not `result.response.messages` — the latter only contains the last step and silently drops earlier tool calls.
-- `render(<App/>, { exitOnCtrlC: false })` is required — Ink's default swallows ctrl+c before `useInput`, breaking the double-ctrl+c-to-exit logic.
+- Kit's `render()` defaults `exitOnCtrlC: false` — the renderer would otherwise destroy itself before `useInput` sees ctrl+c, breaking the double-ctrl+c-to-exit logic (startup wizard/picker opt back in).
+- Cross-compiling needs the target's `@opentui/core-<platform>` package on disk; `build-binaries.ts` installs missing ones on demand (`npm install --no-save --force`). Do NOT pin them in package.json — each declares os/cpu, so a bare `npm ci` would EBADPLATFORM on every machine. The script also pins `process.env.OPENTUI_LIBC` per Linux target via define — without it both glibc and musl native libs get embedded (+~18MB).
 - Readonly enforcement uses `gate.assertCanMutate()` *before* tools do any work, separate from `checkWrite`, because tools short-circuit (e.g. `write` returns early on unchanged content) and the guarantee must not depend on which branch ran.
 - In-turn compaction only shrinks the messages sent to the model; the persistent history stays long, and the `historyNeedsCompact` flag forces compaction at the next turn start (otherwise the shrunken `lastInputTokens` masks the need).

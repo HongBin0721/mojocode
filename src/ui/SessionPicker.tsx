@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput } from './kit.js';
 import type { SessionMeta } from '../session/store.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';

@@ -26,6 +26,8 @@ export type TimelineItem =
   | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string }
+  /** /focus 折叠档位下,一段被隐藏的工具调用的占位(见 src/ui/focus.ts)。 */
+  | { key: string; kind: 'collapsed'; count: number }
   | {
       /**
        * 启动横幅。终端非全屏模式下无法把组件钉在窗口顶部(Ink 动态区永远

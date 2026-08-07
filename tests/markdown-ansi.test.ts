@@ -156,3 +156,26 @@ describe('renderMarkdownAnsi', () => {
     }
   });
 });
+
+describe('链接渲染(不发 OSC 8)', () => {
+  const ESC = String.fromCharCode(27);
+
+  it('支持超链接的终端下也渲染成 文字 (url)', () => {
+    const prev = process.env.FORCE_HYPERLINK;
+    process.env.FORCE_HYPERLINK = '1';
+    try {
+      const out = renderMarkdownAnsi('见 [文档](https://example.com) 说明', 60);
+      expect(out).toContain('文档 (https://example.com)');
+      expect(out).not.toContain(`${ESC}]8;;`);
+    } finally {
+      if (prev === undefined) delete process.env.FORCE_HYPERLINK;
+      else process.env.FORCE_HYPERLINK = prev;
+    }
+  });
+
+  it('裸 URL 链接不重复展示', () => {
+    const out = renderMarkdownAnsi('见 <https://example.com> 说明', 60);
+    expect(out).toContain('https://example.com');
+    expect(out).not.toContain('https://example.com (https://example.com)');
+  });
+});

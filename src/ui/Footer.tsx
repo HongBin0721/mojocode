@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from './kit.js';
 import { theme, glyphs, formatTokens, truncateWidth, truncateWidthStart, modeColor, shortenHome } from './theme.js';
 import type { TodoItem } from '../tools/index.js';
 import type { StatusSegment } from '../config/schema.js';

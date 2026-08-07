@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text } from 'ink';
+import { Text } from './kit.js';
 import { highlightLine, resolveLanguage } from './highlight.js';
 import { theme } from './theme.js';
 
