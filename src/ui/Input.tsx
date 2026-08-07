@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput } from './kit.js';
+import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
+import { Box, Text, useInput, type JSX } from './kit.js';
 import { theme, glyphs, inputModeStyle } from './theme.js';
 import { t } from '../i18n/index.js';
 import { fuzzyFilter } from '../app/file-index.js';
@@ -71,8 +71,8 @@ interface Props {
   /**
    * 预填已写入输入框,调用方应把 prefill 置空。
    *
-   * 去重不能只靠组件内的 ref:权限确认框出现时 Input 会整个卸载,重新挂载
-   * 后 ref 归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
+   * 去重不能只靠组件内的标记:权限确认框出现时 Input 会整个卸载,重新挂载
+   * 后标记归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
    */
   onPrefillConsumed?: () => void;
   /**
@@ -122,110 +122,115 @@ const MENU_WINDOW = 8;
  * Ghostty 等终端可用)、option+enter、ctrl+j,以及行尾 `\` + 回车
  * (任何终端都可用的兜底)。传统终端把 shift+enter 和 enter 发成同一个
  * 字节,无法区分,所以需要这些替代按键。
+ *
+ * Solid 化的红利:React 时代的 valueRef/cursorRef(异步剪贴板读取期间
+ * 防旧闭包覆盖)不再需要——处理器读 signal 永远是当前值。
  */
-export function Input({
-  onSubmit,
-  disabled,
-  placeholder,
-  mode,
-  busy,
-  commands,
-  onEscape,
-  prefill,
-  onPrefillConsumed,
-  fileIndex,
-  readClipboardImage,
-  onImageNotice,
-}: Props): React.ReactElement {
-  const [value, setValue] = useState('');
-  const [cursor, setCursor] = useState(0);
-  const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number | undefined>(undefined);
-  const [menuIndex, setMenuIndex] = useState(0);
-  const [menuDismissed, setMenuDismissed] = useState(false);
-  const [selector, setSelector] = useState<SelectorState | undefined>(undefined);
+export function Input(props: Props): JSX.Element {
+  const [value, setValue] = createSignal('');
+  const [cursor, setCursor] = createSignal(0);
+  const [history, setHistory] = createSignal<string[]>([]);
+  const [historyIndex, setHistoryIndex] = createSignal<number | undefined>(undefined);
+  const [menuIndex, setMenuIndex] = createSignal(0);
+  const [menuDismissed, setMenuDismissed] = createSignal(false);
+  const [selector, setSelector] = createSignal<SelectorState | undefined>(undefined);
   // 递增代号,防止上一次异步加载的选项覆盖已关闭/重开的选择器。
-  const selectorGen = useRef(0);
+  let selectorGen = 0;
   // @ 文件菜单的状态与斜杠菜单分开:两者触发与重置语义各自独立。
-  const [fileMenuIndex, setFileMenuIndex] = useState(0);
-  const [fileMenuDismissed, setFileMenuDismissed] = useState(false);
+  const [fileMenuIndex, setFileMenuIndex] = createSignal(0);
+  const [fileMenuDismissed, setFileMenuDismissed] = createSignal(false);
   /** 用户是否用上下键在文件菜单里选过——回车是否该拦截取决于它。 */
-  const [fileMenuTouched, setFileMenuTouched] = useState(false);
-  const [fileList, setFileList] = useState<string[] | undefined>(undefined);
+  const [fileMenuTouched, setFileMenuTouched] = createSignal(false);
+  const [fileList, setFileList] = createSignal<string[] | undefined>(undefined);
   // 同 selectorGen:丢弃过期的异步文件扫描结果。
-  const fileGen = useRef(0);
+  let fileGen = 0;
   // ctrl+v 粘贴的图片,按占位符编号索引;提交/清空输入时一并清理。
-  const [pastedImages, setPastedImages] = useState<Map<number, ImageAttachment>>(new Map());
+  const [pastedImages, setPastedImages] = createSignal<Map<number, ImageAttachment>>(new Map());
   // 单调递增,挂载期内不回收:历史回翻出来的旧占位符不能与新粘贴撞号。
-  const imageId = useRef(0);
-  const pasteInFlight = useRef(false);
-  // useInput 是同步的而剪贴板读取是异步的:插入占位符时必须用 ref 里的
-  // 最新值,否则读取的几十毫秒里用户打的字会被闭包旧值覆盖。
-  const valueRef = useRef(value);
-  valueRef.current = value;
-  const cursorRef = useRef(cursor);
-  cursorRef.current = cursor;
+  let imageId = 0;
+  let pasteInFlight = false;
 
   // 外部预填:写入后立刻通知调用方清空,消费权只有一次。
-  useEffect(() => {
-    if (!prefill) return;
-    setValue(prefill.text);
-    setCursor(prefill.text.length);
-    setHistoryIndex(undefined);
-    onPrefillConsumed?.();
-  }, [prefill, onPrefillConsumed]);
+  createEffect(
+    on(
+      () => props.prefill,
+      (prefill) => {
+        if (!prefill) return;
+        setValue(prefill.text);
+        setCursor(prefill.text.length);
+        setHistoryIndex(undefined);
+        props.onPrefillConsumed?.();
+      },
+    ),
+  );
 
   // 输入变化时重置菜单选中项,并让被 esc 收起的菜单重新出现。
-  useEffect(() => {
-    setMenuIndex(0);
-    setMenuDismissed(false);
-    setFileMenuIndex(0);
-    setFileMenuDismissed(false);
-    setFileMenuTouched(false);
-  }, [value]);
+  createEffect(
+    on(
+      value,
+      () => {
+        setMenuIndex(0);
+        setMenuDismissed(false);
+        setFileMenuIndex(0);
+        setFileMenuDismissed(false);
+        setFileMenuTouched(false);
+      },
+      { defer: true },
+    ),
+  );
 
   // 占位符从文本里消失(整删、ctrl+u/w、清空)时同步丢弃暂存的图片,
   // 让"已附加 N 张"提示与实际会发送的内容保持一致。
-  useEffect(() => {
-    if (pastedImages.size === 0) return;
+  createEffect(() => {
+    const images = pastedImages();
+    if (images.size === 0) return;
     const present = new Set<number>();
-    for (const match of value.matchAll(IMAGE_PLACEHOLDER)) present.add(Number(match[1]));
-    if ([...pastedImages.keys()].some((id) => !present.has(id))) {
+    for (const match of value().matchAll(IMAGE_PLACEHOLDER)) present.add(Number(match[1]));
+    if ([...images.keys()].some((id) => !present.has(id))) {
       setPastedImages((prev) => new Map([...prev].filter(([id]) => present.has(id))));
     }
-  }, [value, pastedImages]);
+  });
 
-  const showMenu =
-    !selector &&
-    !menuDismissed &&
-    value.startsWith('/') &&
-    !value.includes(' ') &&
-    !value.includes('\n');
-  const matches = showMenu
-    ? commands.filter((c) =>
-        [c.name, ...(c.aliases ?? [])].some((n) => n.startsWith(value.slice(1).toLowerCase())),
-      )
-    : [];
-  const menuCursor = matches.length > 0 ? Math.min(menuIndex, matches.length - 1) : 0;
-  // 光标居中的滚动窗口:候选多于一屏时跟随光标滚动,而不是截断列表。
-  const menuWindowStart = Math.max(
-    0,
-    Math.min(menuCursor - Math.floor(MENU_WINDOW / 2), matches.length - MENU_WINDOW),
+  const showMenu = createMemo(
+    () =>
+      !selector() &&
+      !menuDismissed() &&
+      value().startsWith('/') &&
+      !value().includes(' ') &&
+      !value().includes('\n'),
   );
+  const matches = createMemo(() =>
+    showMenu()
+      ? props.commands.filter((c) =>
+          [c.name, ...(c.aliases ?? [])].some((n) => n.startsWith(value().slice(1).toLowerCase())),
+        )
+      : [],
+  );
+  const menuCursor = () => (matches().length > 0 ? Math.min(menuIndex(), matches().length - 1) : 0);
+  // 光标居中的滚动窗口:候选多于一屏时跟随光标滚动,而不是截断列表。
+  const menuWindowStart = () =>
+    Math.max(0, Math.min(menuCursor() - Math.floor(MENU_WINDOW / 2), matches().length - MENU_WINDOW));
 
   // ── @ 文件引用补全 ──
   // 与斜杠菜单天然互斥:斜杠菜单要求整条以 `/` 开头且无空格,而 @token
   // 要求 `@` 在行首或空白之后,两个条件不可能同时成立。
-  const fileToken = fileIndex && !selector ? atTokenAt(value, cursor) : undefined;
-  const showFileMenu = fileToken !== undefined && !fileMenuDismissed;
-  const fileLoading = showFileMenu && fileList === undefined;
-  const fileMatches =
-    showFileMenu && fileList ? fuzzyFilter(fileToken.query, fileList) : [];
-  const fileCursor = fileMatches.length > 0 ? Math.min(fileMenuIndex, fileMatches.length - 1) : 0;
-  const fileWindowStart = Math.max(
-    0,
-    Math.min(fileCursor - Math.floor(MENU_WINDOW / 2), fileMatches.length - MENU_WINDOW),
+  const fileToken = createMemo(() =>
+    props.fileIndex && !selector() ? atTokenAt(value(), cursor()) : undefined,
   );
+  const showFileMenu = () => fileToken() !== undefined && !fileMenuDismissed();
+  const fileLoading = () => showFileMenu() && fileList() === undefined;
+  const fileMatches = createMemo(() => {
+    const token = fileToken();
+    const list = fileList();
+    return showFileMenu() && token && list ? fuzzyFilter(token.query, list) : [];
+  });
+  const fileCursor = () =>
+    fileMatches().length > 0 ? Math.min(fileMenuIndex(), fileMatches().length - 1) : 0;
+  const fileWindowStart = () =>
+    Math.max(
+      0,
+      Math.min(fileCursor() - Math.floor(MENU_WINDOW / 2), fileMatches().length - MENU_WINDOW),
+    );
   /**
    * 回车是否作用于文件菜单。模糊匹配是子序列匹配,几乎对任何词都能命中
    * 点什么;若回车一律插入,`看下 @types/node 的用法` 这类正常行文一按
@@ -236,26 +241,25 @@ export function Input({
    *   - 候选确实以已输入的串开头(路径或文件名前缀)。
    * tab 不受此限——它本来就是"补全"键。
    */
-  const fileQuery = fileToken?.query ?? '';
-  const fileEnterSelects =
-    fileMatches.length > 0 &&
-    (fileQuery === '' || fileMenuTouched || isPrefixMatch(fileQuery, fileMatches[fileCursor]!));
+  const fileQuery = () => fileToken()?.query ?? '';
+  const fileEnterSelects = () =>
+    fileMatches().length > 0 &&
+    (fileQuery() === '' || fileMenuTouched() || isPrefixMatch(fileQuery(), fileMatches()[fileCursor()]!));
 
   // token 激活时才懒加载文件列表(TTL 缓存在 App 注入的列举器里)。
-  const fileTokenActive = fileToken !== undefined;
-  useEffect(() => {
-    if (!fileTokenActive || !fileIndex) return;
-    const gen = ++fileGen.current;
-    void fileIndex().then(
+  createEffect(() => {
+    if (fileToken() === undefined || !props.fileIndex) return;
+    const gen = ++fileGen;
+    void props.fileIndex().then(
       (files) => {
-        if (fileGen.current === gen) setFileList(files);
+        if (fileGen === gen) setFileList(files);
       },
       () => {
         // 扫描失败静默降级为空列表:补全弹窗消失,输入本身不受影响。
-        if (fileGen.current === gen) setFileList([]);
+        if (fileGen === gen) setFileList([]);
       },
     );
-  }, [fileTokenActive, fileIndex]);
+  });
 
   /**
    * 菜单上回车/tab 作用的命令。精确匹配优先于光标位置:`model` 排在 `mode`
@@ -263,22 +267,23 @@ export function Input({
    * 命令。用户主动移动过光标(menuIndex 非 0)时以光标为准。
    */
   function menuTarget(): SlashCommand | undefined {
-    if (matches.length === 0) return undefined;
-    if (menuIndex === 0) {
-      const typed = value.slice(1).toLowerCase();
-      const exact = matches.find((c) => c.name === typed || c.aliases?.includes(typed));
+    if (matches().length === 0) return undefined;
+    if (menuIndex() === 0) {
+      const typed = value().slice(1).toLowerCase();
+      const exact = matches().find((c) => c.name === typed || c.aliases?.includes(typed));
       if (exact) return exact;
     }
-    return matches[menuCursor];
+    return matches()[menuCursor()];
   }
 
   /** 把文件菜单当前选中项拼进 @token 区间(token 起点到光标),光标移到其后。 */
   function insertFileSelection() {
-    const path = fileMatches[fileCursor];
-    if (!path || !fileToken) return;
+    const path = fileMatches()[fileCursor()];
+    const token = fileToken();
+    if (!path || !token) return;
     const inserted = `@${path} `;
-    setValue(value.slice(0, fileToken.start) + inserted + value.slice(cursor));
-    setCursor(fileToken.start + inserted.length);
+    setValue(value().slice(0, token.start) + inserted + value().slice(cursor()));
+    setCursor(token.start + inserted.length);
   }
 
   function submit(text: string) {
@@ -292,75 +297,83 @@ export function Input({
       const id = Number(match[1]);
       if (seen.has(id)) continue;
       seen.add(id);
-      const image = pastedImages.get(id);
+      const image = pastedImages().get(id);
       if (image) images.push(image);
     }
     setHistory((prev) => [trimmed, ...prev.filter((h) => h !== trimmed)].slice(0, 100));
     setHistoryIndex(undefined);
     setValue('');
     setCursor(0);
-    if (pastedImages.size > 0) setPastedImages(new Map());
-    onSubmit(trimmed, images.length > 0 ? images : undefined);
+    if (pastedImages().size > 0) setPastedImages(new Map());
+    props.onSubmit(trimmed, images.length > 0 ? images : undefined);
   }
 
   /** ctrl+v:异步读剪贴板,成功则在光标处插入 `[image #N]` 并暂存图片。 */
   function pasteImage() {
-    if (!readClipboardImage || pasteInFlight.current) return;
-    if (pastedImages.size >= MAX_PENDING_IMAGES) {
-      onImageNotice?.(t('notice.tooManyImages', { n: MAX_PENDING_IMAGES }));
+    if (!props.readClipboardImage || pasteInFlight) return;
+    if (pastedImages().size >= MAX_PENDING_IMAGES) {
+      props.onImageNotice?.(t('notice.tooManyImages', { n: MAX_PENDING_IMAGES }));
       return;
     }
-    pasteInFlight.current = true;
-    readClipboardImage().then(
+    pasteInFlight = true;
+    props.readClipboardImage().then(
       (image) => {
-        pasteInFlight.current = false;
+        pasteInFlight = false;
         if (!image) {
-          onImageNotice?.(t('notice.clipboardNoImage'));
+          props.onImageNotice?.(t('notice.clipboardNoImage'));
           return;
         }
         // base64 比原始字节多约 1/3,按解码后的体积检查。
         const bytes = image.data.length * 0.75;
         if (bytes > MAX_PASTE_BYTES) {
-          onImageNotice?.(t('notice.imageTooLarge'));
+          props.onImageNotice?.(t('notice.imageTooLarge'));
           return;
         }
         // 总量也要拦:8 张 5MB 的截图会让这一条消息在会话文件里占几十 MB,
         // 而且此后每一步都要重新上传(压缩只剥离摘要请求里的图片)。
-        const pendingBytes = [...pastedImages.values()].reduce(
+        const pendingBytes = [...pastedImages().values()].reduce(
           (sum, img) => sum + img.data.length * 0.75,
           0,
         );
         if (pendingBytes + bytes > MAX_TOTAL_PASTE_BYTES) {
-          onImageNotice?.(t('notice.imagesTooLarge'));
+          props.onImageNotice?.(t('notice.imagesTooLarge'));
           return;
         }
-        const id = ++imageId.current;
+        const id = ++imageId;
         const ext = image.mediaType === 'image/jpeg' ? 'jpg' : 'png';
-        setPastedImages((prev) =>
-          new Map(prev).set(id, {
-            mediaType: image.mediaType,
-            data: image.data,
-            filename: `clipboard-${id}.${ext}`,
-          }),
-        );
-        const at = cursorRef.current;
-        const placeholder = `[image #${id}]`;
-        setValue(valueRef.current.slice(0, at) + placeholder + valueRef.current.slice(at));
-        setCursor(at + placeholder.length);
+        // batch 必须有:图片入 map 与占位符入文本要原子完成。分开提交的话,
+        // 「占位符消失即丢弃图片」的修剪 effect 会在两次 set 之间同步运行,
+        // 看到"图片在、占位符不在"而把刚粘贴的图当场清掉(React 的自动
+        // 批处理掩盖了这个时序,Solid 的同步信号把它暴露出来)。
+        batch(() => {
+          setPastedImages((prev) =>
+            new Map(prev).set(id, {
+              mediaType: image.mediaType,
+              data: image.data,
+              filename: `clipboard-${id}.${ext}`,
+            }),
+          );
+          // 剪贴板读取是异步的,但 signal 现读现写——读取的几十毫秒里用户
+          // 打的字不会被覆盖(React 时代要靠 valueRef 才能做到)。
+          const at = cursor();
+          const placeholder = `[image #${id}]`;
+          setValue(value().slice(0, at) + placeholder + value().slice(at));
+          setCursor(at + placeholder.length);
+        });
       },
       () => {
-        pasteInFlight.current = false;
-        onImageNotice?.(t('notice.clipboardReadFailed'));
+        pasteInFlight = false;
+        props.onImageNotice?.(t('notice.clipboardReadFailed'));
       },
     );
   }
 
   function openSelector(command: SlashCommand) {
-    const gen = ++selectorGen.current;
-    setSelector({ command, options: [], cursor: 0, loading: true, selected: new Set() });
+    const gen = ++selectorGen;
+    setSelector({ command, options: [], cursor: 0, loading: true, selected: new Set<string>() });
     void Promise.resolve(command.options!()).then(
       (options) => {
-        if (selectorGen.current !== gen) return;
+        if (selectorGen !== gen) return;
         if (options.length === 0) {
           setSelector(undefined);
           submit(`/${command.name}`);
@@ -377,7 +390,7 @@ export function Input({
         });
       },
       () => {
-        if (selectorGen.current !== gen) return;
+        if (selectorGen !== gen) return;
         // 选项加载失败(如 /model 拉取线上列表出错)——回退为提交无参
         // 命令,让命令自身把错误报告到时间线上。
         setSelector(undefined);
@@ -386,16 +399,24 @@ export function Input({
     );
   }
 
+  const insert = (text: string) => {
+    const v = value();
+    const c = cursor();
+    setValue(v.slice(0, c) + text + v.slice(c));
+    setCursor(c + text.length);
+  };
+
   useInput(
     (input, key) => {
       // ── 二级选择器打开时,按键只在选择器内生效 ──
-      if (selector) {
+      const sel = selector();
+      if (sel) {
         if (key.escape) {
-          selectorGen.current++;
+          selectorGen++;
           setSelector(undefined);
           return;
         }
-        if (selector.loading || selector.options.length === 0) return;
+        if (sel.loading || sel.options.length === 0) return;
         if (key.upArrow) {
           setSelector((s) =>
             s && { ...s, cursor: (s.cursor + s.options.length - 1) % s.options.length },
@@ -407,7 +428,7 @@ export function Input({
           return;
         }
         // 多选:空格切换光标处选项的选中状态。
-        if (selector.command.multi && input === ' ' && !key.return) {
+        if (sel.command.multi && input === ' ' && !key.return) {
           setSelector((s) => {
             if (!s) return s;
             const option = s.options[s.cursor];
@@ -420,21 +441,21 @@ export function Input({
           return;
         }
         if (key.return) {
-          if (selector.command.multi) {
+          if (sel.command.multi) {
             // 按选项顺序提交选中值,保证参数顺序稳定;空选提交 none。
-            const values = selector.options
-              .filter((o) => selector.selected.has(o.value))
+            const values = sel.options
+              .filter((o) => sel.selected.has(o.value))
               .map((o) => o.value);
-            selectorGen.current++;
+            selectorGen++;
             setSelector(undefined);
-            submit(`/${selector.command.name} ${values.length > 0 ? values.join(' ') : 'none'}`);
+            submit(`/${sel.command.name} ${values.length > 0 ? values.join(' ') : 'none'}`);
             return;
           }
-          const option = selector.options[selector.cursor];
+          const option = sel.options[sel.cursor];
           if (option) {
-            selectorGen.current++;
+            selectorGen++;
             setSelector(undefined);
-            submit(`/${selector.command.name} ${option.value}`);
+            submit(`/${sel.command.name} ${option.value}`);
           }
           return;
         }
@@ -454,12 +475,12 @@ export function Input({
 
       if (key.return) {
         // 文件菜单打开且用户确有选择意图时,回车插入路径而不是提交。
-        if (fileEnterSelects) {
+        if (fileEnterSelects()) {
           insertFileSelection();
           return;
         }
         // 命令菜单打开时,回车作用于菜单里选中的命令。
-        if (matches.length > 0) {
+        if (matches().length > 0) {
           const command = menuTarget()!;
           if (command.options) {
             openSelector(command);
@@ -469,21 +490,21 @@ export function Input({
           return;
         }
         // 行尾 `\` + 回车 → 换行:对不支持 shift+enter 的终端的兜底。
-        if (value[cursor - 1] === '\\') {
-          setValue(value.slice(0, cursor - 1) + '\n' + value.slice(cursor));
+        if (value()[cursor() - 1] === '\\') {
+          setValue(value().slice(0, cursor() - 1) + '\n' + value().slice(cursor()));
           return;
         }
-        submit(value);
+        submit(value());
         return;
       }
 
       // 必须排除 shift:shift+tab 是切换权限模式的全局快捷键(App.tsx),
       // kit 把它报成 tab + shift,不排除的话命令菜单一开就被补全吞掉。
-      if (key.tab && !key.shift && fileMatches.length > 0) {
+      if (key.tab && !key.shift && fileMatches().length > 0) {
         insertFileSelection();
         return;
       }
-      if (key.tab && !key.shift && matches.length > 0) {
+      if (key.tab && !key.shift && matches().length > 0) {
         const completed = `/${menuTarget()!.name} `;
         setValue(completed);
         setCursor(completed.length);
@@ -492,46 +513,50 @@ export function Input({
 
       if (key.escape) {
         // 文件菜单可见(含加载中)→ 只收起菜单,绝不落到 onEscape 触发中断。
-        if (fileMatches.length > 0 || fileLoading) {
+        if (fileMatches().length > 0 || fileLoading()) {
           setFileMenuDismissed(true);
-        } else if (matches.length > 0) {
+        } else if (matches().length > 0) {
           setMenuDismissed(true);
         } else {
-          onEscape?.();
+          props.onEscape?.();
         }
         return;
       }
 
       if (key.backspace || key.delete) {
-        if (cursor > 0) {
+        const v = value();
+        const c = cursor();
+        if (c > 0) {
           // 光标在图片占位符内部或紧随其后 → 整个占位符一次删除,
           // 不用一个字符一个字符地退格。
-          const span = placeholderSpanAt(value, cursor);
+          const span = placeholderSpanAt(v, c);
           if (span) {
-            setValue(value.slice(0, span.start) + value.slice(span.end));
+            setValue(v.slice(0, span.start) + v.slice(span.end));
             setCursor(span.start);
             return;
           }
-          setValue(value.slice(0, cursor - 1) + value.slice(cursor));
-          setCursor(cursor - 1);
+          setValue(v.slice(0, c - 1) + v.slice(c));
+          setCursor(c - 1);
         }
         return;
       }
 
       if (key.leftArrow) {
-        setCursor(Math.max(0, cursor - 1));
+        setCursor(Math.max(0, cursor() - 1));
         return;
       }
       if (key.rightArrow) {
-        setCursor(Math.min(value.length, cursor + 1));
+        setCursor(Math.min(value().length, cursor() + 1));
         return;
       }
 
       // 行内定位与删除都以当前行为界,多行编辑时更符合直觉。
-      const starts = lineStarts(value);
-      const row = countLines(value.slice(0, cursor)) - 1;
-      const col = cursor - starts[row]!;
-      const lineEnd = row + 1 < starts.length ? starts[row + 1]! - 1 : value.length;
+      const v = value();
+      const c = cursor();
+      const starts = lineStarts(v);
+      const row = countLines(v.slice(0, c)) - 1;
+      const col = c - starts[row]!;
+      const lineEnd = row + 1 < starts.length ? starts[row + 1]! - 1 : v.length;
 
       if (key.ctrl && input === 'a') {
         setCursor(starts[row]!);
@@ -542,18 +567,18 @@ export function Input({
         return;
       }
       if (key.ctrl && input === 'u') {
-        setValue(value.slice(0, starts[row]!) + value.slice(cursor));
+        setValue(v.slice(0, starts[row]!) + v.slice(c));
         setCursor(starts[row]!);
         return;
       }
       if (key.ctrl && input === 'k') {
-        setValue(value.slice(0, cursor) + value.slice(lineEnd));
+        setValue(v.slice(0, c) + v.slice(lineEnd));
         return;
       }
       if (key.ctrl && input === 'w') {
-        const head = value.slice(0, cursor);
+        const head = v.slice(0, c);
         const boundary = head.trimEnd().replace(/\S+$/, '').length;
-        setValue(value.slice(0, boundary) + value.slice(cursor));
+        setValue(v.slice(0, boundary) + v.slice(c));
         setCursor(boundary);
         return;
       }
@@ -565,53 +590,54 @@ export function Input({
 
       if (key.upArrow || key.downArrow) {
         // 文件菜单打开 → 在文件菜单里移动(优先于历史/多行光标逻辑)。
-        if (fileMatches.length > 0) {
+        if (fileMatches().length > 0) {
           setFileMenuTouched(true);
           setFileMenuIndex(
             key.upArrow
-              ? (fileCursor + fileMatches.length - 1) % fileMatches.length
-              : (fileCursor + 1) % fileMatches.length,
+              ? (fileCursor() + fileMatches().length - 1) % fileMatches().length
+              : (fileCursor() + 1) % fileMatches().length,
           );
           return;
         }
         // 菜单打开 → 在菜单里移动。
-        if (matches.length > 0) {
+        if (matches().length > 0) {
           setMenuIndex(
             key.upArrow
-              ? (menuCursor + matches.length - 1) % matches.length
-              : (menuCursor + 1) % matches.length,
+              ? (menuCursor() + matches().length - 1) % matches().length
+              : (menuCursor() + 1) % matches().length,
           );
           return;
         }
         // 正在浏览历史(内容未被编辑) → 继续翻历史,即使条目是多行的。
-        const browsing = historyIndex !== undefined && value === history[historyIndex];
+        const hIndex = historyIndex();
+        const browsing = hIndex !== undefined && v === history()[hIndex];
         // 多行草稿 → 上下键在行间移动光标,避免误触历史覆盖草稿。
-        if (!browsing && value.includes('\n')) {
+        if (!browsing && v.includes('\n')) {
           const target = key.upArrow ? row - 1 : row + 1;
           if (target >= 0 && target < starts.length) {
-            const targetEnd = target + 1 < starts.length ? starts[target + 1]! - 1 : value.length;
+            const targetEnd = target + 1 < starts.length ? starts[target + 1]! - 1 : v.length;
             setCursor(Math.min(starts[target]! + col, targetEnd));
           }
           return;
         }
         if (key.upArrow) {
-          if (history.length === 0) return;
-          const next = historyIndex === undefined ? 0 : Math.min(history.length - 1, historyIndex + 1);
+          if (history().length === 0) return;
+          const next = hIndex === undefined ? 0 : Math.min(history().length - 1, hIndex + 1);
           setHistoryIndex(next);
-          setValue(history[next]!);
-          setCursor(history[next]!.length);
+          setValue(history()[next]!);
+          setCursor(history()[next]!.length);
         } else {
-          if (historyIndex === undefined) return;
-          if (historyIndex === 0) {
+          if (hIndex === undefined) return;
+          if (hIndex === 0) {
             setHistoryIndex(undefined);
             setValue('');
             setCursor(0);
             return;
           }
-          const next = historyIndex - 1;
+          const next = hIndex - 1;
           setHistoryIndex(next);
-          setValue(history[next]!);
-          setCursor(history[next]!.length);
+          setValue(history()[next]!);
+          setCursor(history()[next]!.length);
         }
         return;
       }
@@ -619,44 +645,163 @@ export function Input({
       // 忽略以原始输入形式到达的控制序列。
       if (key.ctrl || key.meta || key.escape) return;
       if (input) insert(input.replace(/\r\n?/g, '\n'));
-
-      function insert(text: string) {
-        setValue(value.slice(0, cursor) + text + value.slice(cursor));
-        setCursor(cursor + text.length);
-      }
     },
-    { isActive: !disabled },
+    { isActive: () => !props.disabled },
   );
 
-  // ── 二级选择器视图 ──
-  if (selector) {
-    const { options, cursor: selCursor, loading, selected } = selector;
-    const multi = selector.command.multi === true;
-    const windowStart = Math.max(
-      0,
-      Math.min(selCursor - Math.floor(SELECTOR_WINDOW / 2), options.length - SELECTOR_WINDOW),
-    );
-    const visible = options.slice(windowStart, windowStart + SELECTOR_WINDOW);
-    return (
+  // ── 输入框视图的派生值 ──
+  const lines = () => value().split('\n');
+  const cursorRow = () => countLines(value().slice(0, cursor())) - 1;
+  const cursorCol = () => cursor() - (value().lastIndexOf('\n', cursor() - 1) + 1);
+  const modeStyle = () => inputModeStyle(props.mode);
+  const borderColor = () => (props.disabled || props.busy ? theme.dim : modeStyle().color);
+  const promptColor = () => (props.disabled ? theme.dim : modeStyle().color);
+
+  return (
+    <Show when={selector()} keyed fallback={
       <Box flexDirection="column">
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
-          <Text bold color={theme.accent}>
-            /{selector.command.name}
+        <Box borderStyle="round" borderColor={borderColor()} paddingX={1}>
+          <Text color={promptColor()}>{modeStyle().glyph} </Text>
+          <Show
+            when={value().length > 0}
+            fallback={
+              <Text>
+                {!props.disabled ? <Text inverse> </Text> : null}
+                <Text color={theme.dim}>{props.placeholder}</Text>
+              </Text>
+            }
+          >
+            <Box flexDirection="column">
+              <For each={lines()}>
+                {(line, i) => (
+                  <Text>
+                    {i() === cursorRow() ? (
+                      <>
+                        {line.slice(0, cursorCol())}
+                        <Text inverse>{line[cursorCol()] ?? ' '}</Text>
+                        {line.slice(cursorCol() + 1)}
+                      </>
+                    ) : (
+                      line || ' '
+                    )}
+                  </Text>
+                )}
+              </For>
+            </Box>
+          </Show>
+        </Box>
+        <Show when={matches().length > 0}>
+          <Box flexDirection="column" paddingLeft={2}>
+            <Show when={menuWindowStart() > 0}>
+              <Text color={theme.dim}>{t('selector.moreAbove', { n: menuWindowStart() })}</Text>
+            </Show>
+            <For each={matches().slice(menuWindowStart(), menuWindowStart() + MENU_WINDOW)}>
+              {(c, i) => {
+                const index = () => menuWindowStart() + i();
+                return (
+                  <Text color={index() === menuCursor() ? theme.accent : undefined}>
+                    {index() === menuCursor() ? `${glyphs.pointer} ` : '  '}
+                    <Text color={theme.accent}>{formatCommandLabel(c)}</Text>
+                    {c.options ? <Text color={theme.dim}> ▸</Text> : null}
+                    <Text color={theme.dim}> — {c.description}</Text>
+                  </Text>
+                );
+              }}
+            </For>
+            <Show when={menuWindowStart() + MENU_WINDOW < matches().length}>
+              <Text color={theme.dim}>
+                {t('selector.moreBelow', { n: matches().length - menuWindowStart() - MENU_WINDOW })}
+              </Text>
+            </Show>
+            <Text color={theme.dim}>{t('input.menuHint')}</Text>
+          </Box>
+        </Show>
+        <Show when={fileLoading() || fileMatches().length > 0}>
+          <Box flexDirection="column" paddingLeft={2}>
+            <Show
+              when={!fileLoading()}
+              fallback={
+                <Text color={theme.dim}>
+                  {glyphs.running} {t('input.filesLoading')}
+                </Text>
+              }
+            >
+              <Show when={fileWindowStart() > 0}>
+                <Text color={theme.dim}>{t('selector.moreAbove', { n: fileWindowStart() })}</Text>
+              </Show>
+              <For each={fileMatches().slice(fileWindowStart(), fileWindowStart() + MENU_WINDOW)}>
+                {(file, i) => {
+                  const index = () => fileWindowStart() + i();
+                  return (
+                    <Text color={index() === fileCursor() ? theme.accent : undefined}>
+                      {index() === fileCursor() ? `${glyphs.pointer} ` : '  '}
+                      {file}
+                    </Text>
+                  );
+                }}
+              </For>
+              <Show when={fileWindowStart() + MENU_WINDOW < fileMatches().length}>
+                <Text color={theme.dim}>
+                  {t('selector.moreBelow', {
+                    n: fileMatches().length - fileWindowStart() - MENU_WINDOW,
+                  })}
+                </Text>
+              </Show>
+              <Text color={theme.dim}>{t('input.fileHint')}</Text>
+            </Show>
+          </Box>
+        </Show>
+        <Show when={pastedImages().size > 0}>
+          <Box paddingLeft={2}>
+            <Text color={theme.dim}>{t('input.imagesAttached', { n: pastedImages().size })}</Text>
+          </Box>
+        </Show>
+        <Show when={value().includes('\n')}>
+          <Box paddingLeft={2}>
+            <Text color={theme.dim}>{t('input.newlineHint')}</Text>
+          </Box>
+        </Show>
+      </Box>
+    }>
+      {(sel: SelectorState) => <SelectorView state={sel} />}
+    </Show>
+  );
+}
+
+/**
+ * 二级选择器视图。外层 <Show keyed>:selector 状态每次变化都是新对象
+ * (光标移动经 setSelector({...s})),keyed 让整块视图随之重建——不到
+ * 十行的列表,重建成本可忽略,换来"组件体内读值即安全"。
+ */
+function SelectorView(props: { state: SelectorState }): JSX.Element {
+  const { options, cursor: selCursor, loading, selected } = props.state;
+  const multi = props.state.command.multi === true;
+  const windowStart = Math.max(
+    0,
+    Math.min(selCursor - Math.floor(SELECTOR_WINDOW / 2), options.length - SELECTOR_WINDOW),
+  );
+  const visible = options.slice(windowStart, windowStart + SELECTOR_WINDOW);
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
+        <Text bold color={theme.accent}>
+          /{props.state.command.name}
+        </Text>
+        {loading ? (
+          <Text color={theme.dim}>
+            {glyphs.running} {t('selector.loading')}
           </Text>
-          {loading ? (
-            <Text color={theme.dim}>
-              {glyphs.running} {t('selector.loading')}
-            </Text>
-          ) : (
-            <>
-              {windowStart > 0 ? (
-                <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart })}</Text>
-              ) : null}
-              {visible.map((option, i) => {
-                const index = windowStart + i;
+        ) : (
+          <>
+            {windowStart > 0 ? (
+              <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart })}</Text>
+            ) : null}
+            <For each={visible}>
+              {(option, i) => {
+                const index = windowStart + i();
                 const active = index === selCursor;
                 return (
-                  <Text key={option.value} color={active ? theme.accent : undefined}>
+                  <Text color={active ? theme.accent : undefined}>
                     {active ? `${glyphs.pointer} ` : '  '}
                     {multi ? (
                       <Text color={selected.has(option.value) ? theme.success : theme.dim}>
@@ -673,123 +818,19 @@ export function Input({
                     {option.label ? <Text color={theme.dim}> — {option.label}</Text> : null}
                   </Text>
                 );
-              })}
-              {windowStart + SELECTOR_WINDOW < options.length ? (
-                <Text color={theme.dim}>
-                  {t('selector.moreBelow', { n: options.length - windowStart - SELECTOR_WINDOW })}
-                </Text>
-              ) : null}
-            </>
-          )}
-        </Box>
-        <Box paddingLeft={2}>
-          <Text color={theme.dim}>{t(multi ? 'selector.multiHint' : 'selector.hint')}</Text>
-        </Box>
-      </Box>
-    );
-  }
-
-  // ── 输入框视图 ──
-  const lines = value.split('\n');
-  const cursorRow = countLines(value.slice(0, cursor)) - 1;
-  const cursorCol = cursor - (value.lastIndexOf('\n', cursor - 1) + 1);
-  const modeStyle = inputModeStyle(mode);
-  const borderColor = disabled || busy ? theme.dim : modeStyle.color;
-  const promptColor = disabled ? theme.dim : modeStyle.color;
-
-  return (
-    <Box flexDirection="column">
-      <Box borderStyle="round" borderColor={borderColor} paddingX={1}>
-        <Text color={promptColor}>{modeStyle.glyph} </Text>
-        {value.length === 0 ? (
-          <Text>
-            {!disabled ? <Text inverse> </Text> : null}
-            <Text color={theme.dim}>{placeholder}</Text>
-          </Text>
-        ) : (
-          <Box flexDirection="column">
-            {lines.map((line, i) => (
-              <Text key={i}>
-                {i === cursorRow ? (
-                  <>
-                    {line.slice(0, cursorCol)}
-                    <Text inverse>{line[cursorCol] ?? ' '}</Text>
-                    {line.slice(cursorCol + 1)}
-                  </>
-                ) : (
-                  line || ' '
-                )}
+              }}
+            </For>
+            {windowStart + SELECTOR_WINDOW < options.length ? (
+              <Text color={theme.dim}>
+                {t('selector.moreBelow', { n: options.length - windowStart - SELECTOR_WINDOW })}
               </Text>
-            ))}
-          </Box>
+            ) : null}
+          </>
         )}
       </Box>
-      {matches.length > 0 ? (
-        <Box flexDirection="column" paddingLeft={2}>
-          {menuWindowStart > 0 ? (
-            <Text color={theme.dim}>{t('selector.moreAbove', { n: menuWindowStart })}</Text>
-          ) : null}
-          {matches.slice(menuWindowStart, menuWindowStart + MENU_WINDOW).map((c, i) => {
-            const index = menuWindowStart + i;
-            return (
-              <Text key={c.name} color={index === menuCursor ? theme.accent : undefined}>
-                {index === menuCursor ? `${glyphs.pointer} ` : '  '}
-                <Text color={theme.accent}>{formatCommandLabel(c)}</Text>
-                {c.options ? <Text color={theme.dim}> ▸</Text> : null}
-                <Text color={theme.dim}> — {c.description}</Text>
-              </Text>
-            );
-          })}
-          {menuWindowStart + MENU_WINDOW < matches.length ? (
-            <Text color={theme.dim}>
-              {t('selector.moreBelow', { n: matches.length - menuWindowStart - MENU_WINDOW })}
-            </Text>
-          ) : null}
-          <Text color={theme.dim}>{t('input.menuHint')}</Text>
-        </Box>
-      ) : null}
-      {fileLoading || fileMatches.length > 0 ? (
-        <Box flexDirection="column" paddingLeft={2}>
-          {fileLoading ? (
-            <Text color={theme.dim}>
-              {glyphs.running} {t('input.filesLoading')}
-            </Text>
-          ) : (
-            <>
-              {fileWindowStart > 0 ? (
-                <Text color={theme.dim}>{t('selector.moreAbove', { n: fileWindowStart })}</Text>
-              ) : null}
-              {fileMatches.slice(fileWindowStart, fileWindowStart + MENU_WINDOW).map((file, i) => {
-                const index = fileWindowStart + i;
-                return (
-                  <Text key={file} color={index === fileCursor ? theme.accent : undefined}>
-                    {index === fileCursor ? `${glyphs.pointer} ` : '  '}
-                    {file}
-                  </Text>
-                );
-              })}
-              {fileWindowStart + MENU_WINDOW < fileMatches.length ? (
-                <Text color={theme.dim}>
-                  {t('selector.moreBelow', {
-                    n: fileMatches.length - fileWindowStart - MENU_WINDOW,
-                  })}
-                </Text>
-              ) : null}
-              <Text color={theme.dim}>{t('input.fileHint')}</Text>
-            </>
-          )}
-        </Box>
-      ) : null}
-      {pastedImages.size > 0 ? (
-        <Box paddingLeft={2}>
-          <Text color={theme.dim}>{t('input.imagesAttached', { n: pastedImages.size })}</Text>
-        </Box>
-      ) : null}
-      {value.includes('\n') ? (
-        <Box paddingLeft={2}>
-          <Text color={theme.dim}>{t('input.newlineHint')}</Text>
-        </Box>
-      ) : null}
+      <Box paddingLeft={2}>
+        <Text color={theme.dim}>{t(multi ? 'selector.multiHint' : 'selector.hint')}</Text>
+      </Box>
     </Box>
   );
 }

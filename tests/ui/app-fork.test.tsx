@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import React, { act } from 'react';
 
 
 import { App } from '../../src/ui/App.js';
@@ -43,17 +42,15 @@ async function setup(overrides: { forkSession?: () => Promise<unknown>; isRunnin
     dispose: async () => {},
   } as unknown as Session;
 
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
   return { forkSession, ui };
 }
 
-/** forkSession 是异步命令,回车后在 act 里多等一拍再断言。 */
+/** forkSession 是异步命令,回车后多等一拍再断言。 */
 async function submit(ui: UiHandle, text: string): Promise<void> {
   await ui.type(text);
   await ui.press('return');
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
   await ui.tick();
 }
 

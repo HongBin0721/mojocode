@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import React from 'react';
 
 
 import { App } from '../../src/ui/App.js';
@@ -51,7 +50,7 @@ describe('恢复会话的时间线回放', () => {
     ] as ModelMessage[]);
 
     // 视口帧只截 width×height:给足高度让横幅与全部回放内容同屏。
-    const ui = await renderUi(<App session={session} />, { width: 100, height: 50 });
+    const ui = await renderUi(() => <App session={session} />, { width: 100, height: 50 });
 
     const out = ui.frame();
     expect(out).toContain('resumed'); // divider 带会话 id 前缀
@@ -65,7 +64,7 @@ describe('恢复会话的时间线回放', () => {
 
   it('空会话不产生 divider,横幅照常显示', async () => {
     const session = makeSession([]);
-    const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+    const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
     const out = ui.frame();
     expect(out).not.toContain('resumed');
     expect(out).toContain('/tmp/project');
@@ -83,7 +82,7 @@ describe('RewindPicker', () => {
   it('回车选中当前项', async () => {
     const onPick = vi.fn();
     const ui = await renderUi(
-      <RewindPicker entries={entries} onPick={onPick} onCancel={() => {}} />,
+      () => <RewindPicker entries={entries} onPick={onPick} onCancel={() => {}} />,
       { width: 60, height: 12 },
     );
     await ui.press('down'); // ↓ 到第二项
@@ -95,7 +94,7 @@ describe('RewindPicker', () => {
   it('esc 取消', async () => {
     const onCancel = vi.fn();
     const ui = await renderUi(
-      <RewindPicker entries={entries} onPick={() => {}} onCancel={onCancel} />,
+      () => <RewindPicker entries={entries} onPick={() => {}} onCancel={onCancel} />,
       { width: 60, height: 12 },
     );
     await ui.press('escape');
@@ -105,7 +104,7 @@ describe('RewindPicker', () => {
 
   it('列表最新在前渲染', async () => {
     const ui = await renderUi(
-      <RewindPicker entries={entries} onPick={() => {}} onCancel={() => {}} />,
+      () => <RewindPicker entries={entries} onPick={() => {}} onCancel={() => {}} />,
       { width: 60, height: 12 },
     );
     const out = ui.frame();

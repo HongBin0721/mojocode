@@ -1,12 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import React, { useState } from 'react';
 import { Box, Text, mapKeyEvent, useInput, type Key } from '../../src/ui/kit.js';
 import { renderUi } from '../support/otui.js';
 
 describe('kit.Text', () => {
   it('渲染普通文本与颜色', async () => {
     const ui = await renderUi(
-      <Box flexDirection="column">
+      () => <Box flexDirection="column">
         <Text color="cyan">你好 world</Text>
         <Text bold>加粗</Text>
       </Box>,
@@ -19,7 +18,7 @@ describe('kit.Text', () => {
 
   it('含 ANSI 的子串被转成 span(不出现字面转义)', async () => {
     const ui = await renderUi(
-      <Text>{'\x1b[31m红\x1b[39m 与 \x1b[1m粗\x1b[22m'}</Text>,
+      () => <Text>{'\x1b[31m红\x1b[39m 与 \x1b[1m粗\x1b[22m'}</Text>,
       { width: 30, height: 4 },
     );
     const frame = ui.frame();
@@ -31,7 +30,7 @@ describe('kit.Text', () => {
 
   it('嵌套 Text 渲染为 span(同一行内联)', async () => {
     const ui = await renderUi(
-      <Text>
+      () => <Text>
         前<Text color="red">中</Text>后
       </Text>,
       { width: 20, height: 3 },
@@ -42,7 +41,7 @@ describe('kit.Text', () => {
 
   it('wrap="truncate-end" 单行截断', async () => {
     const ui = await renderUi(
-      <Text wrap="truncate-end">{'一二三四五六七八九十'.repeat(4)}</Text>,
+      () => <Text wrap="truncate-end">{'一二三四五六七八九十'.repeat(4)}</Text>,
       { width: 12, height: 4 },
     );
     const lines = ui.frame().split('\n').filter((l) => l.trim() !== '');
@@ -54,7 +53,7 @@ describe('kit.Text', () => {
 describe('kit.Box', () => {
   it('默认 flexDirection=row(两个 Text 同行)', async () => {
     const ui = await renderUi(
-      <Box>
+      () => <Box>
         <Text>AA</Text>
         <Text>BB</Text>
       </Box>,
@@ -66,7 +65,7 @@ describe('kit.Box', () => {
 
   it('column 布局纵向排列且 border 生效', async () => {
     const ui = await renderUi(
-      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+      () => <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
         <Text>第一行</Text>
         <Text>第二行</Text>
       </Box>,
@@ -88,7 +87,7 @@ describe('kit.useInput', () => {
 
   it('方向键/回车/ESC/tab/退格映射为 Ink 形状', async () => {
     const seen: { input: string; key: Key }[] = [];
-    const ui = await renderUi(<Probe onKey={(input, key) => seen.push({ input, key })} />, {
+    const ui = await renderUi(() => <Probe onKey={(input, key) => seen.push({ input, key })} />, {
       width: 20,
       height: 3,
     });
@@ -108,7 +107,7 @@ describe('kit.useInput', () => {
 
   it('可打印字符(含 CJK)同批合并派发,ctrl 组合单独派发', async () => {
     const seen: { input: string; key: Key }[] = [];
-    const ui = await renderUi(<Probe onKey={(input, key) => seen.push({ input, key })} />, {
+    const ui = await renderUi(() => <Probe onKey={(input, key) => seen.push({ input, key })} />, {
       width: 20,
       height: 3,
     });
@@ -122,7 +121,7 @@ describe('kit.useInput', () => {
 
   it('bracketed paste 合并为一次大 input(Ink 语义)', async () => {
     const seen: string[] = [];
-    const ui = await renderUi(<Probe onKey={(input) => seen.push(input)} />, {
+    const ui = await renderUi(() => <Probe onKey={(input) => seen.push(input)} />, {
       width: 20,
       height: 3,
     });
@@ -134,11 +133,10 @@ describe('kit.useInput', () => {
   it('isActive=false 时不接收按键', async () => {
     const seen: string[] = [];
     function Gated() {
-      const [active] = useState(false);
-      useInput((input) => seen.push(input), { isActive: active });
+      useInput((input) => seen.push(input), { isActive: false });
       return <Text>gated</Text>;
     }
-    const ui = await renderUi(<Gated />, { width: 20, height: 3 });
+    const ui = await renderUi(() => <Gated />, { width: 20, height: 3 });
     await ui.type('x');
     expect(seen).toHaveLength(0);
     await ui.destroy();

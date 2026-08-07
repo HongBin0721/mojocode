@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Text, useApp, useInput } from './kit.js';
+import { createMemo, createSignal, For, Show } from 'solid-js';
+import { Box, Text, useApp, useInput, type JSX } from './kit.js';
 import type { SessionMeta } from '../session/store.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
@@ -16,32 +16,34 @@ interface Props {
  * 启动期的会话选择器:`mojocode -r` 不带参数时先渲染它,选完再进入正式 App。
  * 独立于 Input 的二级选择器——那个由斜杠命令文本触发,这里是启动流程。
  */
-export function SessionPicker({ sessions, onSelect }: Props): React.JSX.Element {
+export function SessionPicker(props: Props): JSX.Element {
   const { exit } = useApp();
-  const [cursor, setCursor] = useState(0);
+  const [cursor, setCursor] = createSignal(0);
 
   useInput((_input, key) => {
     if (key.escape) {
-      onSelect(undefined);
+      props.onSelect(undefined);
       exit();
       return;
     }
     if (key.upArrow) {
-      setCursor((c) => (c - 1 + sessions.length) % sessions.length);
+      setCursor((c) => (c - 1 + props.sessions.length) % props.sessions.length);
       return;
     }
     if (key.downArrow) {
-      setCursor((c) => (c + 1) % sessions.length);
+      setCursor((c) => (c + 1) % props.sessions.length);
       return;
     }
     if (key.return) {
-      onSelect(sessions[cursor]?.id);
+      props.onSelect(props.sessions[cursor()]?.id);
       exit();
     }
   });
 
-  const windowStart = Math.max(0, Math.min(cursor - Math.floor(WINDOW / 2), sessions.length - WINDOW));
-  const visible = sessions.slice(windowStart, windowStart + WINDOW);
+  const windowStart = createMemo(() =>
+    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), props.sessions.length - WINDOW)),
+  );
+  const visible = createMemo(() => props.sessions.slice(windowStart(), windowStart() + WINDOW));
 
   return (
     <Box flexDirection="column">
@@ -49,33 +51,34 @@ export function SessionPicker({ sessions, onSelect }: Props): React.JSX.Element 
         <Text bold color={theme.accent}>
           {t('picker.title')}
         </Text>
-        {windowStart > 0 ? (
-          <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart })}</Text>
-        ) : null}
-        {visible.map((meta, i) => {
-          const index = windowStart + i;
-          const active = index === cursor;
-          return (
-            <Text key={meta.id} color={active ? theme.accent : undefined} wrap="truncate-end">
-              {active ? `${glyphs.pointer} ` : '  '}
-              {meta.id.slice(0, 8)}
-              <Text color={theme.dim}>
-                {'  '}
-                {meta.updatedAt.slice(0, 16).replace('T', ' ')}
-                {'  '}
-                {meta.provider}/{meta.model}
-                {'  '}
-                {t('cli.msgs', { n: meta.messageCount })}
+        <Show when={windowStart() > 0}>
+          <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart() })}</Text>
+        </Show>
+        <For each={visible()}>
+          {(meta, i) => {
+            const active = () => windowStart() + i() === cursor();
+            return (
+              <Text color={active() ? theme.accent : undefined} wrap="truncate-end">
+                {active() ? `${glyphs.pointer} ` : '  '}
+                {meta.id.slice(0, 8)}
+                <Text color={theme.dim}>
+                  {'  '}
+                  {meta.updatedAt.slice(0, 16).replace('T', ' ')}
+                  {'  '}
+                  {meta.provider}/{meta.model}
+                  {'  '}
+                  {t('cli.msgs', { n: meta.messageCount })}
+                </Text>
+                {meta.title ? `  ${meta.title}` : ''}
               </Text>
-              {meta.title ? `  ${meta.title}` : ''}
-            </Text>
-          );
-        })}
-        {windowStart + WINDOW < sessions.length ? (
+            );
+          }}
+        </For>
+        <Show when={windowStart() + WINDOW < props.sessions.length}>
           <Text color={theme.dim}>
-            {t('selector.moreBelow', { n: sessions.length - windowStart - WINDOW })}
+            {t('selector.moreBelow', { n: props.sessions.length - windowStart() - WINDOW })}
           </Text>
-        ) : null}
+        </Show>
       </Box>
       <Box paddingLeft={2}>
         <Text color={theme.dim}>{t('picker.hint')}</Text>

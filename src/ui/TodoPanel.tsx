@@ -1,5 +1,5 @@
-import React from 'react';
-import { Box, Text } from './kit.js';
+import { createMemo, For } from 'solid-js';
+import { Box, Text, type JSX } from './kit.js';
 import { theme, glyphs, truncateWidth, WIDTH_SAFETY } from './theme.js';
 import type { TodoItem } from '../tools/todo.js';
 import { t } from '../i18n/index.js';
@@ -43,30 +43,30 @@ export function todoPanelRows(todos: TodoItem[]): PanelRow[] {
   return rows;
 }
 
-export function TodoPanel({
-  todos,
-  columns,
-}: {
-  todos: TodoItem[];
-  columns: number;
-}): React.ReactElement {
-  const rows = todoPanelRows(todos);
+export function TodoPanel(props: { todos: TodoItem[]; columns: number }): JSX.Element {
+  const rows = createMemo(() => todoPanelRows(props.todos));
   // 前缀 "⎿  "/对齐 3 列 + 复选框 2 列 + 边距。
-  const width = Math.max(20, columns - WIDTH_SAFETY - 5 - 2);
+  const width = () => Math.max(20, props.columns - WIDTH_SAFETY - 5 - 2);
 
   return (
     <Box paddingLeft={2} flexDirection="column">
-      {rows.map((row, index) => (
-        <Box key={index}>
-          <Text color={theme.dim}>{index === 0 ? `${glyphs.branch}  ` : '   '}</Text>
-          <PanelRowText row={row} width={width} />
-        </Box>
-      ))}
+      {/* For 按引用重建:rows() 每次整体重算出新对象,行组件随之整体重建,
+          PanelRowText 在组件体里读 props 因此安全(没有原位更新)。 */}
+      <For each={rows()}>
+        {(row, index) => (
+          <Box>
+            <Text color={theme.dim}>{index() === 0 ? `${glyphs.branch}  ` : '   '}</Text>
+            <PanelRowText row={row} width={width()} />
+          </Box>
+        )}
+      </For>
     </Box>
   );
 }
 
-function PanelRowText({ row, width }: { row: PanelRow; width: number }) {
+function PanelRowText(props: { row: PanelRow; width: number }): JSX.Element {
+  // row 变体是静态数据(rows() 每次整体重建),body 里分支即可。
+  const row = props.row;
   switch (row.kind) {
     case 'done-collapsed':
       return (
@@ -77,7 +77,7 @@ function PanelRowText({ row, width }: { row: PanelRow; width: number }) {
     case 'overflow':
       return <Text color={theme.dim}>{t('ui.moreTodos', { n: row.n })}</Text>;
     default: {
-      const text = truncateWidth(row.todo.content, width);
+      const text = truncateWidth(row.todo.content, props.width);
       if (row.todo.status === 'completed') {
         return (
           <Text color={theme.dim} strikethrough>

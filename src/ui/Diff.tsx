@@ -1,5 +1,5 @@
-import React from 'react';
-import { Box, Text } from './kit.js';
+import { createMemo, For, Show } from 'solid-js';
+import { Box, Text, type JSX } from './kit.js';
 import { theme } from './theme.js';
 import { highlightLine, languageFromPath } from './highlight.js';
 import { t } from '../i18n/index.js';
@@ -25,19 +25,24 @@ const HEADER_RE = /^--- (.+?)(?:\t.*)?$/;
  * 渲染 unified diff(Claude Code 风格):行号 + 新增/删除行的背景高亮,
  * hunk 之间用 ⋯ 分隔,过长的补丁折叠。
  */
-export function Diff({ patch, maxLines = 40 }: Props): React.ReactElement {
-  const { rows: all, language } = parsePatch(patch);
-  const rows = all.slice(0, maxLines);
-  const hidden = all.length - rows.length;
-  // 行号列宽按可见行的最大行号计算,右对齐。
-  const numWidth = rows.reduce((w, r) => Math.max(w, String(r.num ?? '').length), 1);
+export function Diff(props: Props): JSX.Element {
+  const view = createMemo(() => {
+    const { rows: all, language } = parsePatch(props.patch);
+    const rows = all.slice(0, props.maxLines ?? 40);
+    const hidden = all.length - rows.length;
+    // 行号列宽按可见行的最大行号计算,右对齐。
+    const numWidth = rows.reduce((w, r) => Math.max(w, String(r.num ?? '').length), 1);
+    return { rows, hidden, numWidth, language };
+  });
 
   return (
     <Box flexDirection="column">
-      {rows.map((row, index) => (
-        <DiffRow key={index} row={row} numWidth={numWidth} language={language} />
-      ))}
-      {hidden > 0 && <Text color={theme.dim}>{t('ui.moreDiffLines', { n: hidden })}</Text>}
+      <For each={view().rows}>
+        {(row) => <DiffRow row={row} numWidth={view().numWidth} language={view().language} />}
+      </For>
+      <Show when={view().hidden > 0}>
+        <Text color={theme.dim}>{t('ui.moreDiffLines', { n: view().hidden })}</Text>
+      </Show>
     </Box>
   );
 }
@@ -46,20 +51,15 @@ export function Diff({ patch, maxLines = 40 }: Props): React.ReactElement {
  * 一行 diff。代码文本按文件类型做语法高亮,再整体套上 +/- 的背景色:
  * ansi-spans 把高亮里的"恢复默认前景色"(SGR 39)解释为继承外层,因此
  * 未被着色的片段仍是 diff 的浅绿/浅红,背景也贯穿整行不断裂。
+ *
+ * row 是不可变数据(For 按引用整体重建),组件体里分支即可。
  */
-function DiffRow({
-  row,
-  numWidth,
-  language,
-}: {
-  row: Row;
-  numWidth: number;
-  language?: string;
-}) {
-  const num = `${String(row.num ?? '').padStart(numWidth)} `;
+function DiffRow(props: { row: Row; numWidth: number; language?: string }): JSX.Element {
+  const row = props.row;
+  const num = `${String(row.num ?? '').padStart(props.numWidth)} `;
   switch (row.kind) {
     case 'gap':
-      return <Text color={theme.dim}>{`${' '.repeat(numWidth)} ⋯`}</Text>;
+      return <Text color={theme.dim}>{`${' '.repeat(props.numWidth)} ⋯`}</Text>;
     case 'meta':
       return <Text color={theme.dim}>{row.text || ' '}</Text>;
     case 'add':
@@ -67,7 +67,7 @@ function DiffRow({
         <Text>
           <Text color={theme.dim}>{num}</Text>
           <Text backgroundColor={theme.diffAddedBg} color={theme.diffAddedFg}>
-            {`+ ${highlightLine(row.text, language)}`}
+            {`+ ${highlightLine(row.text, props.language)}`}
           </Text>
         </Text>
       );
@@ -76,7 +76,7 @@ function DiffRow({
         <Text>
           <Text color={theme.dim}>{num}</Text>
           <Text backgroundColor={theme.diffRemovedBg} color={theme.diffRemovedFg}>
-            {`- ${highlightLine(row.text, language)}`}
+            {`- ${highlightLine(row.text, props.language)}`}
           </Text>
         </Text>
       );
@@ -84,7 +84,7 @@ function DiffRow({
       return (
         <Text>
           <Text color={theme.dim}>{num}</Text>
-          <Text>{`  ${highlightLine(row.text, language)}`}</Text>
+          <Text>{`  ${highlightLine(row.text, props.language)}`}</Text>
         </Text>
       );
   }

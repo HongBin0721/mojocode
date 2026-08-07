@@ -5,13 +5,11 @@
  * 输入是 tsup 的产物 dist/cli.js(先跑 `npm run build`),不是 src/——
  * 复用现有构建链,保证二进制和 npm 包跑的是同一份代码。
  *
- * 两个 spike 里踩过的坑在这里处理(docs/opentui-migration.md §6.4):
+ * spike 里踩过的坑在这里处理(docs/opentui-migration.md §6.4):
  * - `$bunfs` 里读不到 package.json,版本号用 `define` 在编译期注入
- *   (见 src/config/version.ts 的 MOJOCODE_BUILD_VERSION);
- * - @opentui/react 的 devtools 集成静态 import 可选依赖 react-devtools-core(未安装),
- *   用 plugin 把它替换成空模块。不能用 external:--compile 是单文件打包,
- *   动态 import 会被内联,external 的 import 就变成了启动期必然执行的
- *   顶层依赖,二进制一起跑就报 Cannot find package(实测)。
+ *   (见 src/config/version.ts 的 MOJOCODE_BUILD_VERSION)。
+ *   (React 时代还需要 stub 掉 @opentui/react 的 react-devtools-core 可选
+ *   依赖;SolidJS 迁移后 dist 产物零 react 引用,该插件已随之删除。)
  *
  * 用法:
  *   bun scripts/build-binaries.ts                       # 全 6 平台 + 归档 + SHA256SUMS
@@ -66,21 +64,6 @@ async function ensureNativePackage(target: Target, version: string): Promise<voi
     process.exit(1);
   }
 }
-
-/** 把 react-devtools-core 解析成空模块(理由见文件头注释)。 */
-const stubDevtools: import('bun').BunPlugin = {
-  name: 'stub-react-devtools-core',
-  setup(build) {
-    build.onResolve({ filter: /^react-devtools-core$/ }, () => ({
-      path: 'react-devtools-core',
-      namespace: 'stub',
-    }));
-    build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-      contents: 'export default {};',
-      loader: 'js',
-    }));
-  },
-};
 
 const root = path.resolve(import.meta.dir, '..');
 const entry = path.join(root, 'dist', 'cli.js');
@@ -139,7 +122,6 @@ for (const target of selected) {
       MOJOCODE_BUILD_VERSION: JSON.stringify(pkg.version),
       ...(target.libc ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.libc) } : {}),
     },
-    plugins: [stubDevtools],
   });
   if (!result.success) {
     console.error(`✗ ${target.name} 编译失败:`);

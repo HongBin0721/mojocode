@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import React from 'react';
 import { Header } from '../../src/ui/Header.js';
 import { Footer } from '../../src/ui/Footer.js';
 import { TodoPanel } from '../../src/ui/TodoPanel.js';
@@ -10,7 +9,7 @@ import { renderUi } from '../support/otui.js';
 describe('叶子组件在 OpenTUI 下渲染', () => {
   it('Header:边框横幅与信息行', async () => {
     const ui = await renderUi(
-      <Header providerLabel="DeepSeek" model="deepseek-chat" root="/tmp/proj" mode="ask" />,
+      () => <Header providerLabel="DeepSeek" model="deepseek-chat" root="/tmp/proj" mode="ask" />,
       { width: 60, height: 8 },
     );
     const frame = ui.frame();
@@ -23,7 +22,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
 
   it('Footer:信息段渲染与 notice', async () => {
     const ui = await renderUi(
-      <Footer
+      () => <Footer
         contextUsed={4000}
         contextWindow={128000}
         cumulativeTokens={12345}
@@ -45,7 +44,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
 
   it('TodoPanel:清单行与勾选框', async () => {
     const ui = await renderUi(
-      <TodoPanel
+      () => <TodoPanel
         todos={[
           { content: '写测试', status: 'completed' },
           { content: '迁移组件', status: 'in_progress' },
@@ -63,7 +62,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
   });
 
   it('StatusLine:阶段标签与提示', async () => {
-    const ui = await renderUi(<StatusLine phase="thinking" since={Date.now() - 3000} />, {
+    const ui = await renderUi(() => <StatusLine phase="thinking" since={Date.now() - 3000} />, {
       width: 60,
       height: 3,
     });
@@ -74,7 +73,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
 
   it('GoalLine:靠右对齐的目标进度行', async () => {
     const ui = await renderUi(
-      <GoalLine
+      () => <GoalLine
         snapshot={() => ({
           condition: '让测试全绿',
           turns: 3,

@@ -1,17 +1,15 @@
 /**
- * UI 测试公共 harness。
+ * UI 测试公共 harness(Solid 版)。
  *
  * 必须用 Bun 跑:`bun --bun x vitest run --config vitest.ui.config.ts`。
- * 原因见 vitest.ui.config.ts 头注释(原生 FFI 的运行时条件解析)。
+ * 原因见 vitest.ui.config.ts 头注释(原生 FFI 的运行时条件解析,以及
+ * solid-js 在 Bun 原生条件下解析到 SSR 桩的陷阱)。
  *
- * 两个上游行为已在 harness 内抹平,新测试不必再关心:
- * - React 19 的首次 commit 是异步的:render 后必须先让出事件循环再取帧,
- *   tick() 把「让出 + renderOnce」封装成一步;
- * - 状态更新会触发 act 警告:交互统一包在 act() 里。
+ * 相比 React 版的两处简化:Solid 没有异步首帧(组件树同步创建),也没有
+ * act() 警告——tick() 保留「让出事件循环 + renderOnce」的形状,微任务里
+ * 排队的派发(useInput 的字符合并)因此照常冲刷。
  */
-import { act } from 'react';
-import type React from 'react';
-import { testRender } from '@opentui/react/test-utils';
+import { testRender, type JSX } from '@opentui/solid';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 /** 去掉 ANSI(captureCharFrame 本身无 ANSI,此处兼容将来换 capture 方式)。 */
@@ -39,7 +37,7 @@ export interface UiHandle {
 }
 
 export async function renderUi(
-  node: React.ReactNode,
+  node: () => JSX.Element,
   options: { width?: number; height?: number } = {},
 ): Promise<UiHandle> {
   const setup = await testRender(node, {
@@ -49,18 +47,14 @@ export async function renderUi(
   const { renderer, mockInput, renderOnce, captureCharFrame } = setup;
 
   const tick = async (): Promise<void> => {
-    await act(async () => {
-      await sleep(0);
-    });
+    await sleep(0);
     await renderOnce();
   };
   await tick();
 
   const withTick = async (fn: () => Promise<void> | void): Promise<void> => {
-    await act(async () => {
-      await fn();
-      await sleep(0);
-    });
+    await fn();
+    await sleep(0);
     await renderOnce();
   };
 

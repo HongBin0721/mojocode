@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import React from 'react';
 
 
 import { App } from '../../src/ui/App.js';
@@ -40,7 +39,7 @@ async function setup() {
   } as unknown as Session;
 
   // 全屏渲染下 frame() 只截视口:给足高度,让横幅 + 时间线全部落在视口内。
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
   return { bus, ui };
 }
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Box, Text } from './kit.js';
+import { createSignal, onCleanup } from 'solid-js';
+import { Box, Text, type JSX } from './kit.js';
 import { theme, toolDisplayName } from './theme.js';
 import { t, type MessageKey } from '../i18n/index.js';
 
@@ -55,32 +55,31 @@ const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
  * 与主流 CLI(Claude Code / Codex)的布局一致。定时器同时驱动 spinner
  * 帧和秒数刷新,组件卸载(回到空闲)即停止。
  */
-export function StatusLine({ phase, detail, since, todoHint }: Props): React.ReactElement {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), FRAME_MS);
-    return () => clearInterval(timer);
-  }, []);
+export function StatusLine(props: Props): JSX.Element {
+  const [now, setNow] = createSignal(Date.now());
+  const timer = setInterval(() => setNow(Date.now()), FRAME_MS);
+  onCleanup(() => clearInterval(timer));
 
-  const frame = FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]!;
-  const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  const color = PHASE_COLORS[phase];
-  const label =
-    phase === 'tool'
-      ? t('status.runningTool', { tool: toolDisplayName(detail ?? '') })
-      : t(PHASE_LABELS[phase]);
+  const frame = () => FRAMES[Math.floor(now() / FRAME_MS) % FRAMES.length]!;
+  const seconds = () => Math.max(0, Math.floor((now() - props.since) / 1000));
+  const color = () => PHASE_COLORS[props.phase];
+  const label = () =>
+    props.phase === 'tool'
+      ? t('status.runningTool', { tool: toolDisplayName(props.detail ?? '') })
+      : t(PHASE_LABELS[props.phase as Exclude<WorkPhase, 'tool'>]);
 
-  const extra = todoHint
-    ? ` · ${t(todoHint === 'hide' ? 'status.todoHide' : 'status.todoShow')}`
-    : '';
+  const extra = () =>
+    props.todoHint
+      ? ` · ${t(props.todoHint === 'hide' ? 'status.todoHide' : 'status.todoShow')}`
+      : '';
 
   return (
     <Box marginTop={1}>
-      <Text color={color}>{frame} </Text>
-      <Text color={color} bold>
-        {label}
+      <Text color={color()}>{frame()} </Text>
+      <Text color={color()} bold>
+        {label()}
       </Text>
-      <Text color={theme.dim}> {t('status.meta', { s: seconds, extra })}</Text>
+      <Text color={theme.dim}> {t('status.meta', { s: seconds(), extra: extra() })}</Text>
     </Box>
   );
 }

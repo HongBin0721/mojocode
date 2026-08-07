@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import React, { act } from 'react';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Input, type SlashCommand } from '../../src/ui/Input.js';
 import { renderUi } from '../support/otui.js';
@@ -11,7 +10,7 @@ function setup(
 ) {
   const submitted: string[] = [];
   const ui = renderUi(
-    <Input
+    () => <Input
       onSubmit={(value) => submitted.push(value)}
       disabled={false}
       placeholder=""
@@ -47,17 +46,17 @@ describe('Input 基础编辑', () => {
     await ui.destroy();
   });
 
-  // 回归:OpenTUI 把一个 stdin chunk 拆成逐字符 keypress 同步连发(Ink 是
-  // 整串一次给)。kit 把普通字符合并后必须 flushSync 提交,否则紧随其后的
-  // 回车仍读到冲刷前那次渲染的空 value——文字进了框却提交空串,回车像被吞掉。
+  // 回归:OpenTUI 把一个 stdin chunk 拆成逐字符 keypress 同步连发。kit 的
+  // useInput 把普通字符合并、特殊键到达时**先同步冲刷**再派发——顺序错了,
+  // 回车会在文字落进输入框之前处理,表现为文字进了框却提交空串。(React
+  // 时代这里还叠着 flushSync 的旧闭包问题;Solid 读信号即当前值,但冲刷
+  // 先于特殊键派发的顺序契约不变,本测试锁的就是它。)
   // 触发场景:快速输入、按键重复、无 bracketed paste 的终端里粘贴含换行文本。
   it('文字与回车同批到达时不丢内容(同步连发回归)', async () => {
     const { submitted, ui: p } = setup([]);
     const ui = await p;
-    await act(async () => {
-      void ui.mockInput.pressKeys(['h', 'i', 'RETURN'], 0);
-      await sleep(50);
-    });
+    void ui.mockInput.pressKeys(['h', 'i', 'RETURN'], 0);
+    await sleep(50);
     await ui.tick();
     expect(submitted).toEqual(['hi']);
     await ui.destroy();
@@ -286,7 +285,7 @@ describe('ctrl+v 粘贴图片', () => {
     const submitted: [string, unknown][] = [];
     const notices: string[] = [];
     const ui = await renderUi(
-      <Input
+      () => <Input
         onSubmit={(value, images) => submitted.push([value, images])}
         disabled={false}
         placeholder=""

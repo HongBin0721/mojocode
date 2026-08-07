@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import React from 'react';
 
 import { App } from '../../src/ui/App.js';
 import { stubGoal } from '../support/goal.js';
@@ -44,7 +43,7 @@ async function setup(timeline: TimelineMode = 'full') {
     setMode: () => {},
     dispose: async () => {},
   } as unknown as Session;
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
   return { ui, session };
 }
 

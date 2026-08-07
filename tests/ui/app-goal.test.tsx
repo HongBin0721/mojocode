@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import React from 'react';
 
 
 import { App } from '../../src/ui/App.js';
@@ -74,7 +73,7 @@ async function setup(options?: {
     dispose: async () => {},
   } as unknown as Session;
 
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 45 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 45 });
   const submit = async (text: string) => {
     await ui.type(text);
     await ui.press('return');
@@ -279,7 +278,7 @@ describe('输入框上方的目标进度', () => {
     // 折行的话动态区就比 App 的高度预算多出一行——预算只给这里留了一行。
     // 待续那句英文有 40 多列,是最容易撞上的一条。
     const status = { ...STATUS, turns: 0, restored: true, lastReason: '' };
-    const ui = await renderUi(<GoalLine snapshot={() => status} columns={30} />, {
+    const ui = await renderUi(() => <GoalLine snapshot={() => status} columns={30} />, {
       width: 30,
       height: 4,
     });

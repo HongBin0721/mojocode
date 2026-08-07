@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Box, Text, useApp, useInput } from './kit.js';
+import { createEffect, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { Box, Text, useApp, useInput, type JSX } from './kit.js';
 import {
   BUILTIN_PROVIDER_IDS,
   PROVIDER_PRESETS,
@@ -28,53 +28,55 @@ type Step =
  * 可通过 `mojocode auth` 独立运行;当任何地方都没有配置 key 时,`mojocode` 会
  * 自动启动它。
  */
-export function AuthWizard(): React.ReactElement {
+export function AuthWizard(): JSX.Element {
   const { exit } = useApp();
 
-  const [step, setStep] = useState<Step>({ kind: 'select' });
-  const [cursor, setCursor] = useState(0);
-  const [buffer, setBuffer] = useState('');
+  const [step, setStep] = createSignal<Step>({ kind: 'select' });
+  const [cursor, setCursor] = createSignal(0);
+  const [buffer, setBuffer] = createSignal('');
   // 本次运行中已保存 key 的 provider,让 ✓ 能立即更新。
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savedIds, setSavedIds] = createSignal<Set<string>>(new Set());
 
   // 验证放在 effect 中执行,让"验证中…"那一帧先绘制出来。
-  useEffect(() => {
-    if (step.kind !== 'validating') return;
-    const { id, key } = step;
-    const preset = PROVIDER_PRESETS[id];
-    let cancelled = false;
+  createEffect(
+    on(step, (current) => {
+      if (current.kind !== 'validating') return;
+      const { id, key } = current;
+      const preset = PROVIDER_PRESETS[id];
+      let cancelled = false;
+      onCleanup(() => {
+        cancelled = true;
+      });
 
-    void (async () => {
-      try {
-        const models = await listModels({
-          id,
-          label: preset.label,
-          baseURL: preset.baseURL,
-          apiKey: key,
-          model: preset.defaultModel,
-          headers: {},
-          contextWindow: preset.defaultContextWindow,
-          parallelToolCalls: true,
-          reasoningEffort: 'auto',
-          sdk: 'openai-compatible',
-        });
-        if (cancelled) return;
-        const path = await saveApiKey(id, key);
-        setSavedIds((prev) => new Set(prev).add(id));
-        setStep({ kind: 'askDefault', id, savedLine: t('auth.saved', { path, n: models.length }) });
-      } catch (err) {
-        if (cancelled) return;
-        setStep({ kind: 'error', id, key, message: (err as Error).message });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [step]);
+      void (async () => {
+        try {
+          const models = await listModels({
+            id,
+            label: preset.label,
+            baseURL: preset.baseURL,
+            apiKey: key,
+            model: preset.defaultModel,
+            headers: {},
+            contextWindow: preset.defaultContextWindow,
+            parallelToolCalls: true,
+            reasoningEffort: 'auto',
+            sdk: 'openai-compatible',
+          });
+          if (cancelled) return;
+          const path = await saveApiKey(id, key);
+          setSavedIds((prev) => new Set(prev).add(id));
+          setStep({ kind: 'askDefault', id, savedLine: t('auth.saved', { path, n: models.length }) });
+        } catch (err) {
+          if (cancelled) return;
+          setStep({ kind: 'error', id, key, message: (err as Error).message });
+        }
+      })();
+    }),
+  );
 
   useInput((input, key) => {
-    switch (step.kind) {
+    const current = step();
+    switch (current.kind) {
       case 'select': {
         if (key.escape) {
           exit();
@@ -84,7 +86,7 @@ export function AuthWizard(): React.ReactElement {
           setCursor((c) => (c + 1) % BUILTIN_PROVIDER_IDS.length);
         } else if (key.return) {
           setBuffer('');
-          setStep({ kind: 'enter', id: BUILTIN_PROVIDER_IDS[cursor]! });
+          setStep({ kind: 'enter', id: BUILTIN_PROVIDER_IDS[cursor()]! });
         }
         break;
       }
@@ -93,8 +95,8 @@ export function AuthWizard(): React.ReactElement {
         if (key.escape) {
           setStep({ kind: 'select' });
         } else if (key.return) {
-          const trimmed = buffer.trim();
-          if (trimmed) setStep({ kind: 'validating', id: step.id, key: trimmed });
+          const trimmed = buffer().trim();
+          if (trimmed) setStep({ kind: 'validating', id: current.id, key: trimmed });
         } else if (key.backspace || key.delete) {
           setBuffer((b) => b.slice(0, -1));
         } else if (!key.ctrl && !key.meta && input) {
@@ -109,9 +111,9 @@ export function AuthWizard(): React.ReactElement {
           setStep({ kind: 'select' });
         } else if (key.return) {
           setBuffer('');
-          setStep({ kind: 'enter', id: step.id });
+          setStep({ kind: 'enter', id: current.id });
         } else if (input.toLowerCase() === 's') {
-          const { id, key: apiKey } = step;
+          const { id, key: apiKey } = current;
           void saveApiKey(id, apiKey).then((path) => {
             setSavedIds((prev) => new Set(prev).add(id));
             setStep({ kind: 'askDefault', id, savedLine: t('auth.savedUnverified', { path }) });
@@ -122,7 +124,7 @@ export function AuthWizard(): React.ReactElement {
 
       case 'askDefault': {
         if (input.toLowerCase() === 'y') {
-          void setDefaultProvider(step.id).then(() => setStep({ kind: 'another' }));
+          void setDefaultProvider(current.id).then(() => setStep({ kind: 'another' }));
         } else if (input.toLowerCase() === 'n' || key.escape || key.return) {
           setStep({ kind: 'another' });
         }
@@ -150,82 +152,101 @@ export function AuthWizard(): React.ReactElement {
         {t('auth.title')}
       </Text>
 
-      {step.kind === 'select' ? (
+      <Show when={step().kind === 'select'}>
         <Box flexDirection="column" marginTop={1}>
-          {BUILTIN_PROVIDER_IDS.map((id, index) => {
-            const preset = PROVIDER_PRESETS[id];
-            const hasKey = savedIds.has(id) || apiKeyFromEnv(preset.apiKeyEnv) !== undefined;
-            return (
-              <Text key={id} color={index === cursor ? theme.accent : undefined}>
-                {index === cursor ? '❯ ' : '  '}
-                {id.padEnd(12)} {preset.label}
-                {hasKey ? <Text color={theme.success}> {glyphs.done} {t('auth.configured')}</Text> : null}
-              </Text>
-            );
-          })}
+          <For each={BUILTIN_PROVIDER_IDS}>
+            {(id, index) => {
+              const preset = PROVIDER_PRESETS[id];
+              const hasKey = () => savedIds().has(id) || apiKeyFromEnv(preset.apiKeyEnv) !== undefined;
+              return (
+                <Text color={index() === cursor() ? theme.accent : undefined}>
+                  {index() === cursor() ? '❯ ' : '  '}
+                  {id.padEnd(12)} {preset.label}
+                  {hasKey() ? (
+                    <Text color={theme.success}>
+                      {' '}
+                      {glyphs.done} {t('auth.configured')}
+                    </Text>
+                  ) : null}
+                </Text>
+              );
+            }}
+          </For>
           <Box marginTop={1}>
             <Text color={theme.dim}>{t('auth.selectProvider')}</Text>
           </Box>
         </Box>
-      ) : null}
+      </Show>
 
-      {step.kind === 'enter' ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text>{t('auth.enterKey', { label: PROVIDER_PRESETS[step.id].label })}</Text>
-          <Text color={theme.dim}>{t('auth.getKeyAt', { url: PROVIDER_PRESETS[step.id].keyUrl })}</Text>
-          <Box marginTop={1} borderStyle="round" borderColor={theme.accent} paddingX={1}>
-            <Text>
-              {buffer.length === 0 ? (
-                <Text color={theme.dim}>sk-…</Text>
-              ) : (
-                `${'•'.repeat(Math.min(buffer.length, 40))} (${buffer.length})`
-              )}
+      <Show when={step().kind === 'enter' ? (step() as Extract<Step, { kind: 'enter' }>) : undefined}>
+        {(enterStep: () => Extract<Step, { kind: 'enter' }>) => (
+          <Box flexDirection="column" marginTop={1}>
+            <Text>{t('auth.enterKey', { label: PROVIDER_PRESETS[enterStep().id].label })}</Text>
+            <Text color={theme.dim}>{t('auth.getKeyAt', { url: PROVIDER_PRESETS[enterStep().id].keyUrl })}</Text>
+            <Box marginTop={1} borderStyle="round" borderColor={theme.accent} paddingX={1}>
+              <Text>
+                {buffer().length === 0 ? (
+                  <Text color={theme.dim}>sk-…</Text>
+                ) : (
+                  `${'•'.repeat(Math.min(buffer().length, 40))} (${buffer().length})`
+                )}
+              </Text>
+            </Box>
+            <Text color={theme.dim}>{t('auth.enterKeyHint')}</Text>
+          </Box>
+        )}
+      </Show>
+
+      <Show
+        when={step().kind === 'validating' ? (step() as Extract<Step, { kind: 'validating' }>) : undefined}
+      >
+        {(validating: () => Extract<Step, { kind: 'validating' }>) => (
+          <Box marginTop={1}>
+            <Text color={theme.dim}>
+              {glyphs.running} {t('auth.validating', { baseURL: PROVIDER_PRESETS[validating().id].baseURL })}
             </Text>
           </Box>
-          <Text color={theme.dim}>{t('auth.enterKeyHint')}</Text>
-        </Box>
-      ) : null}
+        )}
+      </Show>
 
-      {step.kind === 'validating' ? (
-        <Box marginTop={1}>
-          <Text color={theme.dim}>
-            {glyphs.running} {t('auth.validating', { baseURL: PROVIDER_PRESETS[step.id].baseURL })}
-          </Text>
-        </Box>
-      ) : null}
-
-      {step.kind === 'error' ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.error}>
-            {glyphs.failed} {t('auth.validationFailed', { message: step.message.slice(0, 300) })}
-          </Text>
-          <Text color={theme.dim}>{t('auth.retryHint')}</Text>
-        </Box>
-      ) : null}
-
-      {step.kind === 'askDefault' ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.success}>
-            {glyphs.done} {step.savedLine}
-          </Text>
-          <Text color={theme.dim}>{t('auth.plaintextWarn', { path: globalConfigPath() })}</Text>
-          <Box marginTop={1}>
-            <Text>{t('auth.setDefault', { id: step.id })}</Text>
+      <Show when={step().kind === 'error' ? (step() as Extract<Step, { kind: 'error' }>) : undefined}>
+        {(errorStep: () => Extract<Step, { kind: 'error' }>) => (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.error}>
+              {glyphs.failed} {t('auth.validationFailed', { message: errorStep().message.slice(0, 300) })}
+            </Text>
+            <Text color={theme.dim}>{t('auth.retryHint')}</Text>
           </Box>
-        </Box>
-      ) : null}
+        )}
+      </Show>
 
-      {step.kind === 'another' ? (
+      <Show
+        when={step().kind === 'askDefault' ? (step() as Extract<Step, { kind: 'askDefault' }>) : undefined}
+      >
+        {(askStep: () => Extract<Step, { kind: 'askDefault' }>) => (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.success}>
+              {glyphs.done} {askStep().savedLine}
+            </Text>
+            <Text color={theme.dim}>{t('auth.plaintextWarn', { path: globalConfigPath() })}</Text>
+            <Box marginTop={1}>
+              <Text>{t('auth.setDefault', { id: askStep().id })}</Text>
+            </Box>
+          </Box>
+        )}
+      </Show>
+
+      <Show when={step().kind === 'another'}>
         <Box marginTop={1}>
           <Text>{t('auth.another')}</Text>
         </Box>
-      ) : null}
+      </Show>
 
-      {step.kind === 'done' ? (
+      <Show when={step().kind === 'done'}>
         <Box marginTop={1}>
           <Text color={theme.success}>{t('auth.done')}</Text>
         </Box>
-      ) : null}
+      </Show>
     </Box>
   );
 }

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import React from 'react';
 
 import { App } from '../../src/ui/App.js';
 import { stubGoal } from '../support/goal.js';
@@ -46,7 +45,7 @@ function fakeSession() {
 describe('矮终端布局', () => {
   it('12 行终端 + 双流式预览激活时,输入框仍然可见', async () => {
     const session = fakeSession();
-    const ui = await renderUi(<App session={session} />, { width: 60, height: 12 });
+    const ui = await renderUi(() => <App session={session} />, { width: 60, height: 12 });
     // 激活双预览(思考 + 正文),各来一大段
     session.bus.emit({ type: 'reasoning-delta', id: 'r1', text: '思考内容\n'.repeat(20) });
     session.bus.emit({ type: 'text-delta', id: 't1', text: '流式回答内容\n'.repeat(20) });
@@ -60,7 +59,7 @@ describe('矮终端布局', () => {
 
   it('8 行极矮终端上权限确认框的选项可见', async () => {
     const session = fakeSession();
-    const ui = await renderUi(<App session={session} />, { width: 60, height: 14 });
+    const ui = await renderUi(() => <App session={session} />, { width: 60, height: 14 });
     session.bus.emit({
       type: 'permission-request',
       request: { id: 'p1', toolName: 'bash', title: 'bash: npm test', risk: 'execute' },

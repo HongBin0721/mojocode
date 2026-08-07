@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import React from 'react';
 import { Box } from '../../src/ui/kit.js';
 import { TimelineEntry } from '../../src/ui/Timeline.js';
 import type { TimelineItem } from '../../src/ui/types.js';
@@ -9,7 +8,7 @@ function entries(items: TimelineItem[], columns = 80) {
   return (
     <Box flexDirection="column">
       {items.map((item) => (
-        <TimelineEntry key={item.key} item={item} columns={columns} />
+        <TimelineEntry item={item} columns={columns} />
       ))}
     </Box>
   );
@@ -18,7 +17,7 @@ function entries(items: TimelineItem[], columns = 80) {
 describe('TimelineEntry 在 OpenTUI 下渲染', () => {
   it('user/assistant/reasoning/notice/error/divider 全 kind 冒烟', async () => {
     const ui = await renderUi(
-      entries([
+      () => entries([
         { key: 'i1', kind: 'user', text: '帮我看看这个文件' },
         { key: 'i2', kind: 'assistant', text: '这是**回答**,含 `代码`。' },
         { key: 'i3', kind: 'reasoning', durationMs: 3200 },
@@ -43,7 +42,7 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
 
   it('tool 条目:名称/参数/摘要与 bash 输出', async () => {
     const ui = await renderUi(
-      entries([
+      () => entries([
         {
           key: 't1',
           kind: 'tool',
@@ -79,7 +78,7 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
   it('write 工具带 diff 输出时渲染 Diff', async () => {
     const patch = '--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,1 @@\n-old line\n+new line\n';
     const ui = await renderUi(
-      entries([
+      () => entries([
         {
           key: 'd1',
           kind: 'tool',
@@ -101,7 +100,7 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
 
   it('banner 渲染 Header', async () => {
     const ui = await renderUi(
-      entries([
+      () => entries([
         {
           key: 'b1',
           kind: 'banner',

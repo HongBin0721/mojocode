@@ -12,7 +12,7 @@ const COMPACT_MARKER = '[Earlier conversation, compacted]';
 /**
  * 把持久化的会话历史还原成时间线条目,供 `--resume`/`/resume` 在 TUI 中回放。
  *
- * 纯数据转换,无 React 依赖(NewTimelineItem 是 type-only 引入)。与实时事件
+ * 纯数据转换,无 UI 框架依赖(NewTimelineItem 是 type-only 引入)。与实时事件
  * 流的差异:持久历史里的 tool-result 是 AI SDK 包装过的 `ToolResultOutput`,
  * 需要解包才能喂给 summarizeToolResult;durationMs 无法从历史恢复,置 0
  * (Timeline 只显示 >1500ms 的耗时,0 不会渲染出来)。

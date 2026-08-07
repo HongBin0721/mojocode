@@ -1,5 +1,5 @@
-import React from 'react';
-import { Box, Text } from './kit.js';
+import { For, Show } from 'solid-js';
+import { Box, Text, type JSX } from './kit.js';
 import { Diff } from './Diff.js';
 import { Header } from './Header.js';
 import { renderMarkdownCached } from './md-cache.js';
@@ -18,19 +18,17 @@ import type { TodoItem } from '../tools/todo.js';
 import { t } from '../i18n/index.js';
 
 /**
- * 一条已完成的时间线条目。挂在 scrollbox 里,App 每次状态变化都会走到
- * 这里——性能靠两层防线:React.memo(条目对象定稿后引用不变,宽度不变
- * 即跳过重渲染)+ markdown 渲染按 (key, width) 缓存(md-cache.ts),
- * 这正是长会话不会越来越卡的原因。
+ * 一条已完成的时间线条目。挂在 scrollbox 里。
+ *
+ * 性能模型与 React 时代不同:Solid 细粒度响应式下,条目组件只在创建时
+ * 运行一次(item 定稿后不可变,App 的 <For> 按引用复用),React.memo 的
+ * 等价物是免费的。宽度变化经 props.columns 的 JSX 内联访问触达 markdown
+ * 重排;renderMarkdownAnsi 仍按 (key, width) 走 LRU 缓存(md-cache.ts),
+ * resize 来回摆动不重复渲染。
  */
-export const TimelineEntry = React.memo(function TimelineEntry({
-  item,
-  columns,
-}: {
-  item: TimelineItem;
-  /** 终端宽度。从 App 统一下发,替代原来的 process.stdout.columns 直读。 */
-  columns: number;
-}): React.ReactElement | null {
+export function TimelineEntry(props: { item: TimelineItem; columns: number }): JSX.Element {
+  // item 定稿后不可变(App 只整条替换,从不原位修改),按创建时的值分支。
+  const item = props.item;
   switch (item.kind) {
     case 'user':
       // 用户消息用高亮色,和 agent 的白色回复、灰色思考区分开;回看时靠
@@ -49,7 +47,7 @@ export const TimelineEntry = React.memo(function TimelineEntry({
           <Text color={theme.assistant}>{item.continuation ? '  ' : `${glyphs.bullet} `}</Text>
           <Box flexDirection="column" flexGrow={1}>
             {/* 前缀 2 列 + WIDTH_SAFETY 边距:与流式预览同宽,定稿前后折行一致。 */}
-            <Text>{renderMarkdownCached(item.key, item.text, columns - 2 - WIDTH_SAFETY)}</Text>
+            <Text>{renderMarkdownCached(item.key, item.text, props.columns - 2 - WIDTH_SAFETY)}</Text>
           </Box>
         </Box>
       );
@@ -70,7 +68,7 @@ export const TimelineEntry = React.memo(function TimelineEntry({
       );
 
     case 'tool':
-      return <ToolEntry item={item} columns={columns} />;
+      return <ToolEntry item={item} columns={props.columns} />;
 
     case 'notice':
       return (
@@ -121,15 +119,13 @@ export const TimelineEntry = React.memo(function TimelineEntry({
     default:
       return null;
   }
-});
+}
 
-function ToolEntry({
-  item,
-  columns,
-}: {
+function ToolEntry(props: {
   item: Extract<TimelineItem, { kind: 'tool' }>;
   columns: number;
-}) {
+}): JSX.Element {
+  const item = props.item; // 定稿数据,不可变
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
   const todos = extractTodos(item);
@@ -147,7 +143,7 @@ function ToolEntry({
       ) : plan ? (
         // 方案完整展开,后面再跟一行批准结果。渲染结果按条目缓存(见文件头)。
         <Box paddingLeft={2} flexDirection="column">
-          <Text>{renderMarkdownCached(`${item.key}:plan`, plan, columns - 2 - WIDTH_SAFETY)}</Text>
+          <Text>{renderMarkdownCached(`${item.key}:plan`, plan, props.columns - 2 - WIDTH_SAFETY)}</Text>
           <Box>
             <Text color={theme.dim}>{glyphs.branch}  </Text>
             <Text color={item.isError ? theme.error : theme.dim}>{item.summary}</Text>
@@ -170,9 +166,7 @@ function ToolEntry({
           <Diff patch={diff} maxLines={24} />
         </Box>
       ) : null}
-      {item.toolName === 'bash' && !item.isError ? (
-        <BashOutput output={item.output} />
-      ) : null}
+      {item.toolName === 'bash' && !item.isError ? <BashOutput output={item.output} /> : null}
     </Box>
   );
 }
@@ -181,33 +175,35 @@ function ToolEntry({
  * todo 工具直接展开任务清单(Claude Code 风格),比"3 tasks"摘要直观:
  * 已完成的画勾 + 删除线,进行中的用强调色标出。
  */
-function TodoChecklist({ todos }: { todos: TodoItem[] }) {
+function TodoChecklist(props: { todos: TodoItem[] }): JSX.Element {
   return (
     <Box paddingLeft={2} flexDirection="column">
-      {todos.map((todo, index) => (
-        <Box key={index}>
-          <Text color={theme.dim}>{index === 0 ? `${glyphs.branch}  ` : '   '}</Text>
-          {todo.status === 'completed' ? (
-            <Text color={theme.dim} strikethrough>
-              {glyphs.checked} {todo.content}
-            </Text>
-          ) : todo.status === 'in_progress' ? (
-            <Text color={theme.accent}>
-              {glyphs.unchecked} {todo.content}
-            </Text>
-          ) : (
-            <Text>
-              {glyphs.unchecked} {todo.content}
-            </Text>
-          )}
-        </Box>
-      ))}
+      <For each={props.todos}>
+        {(todo, index) => (
+          <Box>
+            <Text color={theme.dim}>{index() === 0 ? `${glyphs.branch}  ` : '   '}</Text>
+            {todo.status === 'completed' ? (
+              <Text color={theme.dim} strikethrough>
+                {glyphs.checked} {todo.content}
+              </Text>
+            ) : todo.status === 'in_progress' ? (
+              <Text color={theme.accent}>
+                {glyphs.unchecked} {todo.content}
+              </Text>
+            ) : (
+              <Text>
+                {glyphs.unchecked} {todo.content}
+              </Text>
+            )}
+          </Box>
+        )}
+      </For>
     </Box>
   );
 }
 
-function BashOutput({ output }: { output: unknown }) {
-  const text = (output as { output?: unknown } | undefined)?.output;
+function BashOutput(props: { output: unknown }): JSX.Element {
+  const text = (props.output as { output?: unknown } | undefined)?.output;
   if (typeof text !== 'string' || !text.trim() || text === '(no output)') return null;
 
   const lines = text.split('\n');
@@ -216,12 +212,10 @@ function BashOutput({ output }: { output: unknown }) {
 
   return (
     <Box paddingLeft={5} flexDirection="column">
-      {shown.map((line, index) => (
-        <Text key={index} color={theme.dim}>
-          {line.slice(0, 200) || ' '}
-        </Text>
-      ))}
-      {hidden > 0 && <Text color={theme.dim}>{t('ui.moreLines', { n: hidden })}</Text>}
+      <For each={shown}>{(line) => <Text color={theme.dim}>{line.slice(0, 200) || ' '}</Text>}</For>
+      <Show when={hidden > 0}>
+        <Text color={theme.dim}>{t('ui.moreLines', { n: hidden })}</Text>
+      </Show>
     </Box>
   );
 }

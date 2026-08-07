@@ -3,7 +3,7 @@ import type { TodoItem } from '../tools/todo.js';
 
 /**
  * tool 条目的纯数据提取,Timeline(渲染)与 transcript(退出 dump)共用。
- * 刻意独立成无 React/渲染器依赖的模块:transcript 也被 Node 测试直接
+ * 刻意独立成无 UI 框架/渲染器依赖的模块:transcript 也被 Node 测试直接
  * import,不能经 Timeline 连带拉进 kit → @opentui(模块加载期就要 FFI)。
  */
 

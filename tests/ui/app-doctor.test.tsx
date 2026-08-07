@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import React, { act } from 'react';
 
 
 import fs from 'node:fs/promises';
@@ -11,6 +10,7 @@ import { EventBus } from '../../src/core/events.js';
 import { configSchema } from '../../src/config/schema.js';
 import { setLocale } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
+import { runDoctor } from '../../src/app/doctor.js';
 import type { McpStatus } from '../../src/mcp/client.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
 
@@ -40,9 +40,11 @@ async function setup(overrides: { config?: Record<string, unknown>; mcpStatuses?
   const bus = new EventBus();
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
   const run = vi.fn(async () => {});
+  const config = configSchema.parse({ provider: 'deepseek', ...overrides.config });
+  const mcpStatuses = overrides.mcpStatuses ?? [];
   const session = {
     root,
-    config: configSchema.parse({ provider: 'deepseek', ...overrides.config }),
+    config,
     provider,
     agent: {
       isRunning: false,
@@ -57,16 +59,19 @@ async function setup(overrides: { config?: Record<string, unknown>; mcpStatuses?
     gate: { setAsker: () => {} },
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(run),
-    mcpStatuses: overrides.mcpStatuses ?? [],
+    mcpStatuses,
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},
+    // 与 bootstrap 的实现同义:读会话此刻的配置、采信已连上的 MCP 状态。
+    doctor: ({ offline }: { offline: boolean }) =>
+      runDoctor({ root, config, mcpStatuses, offline }),
     refreshEnvironment: async () => {},
     dispose: async () => {},
   } as unknown as Session;
 
   // 报告本身就有三十多行:视口给足,粘底滚动才不会把靠前的分节顶出画面。
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 70 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 70 });
   return { bus, ui };
 }
 
@@ -85,9 +90,7 @@ async function waitFor(ui: UiHandle, needle: string | RegExp, timeoutMs = 15_000
     if (Date.now() - started > timeoutMs) {
       throw new Error(`waitFor 超时:帧里始终没有 ${String(needle)}\n${frame}`);
     }
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
     await ui.tick();
   }
 }

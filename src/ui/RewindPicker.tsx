@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Text, useInput } from './kit.js';
+import { createMemo, createSignal, For, Show } from 'solid-js';
+import { Box, Text, useInput, type JSX } from './kit.js';
 import type { RewindEntry } from '../session/replay.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
@@ -17,30 +17,32 @@ interface Props {
  * esc-esc 打开的回退选择器。它渲染期间 Input 已卸载(App 的渲染分支互斥),
  * 所以自带的 useInput 不会与输入框抢按键。
  */
-export function RewindPicker({ entries, onPick, onCancel }: Props): React.JSX.Element {
-  const [cursor, setCursor] = useState(0);
+export function RewindPicker(props: Props): JSX.Element {
+  const [cursor, setCursor] = createSignal(0);
 
   useInput((_input, key) => {
     if (key.escape) {
-      onCancel();
+      props.onCancel();
       return;
     }
     if (key.upArrow) {
-      setCursor((c) => (c - 1 + entries.length) % entries.length);
+      setCursor((c) => (c - 1 + props.entries.length) % props.entries.length);
       return;
     }
     if (key.downArrow) {
-      setCursor((c) => (c + 1) % entries.length);
+      setCursor((c) => (c + 1) % props.entries.length);
       return;
     }
     if (key.return) {
-      const entry = entries[cursor];
-      if (entry) onPick(entry);
+      const entry = props.entries[cursor()];
+      if (entry) props.onPick(entry);
     }
   });
 
-  const windowStart = Math.max(0, Math.min(cursor - Math.floor(WINDOW / 2), entries.length - WINDOW));
-  const visible = entries.slice(windowStart, windowStart + WINDOW);
+  const windowStart = createMemo(() =>
+    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), props.entries.length - WINDOW)),
+  );
+  const visible = createMemo(() => props.entries.slice(windowStart(), windowStart() + WINDOW));
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -48,25 +50,26 @@ export function RewindPicker({ entries, onPick, onCancel }: Props): React.JSX.El
         <Text bold color={theme.accent}>
           {t('rewind.title')}
         </Text>
-        {windowStart > 0 ? (
-          <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart })}</Text>
-        ) : null}
-        {visible.map((entry, i) => {
-          const index = windowStart + i;
-          const active = index === cursor;
-          return (
-            <Text key={entry.index} color={active ? theme.accent : undefined} wrap="truncate-end">
-              {active ? `${glyphs.pointer} ` : '  '}
-              <Text color={theme.dim}>#{entry.ordinal} </Text>
-              {entry.text.replace(/\s+/g, ' ').trim()}
-            </Text>
-          );
-        })}
-        {windowStart + WINDOW < entries.length ? (
+        <Show when={windowStart() > 0}>
+          <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart() })}</Text>
+        </Show>
+        <For each={visible()}>
+          {(entry, i) => {
+            const active = () => windowStart() + i() === cursor();
+            return (
+              <Text color={active() ? theme.accent : undefined} wrap="truncate-end">
+                {active() ? `${glyphs.pointer} ` : '  '}
+                <Text color={theme.dim}>#{entry.ordinal} </Text>
+                {entry.text.replace(/\s+/g, ' ').trim()}
+              </Text>
+            );
+          }}
+        </For>
+        <Show when={windowStart() + WINDOW < props.entries.length}>
           <Text color={theme.dim}>
-            {t('selector.moreBelow', { n: entries.length - windowStart - WINDOW })}
+            {t('selector.moreBelow', { n: props.entries.length - windowStart() - WINDOW })}
           </Text>
-        ) : null}
+        </Show>
       </Box>
       <Box paddingLeft={2}>
         <Text color={theme.dim}>{t('rewind.hint')}</Text>

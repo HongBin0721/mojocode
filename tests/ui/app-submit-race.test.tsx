@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import React from 'react';
 
 /**
  * 回车之后、run() 之前的窗口:@ 引用展开是异步的,这期间 agent 仍是
@@ -87,7 +86,7 @@ async function setup(options?: { isRunning?: boolean }) {
     dispose: async () => {},
   } as unknown as Session;
 
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
   return {
     runCalls,
     injected,

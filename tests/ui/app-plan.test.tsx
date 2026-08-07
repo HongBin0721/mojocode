@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import React from 'react';
 
 
 import { App } from '../../src/ui/App.js';
@@ -63,7 +62,7 @@ async function setup(
     dispose: async () => {},
   } as unknown as Session;
 
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 45 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 45 });
   const submit = async (text: string) => {
     await ui.type(text);
     await ui.press('return');

@@ -1,11 +1,10 @@
-import React from 'react';
 import process from 'node:process';
 import { render } from './kit.js';
 import { App } from './App.js';
 import { AuthWizard } from './AuthWizard.js';
 import { SessionPicker } from './SessionPicker.js';
 import { formatTranscript } from './transcript.js';
-import type { Session } from '../app/bootstrap.js';
+import type { SessionHandle } from '../app/session-handle.js';
 import type { TimelineItem } from './types.js';
 import type { SessionMeta } from '../session/store.js';
 
@@ -17,9 +16,9 @@ import type { SessionMeta } from '../session/store.js';
  */
 
 /** 主 TUI:渲染 App,退出后把时间线 dump 回主屏 scrollback。 */
-export async function runTui(session: Session): Promise<void> {
+export async function runTui(session: SessionHandle): Promise<void> {
   const itemsRef: { current: TimelineItem[] } = { current: [] };
-  const instance = await render(<App session={session} itemsRef={itemsRef} />);
+  const instance = await render(() => <App session={session} itemsRef={itemsRef} />);
   await instance.waitUntilExit();
   // 此刻 alternate screen 已还原,stdout 回到主屏。
   if (itemsRef.current.length > 0) {
@@ -28,7 +27,7 @@ export async function runTui(session: Session): Promise<void> {
 }
 
 export async function runAuthWizard(): Promise<void> {
-  const instance = await render(<AuthWizard />, { exitOnCtrlC: true });
+  const instance = await render(() => <AuthWizard />, { exitOnCtrlC: true });
   await instance.waitUntilExit();
 }
 
@@ -36,12 +35,14 @@ export async function runAuthWizard(): Promise<void> {
 export async function runSessionPicker(sessions: SessionMeta[]): Promise<string | undefined> {
   let picked: string | undefined;
   const instance = await render(
-    <SessionPicker
-      sessions={sessions}
-      onSelect={(id) => {
-        picked = id;
-      }}
-    />,
+    () => (
+      <SessionPicker
+        sessions={sessions}
+        onSelect={(id) => {
+          picked = id;
+        }}
+      />
+    ),
     { exitOnCtrlC: true },
   );
   await instance.waitUntilExit();

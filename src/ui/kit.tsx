@@ -1,14 +1,13 @@
-/** @jsxImportSource @opentui/react */
 /**
  * 渲染器适配层:以 Ink 的 API 形状(Box/Text/useInput/useApp/render)包装
- * OpenTUI 的 @opentui/react。
+ * OpenTUI 的 @opentui/solid。
  *
  * 存在的理由有二:
- * 1. 迁移面收敛——全部 UI 组件只改 import('ink' → './kit.js'),JSX 与
- *    键盘逻辑原样保留;
+ * 1. 迁移面收敛——UI 组件只面对这一层稳定 API,JSX 结构与键盘逻辑跨框架
+ *    (React → Solid)迁移时基本原样保留;
  * 2. 上游隔离——OpenTUI 还在 0.x,破坏性变更只需改这一个文件。
  *
- * 与 Ink 的三处语义差异,均已在此抹平:
+ * 与 Ink 的语义差异,均已在此抹平:
  * - OpenTUI 的 <text> 不解析 ANSI(T0 探针①):Text 检测到子串含 ESC 时
  *   经 parseAnsiSpans 转成 <span> 段;SGR 39/49 恢复为「继承外层」,与
  *   chalk 的嵌套行为一致(Diff 背景高亮依赖)。
@@ -16,21 +15,29 @@
  *   自身层级自动切换。
  * - Yoga 裸默认与 Ink 不同:Ink 的 Box 默认 flexDirection="row"、
  *   flexShrink=1,此处补齐同样的默认值,否则既有布局全部错位。
+ * - OpenTUI 把一个 stdin chunk 拆成逐字符 keypress 同步连发:普通字符在
+ *   同一个微任务内累积、批尾一次性派发(见 useInput)。React 时代这还救过
+ *   「旧闭包覆盖前字」的丢字 bug;Solid 的处理器读的是信号当前值,没有
+ *   旧闭包问题,但合并派发仍把 N 次重渲染收敛成一次,保留。
+ *
+ * Solid 纪律(改这层时牢记):组件内**不解构 props**(会断开响应式追踪),
+ * JSX 里内联访问 `props.x`;需要成组传递时用 createMemo 包对象再 spread。
  */
-import { createCliRenderer, TextAttributes, type CliRenderer, type KeyEvent } from '@opentui/core';
+import { createCliRenderer, decodePasteBytes, TextAttributes, type CliRenderer, type KeyEvent } from '@opentui/core';
 import {
-  createRoot,
-  flushSync,
+  render as solidRender,
   useKeyboard,
   usePaste,
   useRenderer,
   useSelectionHandler,
   useTerminalDimensions,
-} from '@opentui/react';
-import { decodePasteBytes } from '@opentui/core';
-import React, { createContext, useContext, useEffect, useMemo, useRef } from 'react';
+  type JSX,
+} from '@opentui/solid';
+import { createContext, createMemo, children as resolveChildren, onCleanup, splitProps, useContext } from 'solid-js';
 import { hasAnsi, parseAnsiSpans, type AnsiSpan } from './ansi-spans.js';
 import { writeClipboardText } from '../app/clipboard.js';
+
+export type { JSX };
 
 // ---------------------------------------------------------------------------
 // 键盘:Ink useInput 的形状
@@ -128,7 +135,8 @@ export function mapKeyEvent(event: KeyEvent): { input: string; key: Key } | unde
 }
 
 export interface UseInputOptions {
-  isActive?: boolean;
+  /** 布尔或访问器:Solid 下传信号访问器,每个事件到达时现取现判。 */
+  isActive?: boolean | (() => boolean);
 }
 
 /** 是否为可合并的普通输入(无任何特殊键标志、无 ctrl/meta;shift 允许,大写)。 */
@@ -146,62 +154,52 @@ function isPlainInput(input: string, key: Key): boolean {
  * 的焦点模型依赖这一点);粘贴文本(bracketed paste)按 Ink 语义合并为
  * 一次大 input 派发。
  *
- * 另一处刻意抹平的差异:Ink 把一个 stdin chunk 作为**一整个字符串**交给
- * 回调,而 OpenTUI 把它拆成逐字符 keypress **同步连发**。组件的编辑逻辑
- * (如 Input 的 insert)读的是本次渲染闭包里的 state,同一批到达的字符
- * 若逐个派发,前面的全部会被后面的旧闭包覆盖——快速输入/按键重复下丢字。
- * 因此普通字符在同一个微任务内累积,批尾一次性派发;特殊键到达时先冲刷
- * 累积再派发,顺序不乱。
- *
- * 冲刷必须包在 flushSync 里:同一批的「文字 + 回车」(快速输入、按键重复、
- * 无 bracketed paste 的终端里粘贴含换行的文本)会先派发文字、紧接着派发
- * 回车,而回车的处理器若仍是冲刷前那次渲染的闭包,读到的 value 还是空的
- * ——文字进了输入框却提交了空串,回车像被吞掉一样。flushSync 强制在两次
- * 派发之间完成一次提交,`ref.current.handler` 随之更新为新闭包。
+ * 同一批到达的普通字符在微任务内累积、批尾一次性派发;特殊键到达时先冲刷
+ * 累积再派发,顺序不乱。Solid 的信号更新是同步的,处理器读的永远是当前值,
+ * React 时代的 flushSync 强制提交不再需要。
  */
 export function useInput(
   handler: (input: string, key: Key) => void,
   options: UseInputOptions = {},
 ): void {
-  const active = options.isActive !== false;
-  const ref = useRef({ handler, active });
-  ref.current = { handler, active };
-  const pending = useRef('');
-  const flushQueued = useRef(false);
+  const isActive = (): boolean => {
+    const active = options.isActive;
+    if (typeof active === 'function') return active();
+    return active !== false;
+  };
+  let pending = '';
+  let flushQueued = false;
 
-  /** @param sync 特殊键紧随其后时必须同步提交,见文件头注释。 */
-  const flush = (sync = false): void => {
-    flushQueued.current = false;
-    if (pending.current === '') return;
-    const merged = pending.current;
-    pending.current = '';
-    const dispatch = () => ref.current.handler(merged, emptyKey());
-    if (sync) flushSync(dispatch);
-    else dispatch();
+  const flush = (): void => {
+    flushQueued = false;
+    if (pending === '') return;
+    const merged = pending;
+    pending = '';
+    handler(merged, emptyKey());
   };
 
   useKeyboard((event) => {
-    if (!ref.current.active) return;
+    if (!isActive()) return;
     const mapped = mapKeyEvent(event);
     if (!mapped) return;
     if (isPlainInput(mapped.input, mapped.key)) {
-      pending.current += mapped.input;
-      if (!flushQueued.current) {
-        flushQueued.current = true;
+      pending += mapped.input;
+      if (!flushQueued) {
+        flushQueued = true;
         queueMicrotask(flush);
       }
       return;
     }
-    flush(true); // 特殊键先冲刷已累积的普通字符,保持派发顺序
-    ref.current.handler(mapped.input, mapped.key);
+    flush(); // 特殊键先冲刷已累积的普通字符,保持派发顺序
+    handler(mapped.input, mapped.key);
   });
 
   usePaste((event) => {
-    if (!ref.current.active) return;
+    if (!isActive()) return;
     const text = decodePasteBytes(event.bytes);
     if (text.length === 0) return;
-    flush(true);
-    ref.current.handler(text, emptyKey());
+    flush();
+    handler(text, emptyKey());
   });
 }
 
@@ -228,36 +226,31 @@ export function useSelectionCopy(
   writer: (text: string) => Promise<boolean> = writeClipboardText,
 ): void {
   const renderer = useRenderer();
-  const ref = useRef({ onCopied, writer });
-  ref.current = { onCopied, writer };
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const lastCopied = useRef('');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let lastCopied = '';
 
   useSelectionHandler((selection) => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      timer.current = undefined;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
       const text = selection.getSelectedText();
-      if (!text || text === lastCopied.current) return;
-      lastCopied.current = text;
-      void ref.current.writer(text).finally(() => {
+      if (!text || text === lastCopied) return;
+      lastCopied = text;
+      void writer(text).finally(() => {
         try {
           renderer.copyToClipboardOSC52(text);
         } catch {
           // OSC 52 只是兜底,失败(如测试渲染器)不影响主路径。
         }
-        ref.current.onCopied?.(text.length);
+        onCopied?.(text.length);
       });
     }, 300);
   });
 
   // 卸载时清掉未触发的复制定时器(同 App 的定时器纪律:进程要能干净退出)。
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+  onCleanup(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -266,13 +259,24 @@ export function useSelectionCopy(
 
 export function useApp(): { exit: () => void } {
   const renderer = useRenderer();
-  return useMemo(() => ({ exit: () => void renderer.destroy() }), [renderer]);
+  return { exit: () => void renderer.destroy() };
 }
 
-/** 终端尺寸(替代 Ink 的 useStdout().columns/rows 与 process.stdout 直读)。 */
-export function useTerminalSize(): { columns: number; rows: number } {
-  const { width, height } = useTerminalDimensions();
-  return { columns: width, rows: height };
+/**
+ * 终端尺寸。返回**getter 对象**,不可解构——Solid 的响应式靠属性访问追踪,
+ * `const { columns } = useTerminalSize()` 拿到的是定格的数字,resize 后
+ * 永远不更新。用法:`const size = useTerminalSize()`,JSX/计算里 `size.columns`。
+ */
+export function useTerminalSize(): { readonly columns: number; readonly rows: number } {
+  const dimensions = useTerminalDimensions();
+  return {
+    get columns() {
+      return dimensions().width;
+    },
+    get rows() {
+      return dimensions().height;
+    },
+  };
 }
 
 export interface RenderInstance {
@@ -285,9 +289,12 @@ export interface RenderInstance {
  * Ink render() 等价物(异步:原生渲染器初始化)。alternate screen 全屏;
  * exitOnCtrlC 默认关闭以保住 App 的双 ctrl+c 逻辑(启动期的向导/选择器
  * 显式打开它);destroy 即退出(还原主屏),waitUntilExit 随之 resolve。
+ *
+ * 与 React 版的差别:节点是 `() => JSX.Element` 惰性工厂(Solid 组件树在
+ * render 内部的响应式 root 里创建)。
  */
 export async function render(
-  node: React.ReactNode,
+  node: () => JSX.Element,
   options: { exitOnCtrlC?: boolean } = {},
 ): Promise<RenderInstance> {
   let resolveExit!: () => void;
@@ -298,8 +305,7 @@ export async function render(
     exitOnCtrlC: options.exitOnCtrlC ?? false,
     onDestroy: () => resolveExit(),
   });
-  const root = createRoot(renderer);
-  root.render(node);
+  await solidRender(node, renderer);
   return {
     waitUntilExit: () => exited,
     unmount: () => void renderer.destroy(),
@@ -325,7 +331,7 @@ export interface TextProps {
   strikethrough?: boolean;
   /** Ink 的 wrap;本项目只用到 'truncate-end'(默认折行)。 */
   wrap?: 'wrap' | 'truncate-end';
-  children?: React.ReactNode;
+  children?: JSX.Element;
 }
 
 function attributesOf(props: TextProps): number {
@@ -339,56 +345,90 @@ function attributesOf(props: TextProps): number {
   return attrs;
 }
 
-function spanAttributes(span: AnsiSpan): number {
-  let attrs = 0;
-  if (span.bold) attrs |= TextAttributes.BOLD;
-  if (span.dim) attrs |= TextAttributes.DIM;
-  if (span.italic) attrs |= TextAttributes.ITALIC;
-  if (span.underline) attrs |= TextAttributes.UNDERLINE;
-  if (span.inverse) attrs |= TextAttributes.INVERSE;
-  if (span.strikethrough) attrs |= TextAttributes.STRIKETHROUGH;
-  return attrs;
+/**
+ * span(TextNode)的样式**只能经 `style` prop 送达**:上游 setProperty 对
+ * TextNode 只处理 href 与 style 两个键(style 里 fg/bg 走 parseColor、
+ * 布尔标志走 createTextAttributes),直接的 fg=/bg=/attributes= 一律被
+ * 静默忽略——症状是整段文本样式丢失、fg 落回默认白。<text> 顶层元素不受
+ * 此限(走属性直写),但为一致性统一从这里构造。
+ */
+function spanStyle(span: AnsiSpan): Record<string, unknown> {
+  return {
+    ...(span.fg !== undefined ? { fg: span.fg } : {}),
+    ...(span.bg !== undefined ? { bg: span.bg } : {}),
+    bold: span.bold === true,
+    dim: span.dim === true,
+    italic: span.italic === true,
+    underline: span.underline === true,
+    inverse: span.inverse === true,
+    strikethrough: span.strikethrough === true,
+  };
 }
 
 /** 字符串子节点:含 ANSI 时拆成 <span> 段,否则原样。 */
-function renderString(text: string, keyPrefix: string): React.ReactNode {
+function renderString(text: string): JSX.Element {
   if (!hasAnsi(text)) return text;
-  return parseAnsiSpans(text).map((span, i) => (
-    <span
-      key={`${keyPrefix}-${i}`}
-      {...(span.fg !== undefined ? { fg: span.fg } : {})}
-      {...(span.bg !== undefined ? { bg: span.bg } : {})}
-      attributes={spanAttributes(span)}
-    >
-      {span.text}
-    </span>
-  ));
+  return parseAnsiSpans(text).map((span) => <span style={spanStyle(span)}>{span.text}</span>);
 }
 
-function renderChildren(children: React.ReactNode): React.ReactNode {
-  return React.Children.map(children, (child, i) => {
-    if (typeof child === 'string') return renderString(child, `s${i}`);
-    if (typeof child === 'number') return String(child);
-    return child;
+/**
+ * Text 的子节点解析。必须是**独立组件、且挂在 Provider 之内**:Solid 的
+ * `children()` 助手是急切求值,若在外层 Text 的组件体里直接解析,嵌套的
+ * <Text> 会在 Provider(value=true)挂载之前运行——它读到 context=false,
+ * 渲染成完整的 <text> 节点,外层 text 随即拒收非 TextNode 子节点而崩。
+ * (React 版没这一步:React 天然延迟到子树落进 Provider 后才渲染。)
+ */
+function TextChildren(props: { children?: JSX.Element }): JSX.Element {
+  const resolved = resolveChildren(() => props.children);
+  const kids = createMemo(() => {
+    const value = resolved();
+    const list = Array.isArray(value) ? value : value == null ? [] : [value];
+    return list.map((child) => {
+      if (typeof child === 'string') return renderString(child);
+      if (typeof child === 'number') return String(child);
+      return child;
+    });
   });
+  return kids as unknown as JSX.Element;
 }
 
-export function Text(props: TextProps): React.ReactNode {
+export function Text(props: TextProps): JSX.Element {
+  // context 值在同一挂载点上是静态的(Provider 的 value 从不动态翻转),
+  // setup 期读一次即可。
   const nested = useContext(NestedText);
-  const attributes = attributesOf(props);
-  const styled = {
+  const styled = createMemo(() => ({
     ...(props.color !== undefined ? { fg: props.color } : {}),
     ...(props.backgroundColor !== undefined ? { bg: props.backgroundColor } : {}),
-    attributes,
-  };
-  const kids = renderChildren(props.children);
+    attributes: attributesOf(props),
+  }));
   if (nested) {
-    return <span {...styled}>{kids}</span>;
+    // 样式必须经 style prop(理由见 spanStyle 的注释)。
+    return (
+      <span
+        style={{
+          ...(props.color !== undefined ? { fg: props.color } : {}),
+          ...(props.backgroundColor !== undefined ? { bg: props.backgroundColor } : {}),
+          bold: props.bold === true,
+          dim: props.dimColor === true,
+          italic: props.italic === true,
+          underline: props.underline === true,
+          inverse: props.inverse === true,
+          strikethrough: props.strikethrough === true,
+        }}
+      >
+        <TextChildren>{props.children}</TextChildren>
+      </span>
+    );
   }
-  const truncate = props.wrap === 'truncate-end';
   return (
-    <text {...styled} wrapMode={truncate ? 'none' : 'word'} truncate={truncate}>
-      <NestedText.Provider value={true}>{kids}</NestedText.Provider>
+    <text
+      {...styled()}
+      wrapMode={props.wrap === 'truncate-end' ? 'none' : 'word'}
+      truncate={props.wrap === 'truncate-end'}
+    >
+      <NestedText.Provider value={true}>
+        <TextChildren>{props.children}</TextChildren>
+      </NestedText.Provider>
     </text>
   );
 }
@@ -405,7 +445,7 @@ export function Text(props: TextProps): React.ReactNode {
  * 内容超高时 scrollbox 会把兄弟节点(底部输入区)挤出屏幕外并与之重叠;
  * grow 1 + shrink 1 + basis 0 + minHeight 0 才是「占满剩余空间」的正确写法。
  */
-export function ScrollArea({ children }: { children?: React.ReactNode }): React.ReactNode {
+export function ScrollArea(props: { children?: JSX.Element }): JSX.Element {
   return (
     <scrollbox
       stickyScroll={true}
@@ -415,7 +455,7 @@ export function ScrollArea({ children }: { children?: React.ReactNode }): React.
       flexBasis={0}
       minHeight={0}
     >
-      <NestedText.Provider value={false}>{children}</NestedText.Provider>
+      <NestedText.Provider value={false}>{props.children}</NestedText.Provider>
     </scrollbox>
   );
 }
@@ -448,32 +488,36 @@ export interface BoxProps {
   /** Ink 只有名字差异:'round' → OpenTUI 'rounded'。 */
   borderStyle?: 'round';
   borderColor?: string;
-  children?: React.ReactNode;
+  children?: JSX.Element;
 }
 
-export function Box(props: BoxProps): React.ReactNode {
-  const {
-    flexDirection = 'row', // Ink 默认 row(Yoga 裸默认是 column)
-    flexShrink = 1, // Ink 默认 1(Yoga 裸默认 0)
-    borderStyle,
-    borderColor,
-    paddingX,
-    children,
-    ...rest
-  } = props;
+export function Box(props: BoxProps): JSX.Element {
+  const [local, rest] = splitProps(props, [
+    'flexDirection',
+    'flexShrink',
+    'borderStyle',
+    'borderColor',
+    'paddingX',
+    'children',
+  ]);
+  // 条件键收进 memo 再 spread:直接写 `borderColor={undefined}` 会以
+  // undefined 覆盖 renderable 的默认值,语义与「不传」不同。
+  const extras = createMemo(() => ({
+    ...(local.borderStyle !== undefined ? { border: true, borderStyle: 'rounded' as const } : {}),
+    ...(local.borderColor !== undefined ? { borderColor: local.borderColor } : {}),
+    ...(local.paddingX !== undefined
+      ? { paddingLeft: local.paddingX, paddingRight: local.paddingX }
+      : {}),
+  }));
   return (
     <box
-      flexDirection={flexDirection}
-      flexShrink={flexShrink}
-      {...(borderStyle !== undefined
-        ? { border: true, borderStyle: 'rounded' as const }
-        : {})}
-      {...(borderColor !== undefined ? { borderColor } : {})}
-      {...(paddingX !== undefined ? { paddingLeft: paddingX, paddingRight: paddingX } : {})}
+      flexDirection={local.flexDirection ?? 'row'} // Ink 默认 row(Yoga 裸默认是 column)
+      flexShrink={local.flexShrink ?? 1} // Ink 默认 1(Yoga 裸默认 0)
+      {...extras()}
       {...rest}
     >
       {/* Box 边界重置嵌套判定:Box 内的 <Text> 是新的顶层文本块 */}
-      <NestedText.Provider value={false}>{children}</NestedText.Provider>
+      <NestedText.Provider value={false}>{local.children}</NestedText.Provider>
     </box>
   );
 }

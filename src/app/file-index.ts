@@ -6,7 +6,7 @@ import { matchGlob } from '../permissions/sandbox.js';
 /**
  * @ 文件引用弹出菜单的数据源:列举工作区文件 + 模糊过滤。
  *
- * 无 React 依赖——Input.tsx 通过 prop 注入列举函数,保持组件不碰文件系统,
+ * 无 UI 框架依赖——Input.tsx 通过 prop 注入列举函数,保持组件不碰文件系统,
  * 测试时可直接注入假列表。
  */
 

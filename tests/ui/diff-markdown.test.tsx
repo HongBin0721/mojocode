@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import React from 'react';
 import { Diff } from '../../src/ui/Diff.js';
 import { Markdown } from '../../src/ui/Markdown.js';
 import { renderUi } from '../support/otui.js';
@@ -21,7 +20,7 @@ function findLine(spans: { lines: { spans: { text: string; bg: { buffer: Record<
 
 describe('Diff 在 OpenTUI 下渲染', () => {
   it('行号、+/- 行与折叠提示', async () => {
-    const ui = await renderUi(<Diff patch={PATCH} maxLines={2} />, { width: 60, height: 8 });
+    const ui = await renderUi(() => <Diff patch={PATCH} maxLines={2} />, { width: 60, height: 8 });
     const frame = ui.frame();
     expect(frame).toContain('const keep = 1;');
     expect(frame).toContain('- const removed = 2;');
@@ -30,7 +29,7 @@ describe('Diff 在 OpenTUI 下渲染', () => {
   });
 
   it('新增行整行带背景色,语法高亮段不打断背景(chalk 嵌套语义)', async () => {
-    const ui = await renderUi(<Diff patch={PATCH} />, { width: 60, height: 8 });
+    const ui = await renderUi(() => <Diff patch={PATCH} />, { width: 60, height: 8 });
     const line = findLine(ui.spans(), 'const added = 3;');
     expect(line).toBeDefined();
     // 从 "+" 到行文本结束的每个 span 背景都应是 diffAddedBg #1e4023 (30,64,35)
@@ -46,7 +45,7 @@ describe('Diff 在 OpenTUI 下渲染', () => {
 describe('Markdown(流式)在 OpenTUI 下渲染', () => {
   it('标题/列表/行内样式', async () => {
     const ui = await renderUi(
-      <Markdown text={'# 标题\n\n- 第一项 **加粗** 与 `code`\n> 引用行'} />,
+      () => <Markdown text={'# 标题\n\n- 第一项 **加粗** 与 `code`\n> 引用行'} />,
       { width: 40, height: 8 },
     );
     const frame = ui.frame();
@@ -57,7 +56,7 @@ describe('Markdown(流式)在 OpenTUI 下渲染', () => {
   });
 
   it('*.ts and *.js 不被误判为斜体(字符不丢)', async () => {
-    const ui = await renderUi(<Markdown text={'匹配 *.ts and *.js 文件'} />, {
+    const ui = await renderUi(() => <Markdown text={'匹配 *.ts and *.js 文件'} />, {
       width: 40,
       height: 4,
     });
@@ -66,7 +65,7 @@ describe('Markdown(流式)在 OpenTUI 下渲染', () => {
   });
 
   it('代码围栏内容缩进渲染,围栏行本身不渲染', async () => {
-    const ui = await renderUi(<Markdown text={'```ts\nconst x = 1;\n```'} />, {
+    const ui = await renderUi(() => <Markdown text={'```ts\nconst x = 1;\n```'} />, {
       width: 40,
       height: 4,
     });
@@ -93,7 +92,7 @@ describe('Markdown 语法覆盖', () => {
       'after blank',
     ].join('\n');
 
-    const ui = await renderUi(<Markdown text={text} />, { width: 60, height: 16 });
+    const ui = await renderUi(() => <Markdown text={text} />, { width: 60, height: 16 });
     const out = ui.frame();
 
     expect(out).toContain('Title');
@@ -112,13 +111,13 @@ describe('Markdown 语法覆盖', () => {
   });
 
   it('流式截断的未闭合代码块不会崩溃', async () => {
-    const ui = await renderUi(<Markdown text={'```py\nprint(1)'} />, { width: 40, height: 4 });
+    const ui = await renderUi(() => <Markdown text={'```py\nprint(1)'} />, { width: 40, height: 4 });
     expect(ui.frame()).toContain('print(1)');
     await ui.destroy();
   });
 
   it('乘号两侧的星号不会被当成斜体', async () => {
-    const ui = await renderUi(<Markdown text="grid is 2*3 and 4*5 cells" />, {
+    const ui = await renderUi(() => <Markdown text="grid is 2*3 and 4*5 cells" />, {
       width: 40,
       height: 4,
     });
@@ -127,7 +126,7 @@ describe('Markdown 语法覆盖', () => {
   });
 
   it('真正的斜体仍然生效', async () => {
-    const ui = await renderUi(<Markdown text="a *really* good idea" />, { width: 40, height: 4 });
+    const ui = await renderUi(() => <Markdown text="a *really* good idea" />, { width: 40, height: 4 });
     const out = ui.frame();
     expect(out).toContain('really');
     expect(out).not.toContain('*really*');
@@ -147,7 +146,7 @@ describe('Diff 边界', () => {
   ].join('\n');
 
   it('渲染行号与 +/- 标记,且不丢失代码文本', async () => {
-    const ui = await renderUi(<Diff patch={patch} />, { width: 70, height: 8 });
+    const ui = await renderUi(() => <Diff patch={patch} />, { width: 70, height: 8 });
     const out = ui.frame();
     expect(out).toContain('10');
     expect(out).toContain("- const dishes = ['a'];");
@@ -168,7 +167,7 @@ describe('Diff 边界', () => {
       '+++i;',
       ' return i;',
     ].join('\n');
-    const ui = await renderUi(<Diff patch={p} />, { width: 60, height: 8 });
+    const ui = await renderUi(() => <Diff patch={p} />, { width: 60, height: 8 });
     expect(ui.frame()).toContain('+ ++i;');
     await ui.destroy();
   });
@@ -182,7 +181,7 @@ describe('Diff 边界', () => {
       '--- legacy note',
       ' select 2;',
     ].join('\n');
-    const ui = await renderUi(<Diff patch={p} />, { width: 60, height: 8 });
+    const ui = await renderUi(() => <Diff patch={p} />, { width: 60, height: 8 });
     const out = ui.frame();
     expect(out).toContain('- -- legacy note');
     // 删除行占掉旧文件的第 2 行,其后的上下文行仍是新文件的第 2 行。
@@ -199,7 +198,7 @@ describe('Diff 边界', () => {
       '@@ -20,1 +20,1 @@',
       '-let b = 2;',
     ].join('\n');
-    const ui = await renderUi(<Diff patch={multi} />, { width: 60, height: 8 });
+    const ui = await renderUi(() => <Diff patch={multi} />, { width: 60, height: 8 });
     expect(ui.frame()).toContain('⋯');
     await ui.destroy();
   });

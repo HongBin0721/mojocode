@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import React, { useState } from 'react';
+import { createSignal } from 'solid-js';
 import { PermissionPrompt } from '../../src/ui/PermissionPrompt.js';
 import { RewindPicker } from '../../src/ui/RewindPicker.js';
 import { SessionPicker } from '../../src/ui/SessionPicker.js';
@@ -20,7 +20,7 @@ describe('PermissionPrompt', () => {
   it('渲染标题与选项,回车选中第一项', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
       { width: 70, height: 14 },
     );
     expect(ui.frame()).toContain('bash: npm test');
@@ -36,7 +36,7 @@ describe('PermissionPrompt', () => {
     const moved: PermissionDecision[] = [];
     const probe = async (down: boolean, sink: PermissionDecision[]) => {
       const ui = await renderUi(
-        <PermissionPrompt request={request()} onDecide={(d) => sink.push(d)} />,
+        () => <PermissionPrompt request={request()} onDecide={(d) => sink.push(d)} />,
         { width: 70, height: 14 },
       );
       if (down) await ui.press('down');
@@ -55,7 +55,7 @@ describe('PermissionPrompt', () => {
   it('数字键直达;粘贴以数字开头的长文本不误触(Ink 语义回归)', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
       { width: 70, height: 14 },
     );
     await ui.paste('3 files changed, 12 insertions(+)');
@@ -68,7 +68,7 @@ describe('PermissionPrompt', () => {
   it('esc = 拒绝;y/n 快捷键', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={request()} onDecide={(d) => decisions.push(d)} />,
       { width: 70, height: 14 },
     );
     await ui.press('escape');
@@ -81,7 +81,7 @@ describe('PermissionPrompt', () => {
   it('diff 详情走 Diff 渲染', async () => {
     const patch = '--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-旧\n+新\n';
     const ui = await renderUi(
-      <PermissionPrompt request={request({ toolName: 'write', title: 'write: x', detail: patch })} onDecide={() => {}} />,
+      () => <PermissionPrompt request={request({ toolName: 'write', title: 'write: x', detail: patch })} onDecide={() => {}} />,
       { width: 70, height: 16 },
     );
     expect(ui.frame()).toContain('+ 新');
@@ -104,19 +104,19 @@ const ruledRequest = (over: Partial<PermissionRequest> = {}): PermissionRequest 
  * 光标越界回归的宿主:OpenTUI harness 没有 rerender,用一个小状态组件承载
  * 请求切换——按 x 键把带建议规则的请求换成没有建议规则的(选项 4 → 2)。
  */
-function SwapHost({ onDecide }: { onDecide: (d: PermissionDecision) => void }) {
-  const [req, setReq] = useState<PermissionRequest>(() => ruledRequest());
+function SwapHost(props: { onDecide: (d: PermissionDecision) => void }) {
+  const [req, setReq] = createSignal<PermissionRequest>(ruledRequest());
   useInput((input) => {
     if (input === 'x') setReq((prev) => ({ ...prev, id: 'req-2', suggestedRule: undefined }));
   });
-  return <PermissionPrompt request={req} onDecide={onDecide} />;
+  return <PermissionPrompt request={req()} onDecide={props.onDecide} />;
 }
 
 describe('PermissionPrompt 选项边界', () => {
   it('上下键移动到"拒绝"后回车', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={ruledRequest()} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={ruledRequest()} onDecide={(d) => decisions.push(d)} />,
       { width: 70, height: 14 },
     );
     await ui.press('down');
@@ -130,7 +130,7 @@ describe('PermissionPrompt 选项边界', () => {
   it('数字键直达"本次会话始终允许"并携带规则', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={ruledRequest()} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={ruledRequest()} onDecide={(d) => decisions.push(d)} />,
       { width: 70, height: 14 },
     );
     await ui.press('2');
@@ -141,7 +141,7 @@ describe('PermissionPrompt 选项边界', () => {
   it('没有建议规则时数字 2 对应"拒绝"', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt
+      () => <PermissionPrompt
         request={ruledRequest({ suggestedRule: undefined })}
         onDecide={(d) => decisions.push(d)}
       />,
@@ -154,7 +154,7 @@ describe('PermissionPrompt 选项边界', () => {
 
   it('渲染带编号的选项与提示', async () => {
     const ui = await renderUi(
-      <PermissionPrompt request={ruledRequest()} onDecide={() => {}} />,
+      () => <PermissionPrompt request={ruledRequest()} onDecide={() => {}} />,
       { width: 70, height: 14 },
     );
     const out = ui.frame();
@@ -166,7 +166,7 @@ describe('PermissionPrompt 选项边界', () => {
 
   it('换成选项更少的请求时光标复位,不会读到越界选项而崩溃', async () => {
     const decisions: PermissionDecision[] = [];
-    const ui = await renderUi(<SwapHost onDecide={(d) => decisions.push(d)} />, {
+    const ui = await renderUi(() => <SwapHost onDecide={(d) => decisions.push(d)} />, {
       width: 70,
       height: 14,
     });
@@ -198,7 +198,7 @@ describe('方案审批确认框', () => {
 
   it('只给「同意 / 继续完善」两项,不给记规则的选项', async () => {
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest('# 方案\n\n1. 改 a.ts')} onDecide={() => {}} />,
+      () => <PermissionPrompt request={planRequest('# 方案\n\n1. 改 a.ts')} onDecide={() => {}} />,
       { width: 80, height: 20 },
     );
     const out = ui.frame();
@@ -213,7 +213,7 @@ describe('方案审批确认框', () => {
   it('esc 视为继续完善,并把理由带给模型', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest('# 方案')} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={planRequest('# 方案')} onDecide={(d) => decisions.push(d)} />,
       { width: 80, height: 16 },
     );
     await ui.press('escape');
@@ -227,7 +227,7 @@ describe('方案审批确认框', () => {
   it('不接 y/n 快捷键', async () => {
     const decisions: PermissionDecision[] = [];
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest('# 方案')} onDecide={(d) => decisions.push(d)} />,
+      () => <PermissionPrompt request={planRequest('# 方案')} onDecide={(d) => decisions.push(d)} />,
       { width: 80, height: 16 },
     );
     await ui.type('y');
@@ -241,7 +241,7 @@ describe('方案审批确认框', () => {
   it('长散文按折行后的实际行数截断,而不是按换行符数', async () => {
     const prose = Array.from({ length: 12 }, (_, i) => `第 ${i} 段。${'很长的句子。'.repeat(20)}`);
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest(prose.join('\n'))} onDecide={() => {}} />,
+      () => <PermissionPrompt request={planRequest(prose.join('\n'))} onDecide={() => {}} />,
       { width: 80, height: 45 },
     );
     const frame = ui.frame();
@@ -267,7 +267,7 @@ describe('方案正文截断的边界', () => {
   // 首行自己就超预算(整段没有换行)时,不能只剩一行"还有 N 行"。
   it('单段超长正文仍展示内容,而不是只剩截断标记', async () => {
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest('很长的一整段。'.repeat(400))} onDecide={() => {}} />,
+      () => <PermissionPrompt request={planRequest('很长的一整段。'.repeat(400))} onDecide={() => {}} />,
       { width: 80, height: 45 },
     );
     const frame = ui.frame();
@@ -278,7 +278,7 @@ describe('方案正文截断的边界', () => {
 
   it('短方案原样展示,不加截断标记', async () => {
     const ui = await renderUi(
-      <PermissionPrompt request={planRequest('# 方案\n\n1. 改 a.ts')} onDecide={() => {}} />,
+      () => <PermissionPrompt request={planRequest('# 方案\n\n1. 改 a.ts')} onDecide={() => {}} />,
       { width: 80, height: 20 },
     );
     expect(ui.frame()).not.toContain('…');
@@ -296,7 +296,7 @@ describe('RewindPicker', () => {
   it('列表渲染与选择', async () => {
     const picked: number[] = [];
     const ui = await renderUi(
-      <RewindPicker entries={entries} onPick={(e) => picked.push(e.ordinal)} onCancel={() => {}} />,
+      () => <RewindPicker entries={entries} onPick={(e) => picked.push(e.ordinal)} onCancel={() => {}} />,
       { width: 60, height: 10 },
     );
     expect(ui.frame()).toContain('第三条消息');
@@ -309,7 +309,7 @@ describe('RewindPicker', () => {
   it('esc 取消', async () => {
     let cancelled = false;
     const ui = await renderUi(
-      <RewindPicker entries={entries} onPick={() => {}} onCancel={() => (cancelled = true)} />,
+      () => <RewindPicker entries={entries} onPick={() => {}} onCancel={() => (cancelled = true)} />,
       { width: 60, height: 10 },
     );
     await ui.press('escape');
@@ -322,7 +322,7 @@ describe('SessionPicker', () => {
   it('渲染会话列表并选择', async () => {
     const chosen: (string | undefined)[] = [];
     const ui = await renderUi(
-      <SessionPicker
+      () => <SessionPicker
         sessions={[
           {
             id: 'abc123',

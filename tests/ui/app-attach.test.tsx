@@ -1,5 +1,4 @@
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
-import React, { act } from 'react';
 
 
 import fs from 'node:fs/promises';
@@ -31,12 +30,10 @@ afterAll(async () => {
 
 /**
  * 提交后的 @ 引用展开要经真实的 fs 读取,一个 tick 的 sleep(0) 未必等得到;
- * 这里在 act 里多睡一小段,再补一帧渲染。
+ * 这里多睡一小段,再补一帧渲染。
  */
 async function settle(ui: UiHandle, ms = 40): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-  });
+  await new Promise((resolve) => setTimeout(resolve, ms));
   await ui.tick();
 }
 
@@ -84,7 +81,7 @@ async function setup(options?: { isRunning?: boolean }) {
     dispose: async () => {},
   } as unknown as Session;
 
-  const ui = await renderUi(<App session={session} />, { width: 100, height: 40 });
+  const ui = await renderUi(() => <App session={session} />, { width: 100, height: 40 });
   return { bus, runCalls, injected, ui };
 }
 
