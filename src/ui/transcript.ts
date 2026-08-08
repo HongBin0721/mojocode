@@ -1,6 +1,13 @@
 import { renderMarkdownAnsi } from './markdown-ansi.js';
 import { extractDiff, extractPlan, extractTodos } from './timeline-data.js';
-import { formatDuration, formatToolInput, glyphs, toolDisplayName, truncateWidth } from './theme.js';
+import {
+  formatDuration,
+  formatTokens,
+  formatToolInput,
+  glyphs,
+  toolDisplayName,
+  truncateWidth,
+} from './theme.js';
 import type { TimelineItem } from './types.js';
 import { APP_NAME } from '../config/paths.js';
 import { t } from '../i18n/index.js';
@@ -80,7 +87,9 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         if (item.toolName === 'bash' && !item.isError) {
           const text = (item.output as { output?: unknown } | undefined)?.output;
           if (typeof text === 'string' && text.trim() && text !== '(no output)') {
-            // 与时间线同限:前 12 行、每行 200 字符。
+            // 屏幕上这段默认是折叠的(ctrl+r 展开),dump 里照写不误:它是
+            // 留档,退出后终端 scrollback 是唯一还能翻到这些输出的地方。
+            // 前 12 行、每行 200 字符。
             const lines = text.split('\n');
             out.push(...lines.slice(0, 12).map((l) => `     ${DIM(l.slice(0, 200))}`));
             if (lines.length > 12) {
@@ -90,6 +99,15 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         }
         break;
       }
+      case 'turn':
+        out.push(
+          '',
+          DIM(
+            `${glyphs.turn} ${item.model} · ${formatDuration(item.durationMs)} · ` +
+              t('ui.turnTokens', { n: formatTokens(item.tokens) }),
+          ),
+        );
+        break;
       case 'notice':
         out.push('', item.level === 'warn' ? YELLOW(`! ${item.message}`) : DIM(`· ${item.message}`));
         break;

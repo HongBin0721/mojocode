@@ -2,7 +2,7 @@ import type { en } from './en.js';
 
 export const zhCN: Record<keyof typeof en, string> = {
   'header.hints':
-    '/ 查看命令 · shift+tab 切权限模式 · shift+enter 换行 · esc 中断 · 连按两次 ctrl+c 退出',
+    '/ 查看命令 · shift+tab 切权限模式 · shift+enter 换行 · ctrl+r 展开详情 · esc 中断 · 连按两次 ctrl+c 退出',
 
   'status.thinking': '思考中',
   'status.responding': '回复中',
@@ -61,6 +61,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'perm.planKeepPlanning': '不同意，继续完善方案',
   'perm.planHint': '↑/↓ 选择 · enter 确认 · 1-2 直达 · esc 继续完善',
 
+  'ui.outputLines': '{n} 行输出',
+  'ui.turnTokens': '{n} tokens',
   'ui.moreLines': '… 还有 {n} 行',
   'ui.moreDiffLines': '… 还有 {n} 行 diff',
   'ui.truncated': '…（已截断）',
@@ -209,6 +211,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'status.modeCycled': '权限模式：{mode} — shift+tab 继续切换',
   'status.focusCycled': '时间线:{mode} — ctrl+o 继续切换',
   'status.selectionCopied': '已复制 {n} 个字符',
+  'status.detailsShown': '详情已展开 — ctrl+r 收起',
+  'status.detailsHidden': '详情已收起 — ctrl+r 展开',
   'picker.title': '恢复会话',
   'picker.hint': '↑/↓ 选择 · 回车恢复 · esc 新建会话',
   'rewind.title': '回退到之前的消息',

@@ -61,6 +61,10 @@ function hidden(item: TimelineItem): boolean {
   switch (item.kind) {
     case 'reasoning':
       return true;
+    // 一轮的耗时/token 收尾行是过程记账,不是回答;两个折叠档都不留。
+    // 它总是排在一轮的末尾,所以只会汇进那一段本就要折叠的 run 里。
+    case 'turn':
+      return true;
     case 'tool':
       // 方案正文与任务清单是结果,不是过程噪音。
       return item.toolName !== 'exit_plan' && item.toolName !== 'todo';

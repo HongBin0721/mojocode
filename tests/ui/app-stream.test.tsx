@@ -135,3 +135,59 @@ describe('流式中断/出错时的收尾', () => {
     await ui.destroy();
   });
 });
+
+const usage = (cumulative: number) => ({
+  inputTokens: 100,
+  outputTokens: 20,
+  totalTokens: 120,
+  cumulativeTotalTokens: cumulative,
+  contextWindow: 100_000,
+});
+
+describe('一轮的收尾行', () => {
+  it('正常一轮画出模型与本轮 token(累计量的增量)', async () => {
+    const { bus, ui } = await setup();
+
+    bus.emit({ type: 'turn-start', userText: '干活' });
+    bus.emit({ type: 'step-end', usage: usage(5000) });
+    bus.emit({ type: 'text-delta', id: '0', text: '好了' });
+    bus.emit({ type: 'text-end', id: '0' });
+    bus.emit({ type: 'turn-end', usage: usage(5000), finishReason: 'stop' });
+    await ui.tick();
+
+    const out = ui.frame();
+    expect(out).toContain('▣');
+    expect(out).toContain('test-model');
+    expect(out).toContain('5.0k');
+    await ui.destroy();
+  });
+
+  // `--attach` 连上跑到一半的 server,或重连时重放缓冲已滚过 turn-start,
+  // 都只收得到 turn-end。那时没有基准:耗时会写成 0ms,整个会话的累计量
+  // 会被当成这一轮的开销报出来——宁可不画这一行。
+  it('没见过 turn-start 就不画(基准不可信)', async () => {
+    const { bus, ui } = await setup();
+
+    bus.emit({ type: 'text-delta', id: '0', text: '半路接上的回答' });
+    bus.emit({ type: 'text-end', id: '0' });
+    bus.emit({ type: 'turn-end', usage: usage(120_000), finishReason: 'stop' });
+    await ui.tick();
+
+    const out = ui.frame();
+    expect(out).toContain('半路接上的回答');
+    expect(out).not.toContain('▣');
+    await ui.destroy();
+  });
+
+  it('基准一次性消费:补收到的第二条 turn-end 不借用上一轮的起点', async () => {
+    const { bus, ui } = await setup();
+
+    bus.emit({ type: 'turn-start', userText: '干活' });
+    bus.emit({ type: 'turn-end', usage: usage(1000), finishReason: 'stop' });
+    bus.emit({ type: 'turn-end', usage: usage(90_000), finishReason: 'stop' });
+    await ui.tick();
+
+    expect(ui.frame().split('▣').length - 1).toBe(1);
+    await ui.destroy();
+  });
+});

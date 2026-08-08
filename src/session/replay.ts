@@ -53,8 +53,9 @@ export function replayTimeline(messages: ModelMessage[]): NewTimelineItem[] {
         if (part.type === 'text') {
           if (part.text.trim()) items.push({ kind: 'assistant', text: part.text });
         } else if (part.type === 'reasoning') {
-          // 与实时渲染一致,只还原一行标记;历史里没有耗时,省掉。
-          if (part.text.trim()) items.push({ kind: 'reasoning' });
+          // 与实时渲染一致,默认只还原一行标记;正文留着供 ctrl+r 展开
+          // (历史里没有耗时,省掉)。
+          if (part.text.trim()) items.push({ kind: 'reasoning', text: part.text });
         } else if (part.type === 'tool-call') {
           calls.set(part.toolCallId, { toolName: part.toolName, input: part.input });
         } else if (part.type === 'tool-result') {

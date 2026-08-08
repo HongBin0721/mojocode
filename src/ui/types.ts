@@ -8,10 +8,11 @@ export type TimelineItem =
       continuation?: boolean;
     }
   /**
-   * 一次思考的收尾标记。正文只在流式期间的预览区实时可见,定稿进时间线的
-   * 只有这一行——整段思考留在时间线里只会淹没真正的回复和工具记录。
+   * 一次思考。默认只渲染收尾的一行「已思考 8.2s」——整段思考常驻时间线
+   * 会淹没真正的回复和工具记录;正文随条目留着,ctrl+r 展开详情时才摊开
+   * (回放出来的历史思考没有耗时,只有正文)。
    */
-  | { key: string; kind: 'reasoning'; durationMs?: number }
+  | { key: string; kind: 'reasoning'; durationMs?: number; text: string }
   | {
       key: string;
       kind: 'tool';
@@ -22,6 +23,12 @@ export type TimelineItem =
       isError: boolean;
       durationMs: number;
     }
+  /**
+   * 一轮的收尾行(模型 · 耗时 · 本轮 token)。只在正常收尾(turn-end)时落,
+   * 中断与出错各有自己的一行,不重复画。tokens 取会话累计量在本轮的增量,
+   * 因此含工具与子 agent 折进来的开销。
+   */
+  | { key: string; kind: 'turn'; model: string; durationMs: number; tokens: number }
   | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string }

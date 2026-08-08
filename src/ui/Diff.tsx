@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from 'solid-js';
 import { Box, Text, type JSX } from './kit.js';
 import { theme } from './theme.js';
-import { highlightLine, languageFromPath } from './highlight.js';
+import { highlightDiffLine, languageFromPath } from './highlight.js';
 import { t } from '../i18n/index.js';
 
 interface Props {
@@ -52,6 +52,12 @@ export function Diff(props: Props): JSX.Element {
  * ansi-spans 把高亮里的"恢复默认前景色"(SGR 39)解释为继承外层,因此
  * 未被着色的片段仍是 diff 的浅绿/浅红,背景也贯穿整行不断裂。
  *
+ * 高亮走 highlightDiffLine 而不是通用的 highlightLine:后者用的是
+ * highlight.js 给白底设计的默认配色(字符串取红、数字与注释取绿),
+ * 画在这里的红绿底色上就成了"绿底红字"——语义反过来,像在报错。
+ * 上下文行同样用这套配色,一段 diff 里同一类 token 才不会两个颜色
+ * (整个 TUI 本来就按深色终端配色,见 theme.assistant 的白)。
+ *
  * row 是不可变数据(For 按引用整体重建),组件体里分支即可。
  */
 function DiffRow(props: { row: Row; numWidth: number; language?: string }): JSX.Element {
@@ -67,7 +73,7 @@ function DiffRow(props: { row: Row; numWidth: number; language?: string }): JSX.
         <Text>
           <Text color={theme.dim}>{num}</Text>
           <Text backgroundColor={theme.diffAddedBg} color={theme.diffAddedFg}>
-            {`+ ${highlightLine(row.text, props.language)}`}
+            {`+ ${highlightDiffLine(row.text, props.language)}`}
           </Text>
         </Text>
       );
@@ -76,7 +82,7 @@ function DiffRow(props: { row: Row; numWidth: number; language?: string }): JSX.
         <Text>
           <Text color={theme.dim}>{num}</Text>
           <Text backgroundColor={theme.diffRemovedBg} color={theme.diffRemovedFg}>
-            {`- ${highlightLine(row.text, props.language)}`}
+            {`- ${highlightDiffLine(row.text, props.language)}`}
           </Text>
         </Text>
       );
@@ -84,7 +90,7 @@ function DiffRow(props: { row: Row; numWidth: number; language?: string }): JSX.
       return (
         <Text>
           <Text color={theme.dim}>{num}</Text>
-          <Text>{`  ${highlightLine(row.text, props.language)}`}</Text>
+          <Text>{`  ${highlightDiffLine(row.text, props.language)}`}</Text>
         </Text>
       );
   }

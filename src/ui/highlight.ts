@@ -1,4 +1,4 @@
-import { highlight, supportsLanguage } from 'cli-highlight';
+import { highlight, supportsLanguage, type Theme } from 'cli-highlight';
 
 /**
  * 终端语法高亮的共用入口(流式预览的代码块、工具输出里的 diff)。
@@ -82,6 +82,69 @@ export function highlightLine(line: string, language: string | undefined): strin
   if (!language || !line) return line;
   try {
     return highlight(line, { language, ignoreIllegals: true });
+  } catch {
+    return line;
+  }
+}
+
+/**
+ * 直接吐 truecolor SGR,不经 chalk。
+ *
+ * 两个理由:一是 chalk 会按 stdout 的颜色能力整体降级(非 TTY 下直接
+ * 输出无色),而这些字符串最终是喂给 ansi-spans 解析、由 OpenTUI 画的,
+ * 与 stdout 是不是 TTY 无关;二是 SGR 39(恢复默认前景色)在 ansi-spans
+ * 里被解释为"继承外层",diff 行的浅绿/浅红前景因此能贯穿未着色的片段。
+ */
+function fg(hex: string): (code: string) => string {
+  const r = Number.parseInt(hex.slice(1, 3), 16);
+  const g = Number.parseInt(hex.slice(3, 5), 16);
+  const b = Number.parseInt(hex.slice(5, 7), 16);
+  return (code) => `\x1b[38;2;${r};${g};${b}m${code}\x1b[39m`;
+}
+
+const plain = (code: string): string => code;
+
+/**
+ * diff 行专用的语法配色。
+ *
+ * highlight.js 的默认终端主题是给**白底**设计的:字符串/正则取红、
+ * 数字/注释取绿——套在 diff 的红绿底色上就是"绿底红字"(新增行里的
+ * 字符串literal 被画成红色,语义正好反过来,看着像报错),暗底上的
+ * 深蓝关键字也几乎看不见。
+ *
+ * 这套配色因此有两条硬约束:**不用红、不用绿**(那两个色是 diff 自己的
+ * 语义),且亮度都足够高——它只会画在 diffAddedBg / diffRemovedBg 这两块
+ * 我们自己指定的深色底上。未覆盖的 token 会回落到 cli-highlight 的默认
+ * 主题,所以默认主题里所有着色的键都必须在这里显式改写掉。
+ */
+const DIFF_THEME: Theme = {
+  keyword: fg('#c678dd'),
+  built_in: fg('#56b6c2'),
+  type: fg('#56b6c2'),
+  literal: fg('#d19a66'),
+  number: fg('#d19a66'),
+  regexp: fg('#56b6c2'),
+  string: fg('#e5c07b'),
+  symbol: fg('#56b6c2'),
+  class: fg('#e5c07b'),
+  function: fg('#61afef'),
+  title: fg('#61afef'),
+  comment: fg('#9199a6'),
+  doctag: fg('#9199a6'),
+  meta: fg('#9199a6'),
+  tag: fg('#9199a6'),
+  name: fg('#61afef'),
+  attr: fg('#56b6c2'),
+  // diff 里的 +/- 由行本身的底色表达,再着色只会和它打架。
+  addition: plain,
+  deletion: plain,
+};
+
+/** 同 highlightLine,但用 diff 专用配色(见 DIFF_THEME)。 */
+export function highlightDiffLine(line: string, language: string | undefined): string {
+  if (!language || !line) return line;
+  try {
+    return highlight(line, { language, ignoreIllegals: true, theme: DIFF_THEME });
   } catch {
     return line;
   }

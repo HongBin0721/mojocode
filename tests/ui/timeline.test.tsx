@@ -4,11 +4,11 @@ import { TimelineEntry } from '../../src/ui/Timeline.js';
 import type { TimelineItem } from '../../src/ui/types.js';
 import { renderUi } from '../support/otui.js';
 
-function entries(items: TimelineItem[], columns = 80) {
+function entries(items: TimelineItem[], columns = 80, expanded = false) {
   return (
     <Box flexDirection="column">
       {items.map((item) => (
-        <TimelineEntry item={item} columns={columns} />
+        <TimelineEntry item={item} columns={columns} expanded={expanded} />
       ))}
     </Box>
   );
@@ -20,7 +20,7 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
       () => entries([
         { key: 'i1', kind: 'user', text: '帮我看看这个文件' },
         { key: 'i2', kind: 'assistant', text: '这是**回答**,含 `代码`。' },
-        { key: 'i3', kind: 'reasoning', durationMs: 3200 },
+        { key: 'i3', kind: 'reasoning', durationMs: 3200, text: '先看看文件' },
         { key: 'i4', kind: 'notice', level: 'warn', message: '有告警' },
         { key: 'i5', kind: 'error', message: '出错了' },
         { key: 'i6', kind: 'divider', label: '已恢复' },
@@ -40,7 +40,18 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
     await ui.destroy();
   });
 
-  it('tool 条目:名称/参数/摘要与 bash 输出', async () => {
+  const bashItem: TimelineItem = {
+    key: 't2',
+    kind: 'tool',
+    toolName: 'bash',
+    input: { command: 'ls -la' },
+    summary: 'exit 0 · 0.1s',
+    output: { output: 'file-a.txt\nfile-b.txt' },
+    isError: false,
+    durationMs: 100,
+  };
+
+  it('tool 条目:名称/参数/摘要,bash 输出默认折叠', async () => {
     const ui = await renderUi(
       () => entries([
         {
@@ -53,16 +64,7 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
           isError: false,
           durationMs: 100,
         },
-        {
-          key: 't2',
-          kind: 'tool',
-          toolName: 'bash',
-          input: { command: 'ls -la' },
-          summary: 'exit 0 · 0.1s',
-          output: { output: 'file-a.txt\nfile-b.txt' },
-          isError: false,
-          durationMs: 100,
-        },
+        bashItem,
       ]),
       { width: 70, height: 16 },
     );
@@ -70,8 +72,60 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
     expect(frame).toContain('Read(src/index.ts)');
     expect(frame).toContain('⎿');
     expect(frame).toContain('读取 120 行');
+    // 输出正文默认不摊开,只留一行可展开的占位。
+    expect(frame).not.toContain('file-a.txt');
+    expect(frame).toContain('+ 2');
+    await ui.destroy();
+  });
+
+  it('expanded 时 bash 输出摊开', async () => {
+    const ui = await renderUi(() => entries([bashItem], 70, true), { width: 70, height: 16 });
+    const frame = ui.frame();
     expect(frame).toContain('file-a.txt');
     expect(frame).toContain('file-b.txt');
+    await ui.destroy();
+  });
+
+  it('思考:默认一行带 + 标记,expanded 时摊开正文', async () => {
+    const item: TimelineItem = {
+      key: 'r1',
+      kind: 'reasoning',
+      durationMs: 3200,
+      text: '先读文件再决定改哪里',
+    };
+    const collapsed = await renderUi(() => entries([item]), { width: 60, height: 8 });
+    expect(collapsed.frame()).toContain('+');
+    expect(collapsed.frame()).not.toContain('先读文件再决定改哪里');
+    await collapsed.destroy();
+
+    const shown = await renderUi(() => entries([item], 60, true), { width: 60, height: 8 });
+    expect(shown.frame()).toContain('先读文件再决定改哪里');
+    await shown.destroy();
+  });
+
+  it('一轮的收尾行:模型 · 耗时 · token', async () => {
+    const ui = await renderUi(
+      () => entries([{ key: 'e1', kind: 'turn', model: 'kimi-k3', durationMs: 12500, tokens: 3400 }]),
+      { width: 60, height: 4 },
+    );
+    const frame = ui.frame();
+    expect(frame).toContain('▣');
+    expect(frame).toContain('kimi-k3');
+    expect(frame).toContain('12.5s');
+    expect(frame).toContain('3.4k');
+    await ui.destroy();
+  });
+
+  it('用户消息折行挂在提示符右侧,第二行不顶到第 0 列', async () => {
+    const ui = await renderUi(
+      () => entries([{ key: 'u1', kind: 'user', text: 'a'.repeat(40) }], 24),
+      { width: 24, height: 8 },
+    );
+    const lines = ui.frame().split('\n').filter((l) => l.trim());
+    const wrapped = lines.filter((l) => l.includes('aaa'));
+    expect(wrapped.length).toBeGreaterThan(1);
+    // 每一行都从提示符所在的缩进开始,没有一行贴着第 0 列写正文
+    for (const line of wrapped.slice(1)) expect(line.startsWith('a')).toBe(false);
     await ui.destroy();
   });
 

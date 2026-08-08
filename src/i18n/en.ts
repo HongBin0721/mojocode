@@ -8,7 +8,7 @@
  */
 export const en = {
   'header.hints':
-    '/ for commands · shift+tab for permission mode · shift+enter for newline · esc to interrupt · ctrl+c twice to exit',
+    '/ for commands · shift+tab for permission mode · shift+enter for newline · ctrl+r for details · esc to interrupt · ctrl+c twice to exit',
 
   'status.thinking': 'thinking',
   'status.responding': 'responding',
@@ -67,6 +67,8 @@ export const en = {
   'perm.planKeepPlanning': 'No, keep planning',
   'perm.planHint': '↑/↓ select · enter confirm · 1-2 jump · esc keep planning',
 
+  'ui.outputLines': '{n} lines of output',
+  'ui.turnTokens': '{n} tokens',
   'ui.moreLines': '… {n} more lines',
   'ui.moreDiffLines': '… {n} more diff lines',
   'ui.truncated': '… (truncated)',
@@ -224,6 +226,8 @@ export const en = {
   'status.modeCycled': 'permission mode: {mode} — shift+tab to cycle',
   'status.focusCycled': 'timeline: {mode} — ctrl+o to cycle',
   'status.selectionCopied': 'copied {n} characters',
+  'status.detailsShown': 'details expanded — ctrl+r to collapse',
+  'status.detailsHidden': 'details collapsed — ctrl+r to expand',
   'picker.title': 'Resume a session',
   'picker.hint': '↑/↓ select · enter resume · esc start fresh',
   'rewind.title': 'Rewind to an earlier message',

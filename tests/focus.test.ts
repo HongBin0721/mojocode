@@ -6,7 +6,19 @@ let n = 0;
 const key = () => `k${n++}`;
 const user = (text = '问'): TimelineItem => ({ key: key(), kind: 'user', text });
 const assistant = (text = '答'): TimelineItem => ({ key: key(), kind: 'assistant', text });
-const reasoning = (): TimelineItem => ({ key: key(), kind: 'reasoning', durationMs: 1000 });
+const reasoning = (): TimelineItem => ({
+  key: key(),
+  kind: 'reasoning',
+  durationMs: 1000,
+  text: '想了想',
+});
+const turn = (): TimelineItem => ({
+  key: key(),
+  kind: 'turn',
+  model: 'kimi-k3',
+  durationMs: 12000,
+  tokens: 3400,
+});
 const tool = (toolName = 'read'): TimelineItem => ({
   key: key(),
   kind: 'tool',
@@ -116,6 +128,16 @@ describe('collapseItems 各档语义', () => {
   it('result:过程静默丢弃,无占位', () => {
     const items = [user(), reasoning(), tool(), tool(), assistant()];
     expect(kinds(collapseItems(items, 'result'))).toEqual(['user', 'assistant']);
+  });
+
+  // 收尾行是过程记账(耗时/token),不是回答:两个折叠档都不留,
+  // 且它排在一轮末尾,不该凭空多出一条 collapsed 占位。
+  it('compact/result:一轮的收尾行不留痕', () => {
+    const items = [user(), tool(), assistant(), turn()];
+    expect(kinds(collapseItems(items, 'compact'))).toEqual(['user', 'collapsed', 'assistant']);
+    expect(kinds(collapseItems(items, 'result'))).toEqual(['user', 'assistant']);
+    // full 档原样保留
+    expect(kinds(collapseItems(items, 'full'))).toContain('turn');
   });
 
   it('占位 key 派生自段内首条,重复调用间稳定(memo 依赖)', () => {

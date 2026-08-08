@@ -157,6 +157,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `ctrl+c` 两次 | 退出（时间线自动 dump 回终端历史） |
 | `滚轮` / `PageUp` / `PageDown` | 回看时间线;滚到底部恢复自动跟随 |
 | `ctrl+o` | 循环时间线密度：`full` → `compact` → `result`（`/focus` 可落盘,见下） |
+| `ctrl+r` | 展开/收起详情：思考正文与工具输出默认折叠成一行 `+ N 行输出`，按一次全部摊开（diff、方案正文、任务清单是结果，从不折叠） |
 | `shift+tab` | 循环切权限档位：`ask` → `auto` → `plan`（仅本会话，不落盘） |
 | `shift+enter` | 输入框内换行（需终端支持 kitty 键盘协议：iTerm2 3.5+ / kitty / WezTerm / Ghostty 等） |
 | `option+enter` / `ctrl+j` / 行尾 `\` + 回车 | 换行的兜底按键，任何终端可用 |
@@ -574,6 +575,14 @@ OpenTUI:组件层不直接触碰上游 0.x API,破坏性变更只改 kit 一处�
 
 - **GLM 的 baseURL 是 `/api/paas/v4`**，绝不能再拼 `/v1`，否则 404。
 - **模型 ID 一律不硬编码。** 三家迭代都快，预设只是起始默认值，`mojocode models` 看实时列表。
+- **diff 里的语法高亮不能用 highlight.js 的默认配色**:那套配色是给白底设计的
+  （字符串取红、数字与注释取绿），画在 diff 自己的红/绿底色上就成了「绿底红字」，
+  语义正好反过来。`highlightDiffLine` 用一套避开红绿、亮度足够的配色，且必须覆盖
+  默认主题里**所有**着色的键——漏掉的键会静默回落到默认值。
+- **单行信息栏必须自己裁到宽度以内**:OpenTUI 的 flex 行超宽时收缩的是子节点
+  本身,分隔符两侧的空格会被静默吃掉(渲染成 `full-access· kimi-k3 · …/demo·
+  思考 max`),而不是优雅截断。Footer 因此先量宽再排版(`fitParts`):路径先
+  动态收窄,窄到没信息量就让它独占一行,仍装不下才按优先级丢段。
 - **时间线条目定稿后不可变**:App 的 `<For>` 按引用复用条目,Solid 细粒度更新下
   天然零重渲染;`renderMarkdownAnsi` 按 (key, width) 走 LRU 缓存(md-cache.ts)。
   别原位修改条目对象(要整条替换),也别在条目渲染路径里加未缓存的重计算。

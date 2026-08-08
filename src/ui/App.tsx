@@ -295,6 +295,11 @@ export function App(props: Props): JSX.Element {
   // ctrl+o 切换后在 footer 短暂回显新档位(与 modeFlash 同理:得有反馈)。
   const [focusFlash, setFocusFlash] = createSignal<TimelineMode | undefined>(undefined);
   let focusFlashTimer: NodeJS.Timeout | undefined;
+  // ctrl+r 的详情开关:思考正文与工具输出默认折叠,展开是全局的一档
+  // (没有消息级导航,逐条展开没有可用的选中态)。同样给一次 footer 回显。
+  const [detailsExpanded, setDetailsExpanded] = createSignal(false);
+  const [expandFlash, setExpandFlash] = createSignal<boolean | undefined>(undefined);
+  let expandFlashTimer: NodeJS.Timeout | undefined;
   // 拖选自动复制后的回显(字符数)。
   const [copyFlash, setCopyFlash] = createSignal<number | undefined>(undefined);
   let copyFlashTimer: NodeJS.Timeout | undefined;
@@ -310,6 +315,11 @@ export function App(props: Props): JSX.Element {
   // 本段思考的起始时刻,定稿那一行的耗时由它算出。undefined 表示当前没有
   // 进行中的思考块。
   let reasoningStartedAt: number | undefined;
+
+  // 本轮的起点与起始累计 token,收尾行(kind: 'turn')的耗时与本轮用量由
+  // 它们相减得出。累计量取 UI 侧的镜像:turn-start 时它还停在上一轮的终值。
+  let turnStartedAt = 0;
+  let turnStartTokens = 0;
 
   // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段渲染时
   // 不再带 ● 前缀,只缩进对齐。
@@ -361,7 +371,11 @@ export function App(props: Props): JSX.Element {
       reasoningStartedAt = undefined;
       setActiveReasoning('');
       if (text.trim())
-        push({ kind: 'reasoning', durationMs: startedAt ? Date.now() - startedAt : undefined });
+        push({
+          kind: 'reasoning',
+          durationMs: startedAt ? Date.now() - startedAt : undefined,
+          text,
+        });
     };
     // 中断(Esc)和流级异常不会给进行中的文本块补发 text-end/reasoning-end
     // (SDK 直接关闭流),已生成的部分回答必须在这里定稿,否则它永远进不了
@@ -382,6 +396,8 @@ export function App(props: Props): JSX.Element {
             push({ kind: 'user', text: event.display ?? event.userText });
             planSubmitted = false;
             planAtTurnStart = session.config.plan;
+            turnStartedAt = Date.now();
+            turnStartTokens = usage().total;
             // 新一轮从零开始计时,不沿用上一轮残留的 since。
             setWork({ phase: 'thinking', since: Date.now() });
             break;
@@ -492,6 +508,25 @@ export function App(props: Props): JSX.Element {
             // 都没改动,但"我明明用了 /plan,它却没问我"必须看得见,不能静悄悄。
             if (planAtTurnStart && session.config.plan && !planSubmitted) {
               push({ kind: 'notice', level: 'warn', message: t('notice.planNoSubmission') });
+            }
+            // 一轮的收尾行。底栏给的是"此刻"的累计值,回看历史时无从知道
+            // 某一轮花了多久、烧了多少——这一行补的正是这个。中断与出错各自
+            // 走 aborted/error 分支(那里没有可信的用量),不画这一行。
+            //
+            // 没见过本轮的 turn-start 就不画:`--attach` 连上跑到一半的
+            // server、或重连时重放缓冲已滚过 turn-start(server 回 gap),
+            // 都会只收到 turn-end。那时基准是 0,耗时会写成 0ms,更糟的是
+            // 整个会话的累计量会被当成这一轮的开销报出来。
+            if (turnStartedAt) {
+              push({
+                kind: 'turn',
+                model: model(),
+                durationMs: Date.now() - turnStartedAt,
+                tokens: Math.max(0, event.usage.cumulativeTotalTokens - turnStartTokens),
+              });
+              // 基准一次性消费:下一轮的 turn-start 会重新落桩,漏收的那轮
+              // 不该借用上一轮的起点。
+              turnStartedAt = 0;
             }
             // 目标循环**还会接着跑**时才留着状态行,交给紧随其后的 goal-evaluating
             // 接手;在这里熄灯的话,自动循环会每两轮闪一次"已空闲",像卡住了。
@@ -674,6 +709,16 @@ export function App(props: Props): JSX.Element {
       focusFlashTimer = setTimeout(() => setFocusFlash(undefined), 2000);
       return;
     }
+    // ctrl+r 展开/收起详情(思考正文、工具输出)。与 ctrl+o 同理:全屏
+    // 渲染下切换只是换参数重画,随时双向可逆。
+    if (key.ctrl && input === 'r') {
+      const next = !detailsExpanded();
+      setDetailsExpanded(next);
+      setExpandFlash(next);
+      if (expandFlashTimer) clearTimeout(expandFlashTimer);
+      expandFlashTimer = setTimeout(() => setExpandFlash(undefined), 2000);
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (ctrlCArmed()) {
         // 必须清掉待触发的定时器:cli.tsx 只设置 process.exitCode 而不调用
@@ -695,6 +740,7 @@ export function App(props: Props): JSX.Element {
     if (escTimer) clearTimeout(escTimer);
     if (modeFlashTimer) clearTimeout(modeFlashTimer);
     if (focusFlashTimer) clearTimeout(focusFlashTimer);
+    if (expandFlashTimer) clearTimeout(expandFlashTimer);
     if (copyFlashTimer) clearTimeout(copyFlashTimer);
   });
 
@@ -1485,7 +1531,9 @@ export function App(props: Props): JSX.Element {
           按 (key, width) 缓存。 */}
       <ScrollArea>
         <For each={visibleItems()}>
-          {(item) => <TimelineEntry item={item} columns={size.columns} />}
+          {(item) => (
+            <TimelineEntry item={item} columns={size.columns} expanded={detailsExpanded()} />
+          )}
         </For>
       </ScrollArea>
 
@@ -1623,6 +1671,7 @@ export function App(props: Props): JSX.Element {
                     root={session.root}
                     think={think()}
                     segments={statusSegments()}
+                    columns={size.columns}
                     notice={
                       ctrlCArmed()
                         ? t('status.ctrlcAgain')
@@ -1632,9 +1681,11 @@ export function App(props: Props): JSX.Element {
                             ? t('status.modeCycled', { mode: modeFlash()! })
                             : focusFlash()
                               ? t('status.focusCycled', { mode: focusFlash()! })
-                              : copyFlash() !== undefined
-                                ? t('status.selectionCopied', { n: copyFlash()! })
-                                : undefined
+                              : expandFlash() !== undefined
+                                ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
+                                : copyFlash() !== undefined
+                                  ? t('status.selectionCopied', { n: copyFlash()! })
+                                  : undefined
                     }
                   />
                 </Box>

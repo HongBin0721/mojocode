@@ -46,8 +46,8 @@ describe('replayTimeline', () => {
     ] as ModelMessage[]);
 
     expect(items[0]).toEqual({ kind: 'user', text: '读个文件' });
-    // 思考只还原一行标记,正文不进时间线(与实时渲染一致)。
-    expect(items[1]).toEqual({ kind: 'reasoning' });
+    // 思考默认只渲染一行标记;正文随条目留着,供 ctrl+r 展开(与实时渲染一致)。
+    expect(items[1]).toEqual({ kind: 'reasoning', text: '想一想' });
     expect(items[2]).toEqual({ kind: 'assistant', text: '我来读' });
     expect(items[3]).toMatchObject({
       kind: 'tool',

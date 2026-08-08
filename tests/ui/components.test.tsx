@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import stringWidth from 'string-width';
 import { Header } from '../../src/ui/Header.js';
 import { Footer } from '../../src/ui/Footer.js';
 import { TodoPanel } from '../../src/ui/TodoPanel.js';
@@ -32,6 +33,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
         root="/tmp/proj"
         think="auto"
         segments={['model', 'context']}
+        columns={70}
         notice="再按一次 ctrl+c 退出"
       />,
       { width: 70, height: 4 },
@@ -40,6 +42,62 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     expect(frame).toContain('kimi-k3');
     expect(frame).toContain('再按一次 ctrl+c 退出');
     await ui.destroy();
+  });
+
+  // 超宽时 OpenTUI 收缩的是子节点本身,分隔符两侧的空格会被吃掉
+  // (`full-access· kimi-k3 · …/demo· 思考 max`)——必须自己先裁到装得下。
+  it('Footer:全段开启的窄终端下不超宽、不吞分隔符空格', async () => {
+    const columns = 60;
+    const ui = await renderUi(
+      () => <Footer
+        contextUsed={2700}
+        contextWindow={1_000_000}
+        cumulativeTokens={10000}
+        todos={[]}
+        model="kimi-k3"
+        mode="full-access"
+        root="/private/tmp/claude-501/very/deep/scratchpad/mcdemo"
+        think="max"
+        segments={['mode', 'model', 'cwd', 'think', 'context', 'total']}
+        columns={columns}
+      />,
+      { width: columns, height: 6 },
+    );
+    const lines = ui.frame().split('\n').map((l) => l.trimEnd());
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(columns);
+    const body = lines.filter(Boolean).join('\n');
+    expect(body).not.toMatch(/\S·|·\S/);
+    // 权限档位在任何宽度下都不能被丢掉
+    expect(body).toContain('full-access');
+    await ui.destroy();
+  });
+
+  // 预算下限若取固定值(曾经是 20),更窄的终端上就会按看不见的宽度裁剪,
+  // 每一段都溢出折行,底栏胀成好几行把输入框顶出视口——正是它要防的事。
+  it('Footer:极窄终端下不折行,行数不超过两行', async () => {
+    for (const columns of [10, 14, 20, 28]) {
+      const ui = await renderUi(
+        () => <Footer
+          contextUsed={2700}
+          contextWindow={1_000_000}
+          cumulativeTokens={10000}
+          todos={[{ content: '一个很长很长的任务标题需要被截断', status: 'in_progress' }]}
+          model="kimi-k3"
+          mode="full-access"
+          root="/private/tmp/claude-501/very/deep/scratchpad/mcdemo"
+          think="max"
+          segments={['mode', 'model', 'cwd', 'think', 'context', 'total', 'todos']}
+          columns={columns}
+          notice="再按一次 ctrl+c 退出"
+        />,
+        { width: columns, height: 10 },
+      );
+      const lines = ui.frame().split('\n').filter((l) => l.trim());
+      // 最多四行:任务、提醒、独占一行的路径、信息段——谁都不许再折出第五行
+      expect(lines.length, `${columns} 列`).toBeLessThanOrEqual(4);
+      for (const line of lines) expect(stringWidth(line), `${columns} 列: ${line}`).toBeLessThanOrEqual(columns);
+      await ui.destroy();
+    }
   });
 
   it('TodoPanel:清单行与勾选框', async () => {

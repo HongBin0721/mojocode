@@ -84,6 +84,17 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   `fg=`/`bg=` are silently ignored), and bare `solid-js` resolves to the non-reactive SSR
   stub under Node/Bun native conditions — the build pins `solid-js/dist/solid.js`
   everywhere (see tsup.config.ts / vitest.solid.ts); keep it pinned.
+  Two orthogonal collapse axes: `/focus` (ctrl+o, `focus.ts`) hides whole entries —
+  `user`/`assistant`/`error`/`banner` and all notices never (iron law, `tests/focus.test.ts`);
+  **ctrl+r** toggles the *bodies* of reasoning and raw tool output, collapsed by default,
+  while diff/plan/todo bodies are results and never collapse. Each turn ends with a
+  `kind: 'turn'` line (model · elapsed · that turn's tokens). Single-line info rows must be
+  measured and cut before layout (`Footer.fitParts`) — an overflowing OpenTUI flex row
+  shrinks its children and silently eats the spaces around separators. Diff rows use
+  `highlightDiffLine`, not `highlightLine`: highlight.js's default theme is built for a
+  white background (strings red, numbers/comments green) and paints red-on-green inside
+  the diff; `DIFF_THEME` overrides every colored default key (unset keys fall back) with a
+  red/green-free bright palette, emitted as raw truecolor SGR instead of via chalk.
 
 ## Conventions
 
