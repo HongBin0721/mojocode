@@ -43,7 +43,7 @@ export const APPROVAL_PRESETS = [
   { id: 'ask', sandbox: 'workspace-write', approval: 'untrusted' },
   // 工作区内编辑自由,命令仍确认。等价旧 acceptEdits;Codex 的 Auto。
   { id: 'auto', sandbox: 'workspace-write', approval: 'on-request' },
-  // 全自动,连硬拒名单也绕过。等价旧 yolo;只在本会话有效,永不落盘。
+  // 全自动,连硬拒名单也绕过。等价旧 yolo;选中会留存,但每次都在时间线上留警告。
   { id: 'full-access', sandbox: 'danger-full-access', approval: 'never' },
 ] as const satisfies readonly ({ id: string } & Permissions)[];
 export type ApprovalPresetId = (typeof APPROVAL_PRESETS)[number]['id'];
@@ -73,30 +73,36 @@ export function canEverWrite(p: Permissions, planActive: boolean): boolean {
 }
 
 /**
- * full-access(danger-full-access)只在本会话有效,永不写进配置或会话记录:
- * 它绕过硬拒名单,是"就这一次"的临时逃生口——否则开一次,之后每次
- * `mojocode -c` 都会在命令行没有任何标志的情况下静默全自动放行。
+ * full-access(danger-full-access)绕过硬拒名单,是全部档位里唯一能让模型
+ * 在工作区外动手、跑 `rm -rf`/`sudo` 这类命令的一档。
+ *
+ * 它和其余档位一样会被留存(用户显式选的档位就该活到下一次启动),但选中它
+ * 必须在时间线上留一条警告:底栏两秒的回显翻不出来,事后看记录得能认出这一
+ * 段是在无沙箱下跑的。
  */
-export function isEphemeralPermissions(p: Permissions): boolean {
+export function isDangerousPermissions(p: Permissions): boolean {
   return p.sandbox === 'danger-full-access';
 }
 
 /**
- * shift+tab 的循环:ask → auto → plan → ask。
+ * shift+tab 的循环:read-only → ask → auto → full-access → plan → read-only。
  *
- * 刻意不含 full-access——它绕过硬拒名单,绝不能离一个快捷键只有一步之遥。
- * 当前组合不在循环里(read-only、full-access、自由组合)时落到 plan:它写不了
- * 任何东西,所以无论从哪起步,误触都只可能收紧权限,不可能放宽。
+ * 四个预设按 APPROVAL_PRESETS 的顺序(放宽递增)走一遍,再经 plan 回到最紧的
+ * 一档。full-access 也在循环里——它绕过硬拒名单,所以落到它时 UI 要在时间线上
+ * 留一条警告(见 App 的 applyMode)。
+ * 当前组合不在预设里(自由组合)时落到 plan:它写不了任何东西,误触只会收紧。
  */
 export function nextCycleStep(
   p: Permissions,
   planActive: boolean,
-): { plan: true } | { preset: 'ask' | 'auto' } {
-  if (planActive) return { preset: 'ask' };
-  const preset = presetFor(p);
-  if (preset === 'ask') return { preset: 'auto' };
-  if (preset === 'auto') return { plan: true };
-  return { plan: true };
+): { plan: true } | { preset: ApprovalPresetId } {
+  if (planActive) return { preset: APPROVAL_PRESETS[0].id };
+  const index = APPROVAL_PRESETS.findIndex(
+    (x) => x.sandbox === p.sandbox && x.approval === p.approval,
+  );
+  if (index < 0) return { plan: true };
+  const next = APPROVAL_PRESETS[index + 1];
+  return next ? { preset: next.id } : { plan: true };
 }
 
 /**

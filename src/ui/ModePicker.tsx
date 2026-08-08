@@ -27,9 +27,9 @@ interface Props {
  * 刻意不做滚动窗口:档位一共五种,永远一屏装得下,那套 windowStart 的机器
  * 在这里只是噪音。
  *
- * 语义上它等价于「一次 shift+tab,但由你指定落在哪一档」——只改本会话,不
- * 落盘。要写进工作区配置仍然只有 /approvals 一条路(底部注脚说的就是这件事):
- * 点一下底栏不该改写项目配置文件。
+ * 语义上它等价于「一次 shift+tab,但由你指定落在哪一档」——包括落盘:选完的
+ * 档位与 /approvals 一样写进本工作区的 .mojocode/config.json(底部注脚说的就是
+ * 这件事),下次在同一个目录启动仍是这一档。
  */
 export function ModePicker(props: Props): JSX.Element {
   const [cursor, setCursor] = createSignal(Math.max(0, props.options.findIndex((o) => o.current)));

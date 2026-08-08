@@ -20,12 +20,13 @@ export const en = {
   'goal.progress': 'goal {turn}/{max} · {elapsed}',
   'goal.pending': 'goal pending — send a message to carry on',
   'status.ctrlcAgain': 'press ctrl+c again to exit',
-  'status.meta': '({s}s · esc to interrupt{extra})',
+  'status.elapsed': '{s}s',
+  'status.tokens': '{n} tok',
+  'status.interrupt': 'esc to interrupt',
   'status.todoHide': 'ctrl+t to hide todos',
   'status.todoShow': 'ctrl+t to show todos',
 
   'footer.tasks': 'tasks',
-  'footer.ctx': 'ctx',
   'footer.total': 'total {n} tokens',
   'footer.think': 'think {level}',
 
@@ -58,7 +59,7 @@ export const en = {
   'approvalopt.plan': 'research first — reads only, no writes until you approve the plan',
 
   'modepicker.title': 'Permission mode',
-  'modepicker.note': 'this session only · /approvals also saves it to the workspace config',
+  'modepicker.note': 'saved to this workspace config, so it survives a restart',
 
   'perm.title': 'Permission needed',
   'perm.allowOnce': 'Allow once',
@@ -170,7 +171,8 @@ export const en = {
   'notice.modeSet': 'Permission mode is now {mode}.',
   'notice.modeSaveFailed': 'Could not save permission mode: {message}',
   'notice.modeSavedTo': 'Saved for this workspace in {path}.',
-  'notice.modeSessionOnly': '{mode} applies to this session only and is never saved.',
+  'notice.modeDanger':
+    '{mode} bypasses the hard-deny list (rm -rf, sudo, writes outside the workspace) and stays in effect until you switch away.',
   'notice.approvalsUsage': 'Usage: /approvals <{list}> (currently {mode})',
   'notice.langSet': 'Language is now {lang}.',
   'notice.langSaveFailed': 'Could not save language preference: {message}',

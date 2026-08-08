@@ -110,6 +110,42 @@ export function modeColor(label: string): string {
 }
 
 /**
+ * 底栏权限档位徽章的配色(反色小块)。前景与背景都写死,理由同 diff 高亮:
+ * 不依赖终端默认色,深浅色主题下对比度都够。取色按"这一档能对你的文件做
+ * 什么"分级——红底是"不问就改",常规档故意压成中性石板灰,存在但不抢眼。
+ *
+ * 与 modeColor 分开:那边是纯文字着色(Header 用),灰字在正文里够用;
+ * 徽章是实心块,灰底配灰字就糊了。
+ */
+export function modeChipColors(label: string): { bg: string; fg: string } {
+  if (label === 'full-access' || label.startsWith('danger-full-access'))
+    return { bg: '#b91c1c', fg: '#fee2e2' };
+  if (label === 'plan') return { bg: '#0e7490', fg: '#cffafe' };
+  if (label.startsWith('read-only')) return { bg: '#3f3f46', fg: '#e4e4e7' };
+  return { bg: '#334155', fg: '#e2e8f0' };
+}
+
+/**
+ * 计量条:填 `cells` 格的实心/空心方块。用几何符号而不是 emoji 方块,
+ * 理由同 glyphs——单宽,不会把靠右对齐的一行算错列。
+ *
+ * 两处刻意的取整:用掉一点点就点亮第一格(0 与 1% 在条上必须看得出区别),
+ * 而没满就绝不画满格(满条是"到顶了"的信号,89% 冒充满条会误导)。
+ */
+export function meterBar(ratio: number, cells: number): { filled: string; empty: string } {
+  // NaN 要挡在门口:NaN 会一路穿过 min/max/round,把两段都算成空串,
+  // 条突然缩成 0 列,靠右对齐的那一组跟着跳一下(用量为 0 除以 0 时的实况)。
+  const clamped = Number.isFinite(ratio) ? Math.min(1, Math.max(0, ratio)) : 0;
+  const on =
+    clamped <= 0
+      ? 0
+      : clamped >= 1
+        ? cells
+        : Math.max(1, Math.min(cells - 1, Math.round(clamped * cells)));
+  return { filled: '▰'.repeat(on), empty: '▱'.repeat(cells - on) };
+}
+
+/**
  * 输入框的模式样式:边框/提示符颜色与提示符字形随权限模式变化,让"当前
  * 处于什么模式"在打字的地方就看得见,而不用扫底栏。
  *

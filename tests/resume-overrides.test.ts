@@ -63,16 +63,15 @@ describe('resumeOverrides 优先级矩阵', () => {
     });
   });
 
-  it('会话里存着 danger-full-access 也不复活:它是"就这一次"的逃生口', () => {
+  // 档位一律忠实还原:恢复一个会话就该回到它当时的档位,full-access 也不例外。
+  it('会话里存着 danger-full-access 也照样还原', () => {
     expect(
-      resumeOverrides(
-        meta,
-        { ...state, sandbox: 'danger-full-access', approval: 'never' },
-        {},
-      ),
+      resumeOverrides(meta, { ...state, sandbox: 'danger-full-access', approval: 'never' }, {}),
     ).toEqual({
       provider: 'kimi',
       model: 'kimi-k2',
+      sandbox: 'danger-full-access',
+      approval: 'never',
     });
   });
 
@@ -92,18 +91,29 @@ describe('resumeOverrides 优先级矩阵', () => {
     });
   });
 
-  it('旧文件的 yolo / plan 不复活', () => {
-    for (const legacy of ['yolo', 'plan']) {
-      expect(
-        resumeOverrides(
-          meta,
-          { ...state, sandbox: undefined, approval: undefined, permissionMode: legacy },
-          {},
-        ),
-      ).toEqual({
-        provider: 'kimi',
-        model: 'kimi-k2',
-      });
-    }
+  // plan 从来不落盘,落了也不该复活;旧 yolo 与新的 full-access 同义,照常映射。
+  it('旧文件的 plan 不复活,yolo 映射到 full-access', () => {
+    expect(
+      resumeOverrides(
+        meta,
+        { ...state, sandbox: undefined, approval: undefined, permissionMode: 'plan' },
+        {},
+      ),
+    ).toEqual({
+      provider: 'kimi',
+      model: 'kimi-k2',
+    });
+    expect(
+      resumeOverrides(
+        meta,
+        { ...state, sandbox: undefined, approval: undefined, permissionMode: 'yolo' },
+        {},
+      ),
+    ).toEqual({
+      provider: 'kimi',
+      model: 'kimi-k2',
+      sandbox: 'danger-full-access',
+      approval: 'never',
+    });
   });
 });

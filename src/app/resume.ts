@@ -1,9 +1,4 @@
-import {
-  fromLegacyMode,
-  isEphemeralPermissions,
-  type PartialConfig,
-  type Permissions,
-} from '../config/schema.js';
+import { fromLegacyMode, type PartialConfig, type Permissions } from '../config/schema.js';
 import type { SessionMeta, SessionState } from '../session/store.js';
 
 /**
@@ -35,9 +30,9 @@ export function resumeOverrides(
         ? fromLegacyMode(state.permissionMode)
         : undefined;
 
-  // full-access 不该从会话记录里复活(见 bootstrap 的 snapshotState);这里再挡
-  // 一道,因为磁盘上可能留有本规则生效之前写下的会话文件(旧 yolo 同理)。
-  if (!flags.permissions && stored && !isEphemeralPermissions(stored)) {
+  // 档位一律忠实还原,full-access 也不例外:恢复一个会话就该回到它当时的档位,
+  // 与 model/provider 同一条原则(旧 yolo 经 fromLegacyMode 映射过来的同理)。
+  if (!flags.permissions && stored) {
     overrides.sandbox = stored.sandbox;
     overrides.approval = stored.approval;
   }

@@ -1,7 +1,16 @@
 import { createMemo, type JSX as SolidJSX } from 'solid-js';
 import stringWidth from 'string-width';
 import { Box, Text, type JSX } from './kit.js';
-import { theme, glyphs, formatTokens, truncateWidth, truncateWidthStart, modeColor, shortenHome } from './theme.js';
+import {
+  theme,
+  glyphs,
+  formatTokens,
+  meterBar,
+  modeChipColors,
+  truncateWidth,
+  truncateWidthStart,
+  shortenHome,
+} from './theme.js';
 import type { TodoItem } from '../tools/index.js';
 import type { StatusSegment } from '../config/schema.js';
 import { t } from '../i18n/index.js';
@@ -12,7 +21,7 @@ interface Props {
   cumulativeTokens: number;
   todos: TodoItem[];
   model: string;
-  /** 当前权限模式,启用 mode 段时显示在最前。 */
+  /** 当前权限模式,启用 mode 段时以徽章显示在最前。 */
   mode: string;
   /**
    * 点击 mode 段(App 用它弹出档位选项框)。不传则该段只是文字。
@@ -30,7 +39,18 @@ interface Props {
   notice?: string;
 }
 
+const SEP = ' · ';
 const SEP_WIDTH = 3;
+/**
+ * 徽章后面的分隔符。徽章自带反色底,边界已经画出来了,再写一个 ` · `
+ * 会读成"两个分隔符叠在一起"。
+ */
+const CHIP_SEP = ' ';
+const CHIP_SEP_WIDTH = 1;
+/** 左右两组之间至少留的列数;顶到一起就看不出这是两组了。 */
+const GROUP_GAP = 2;
+/** 上下文计量条的格数。 */
+const METER_CELLS = 8;
 /** cwd 段的常规上限;放得下就按它截,放不下再动态收窄。 */
 const CWD_WIDTH = 40;
 /** 路径收到比这还短就没有信息量了,那时改为独占一行。 */
@@ -43,15 +63,39 @@ const DROP_ORDER: StatusSegment[] = ['total', 'think', 'context', 'model', 'cwd'
 
 interface Part {
   id: StatusSegment;
+  /**
+   * 靠左还是靠右。左边是"我是谁/在哪"(档位、模型、路径),右边是"用了
+   * 多少"(上下文、累计)——两组之间用空白撑开,整行才读起来像状态条,
+   * 而不是一句用 · 断开的长句。
+   */
+  side: 'left' | 'right';
   /** 量宽用的纯文本(不含着色)。 */
   plain: string;
   /** 按给定文本渲染这一段——收窄后要保住原来的配色。 */
   render: (text: string) => SolidJSX.Element;
 }
 
-const rowWidth = (parts: Part[]): number =>
-  parts.reduce((sum, part) => sum + stringWidth(part.plain), 0) +
-  SEP_WIDTH * Math.max(0, parts.length - 1);
+/** 前一段之后该用什么分隔符:徽章后跟一个空格,其余是 ` · `。 */
+const sepAfter = (prev: Part): string => (prev.id === 'mode' ? CHIP_SEP : SEP);
+const sepWidthAfter = (prev: Part): number =>
+  prev.id === 'mode' ? CHIP_SEP_WIDTH : SEP_WIDTH;
+
+const sideOf = (parts: Part[], side: Part['side']): Part[] =>
+  parts.filter((part) => part.side === side);
+
+const groupWidth = (parts: Part[]): number =>
+  parts.reduce(
+    (sum, part, i) => sum + stringWidth(part.plain) + (i > 0 ? sepWidthAfter(parts[i - 1]!) : 0),
+    0,
+  );
+
+const rowWidth = (parts: Part[]): number => {
+  const left = sideOf(parts, 'left');
+  const right = sideOf(parts, 'right');
+  return (
+    groupWidth(left) + groupWidth(right) + (left.length > 0 && right.length > 0 ? GROUP_GAP : 0)
+  );
+};
 
 /** 把一段重新截到给定宽度:路径保尾部(尾部才是重点),其余保头部。 */
 function shrink(part: Part, width: number): Part {
@@ -68,6 +112,9 @@ function shrink(part: Part, width: number): Part {
  * max ·上下文`),既难看又看不出是被截断的。策略:先把路径收窄到剩余
  * 空间,收窄到没有信息量时让它独占一行(信息不丢),仍装不下才按
  * DROP_ORDER 丢段,最后兜底硬截。
+ *
+ * 左右分组不额外占行:装不下时靠丢段解决,绝不把右组挪到新的一行——
+ * 底栏每多一行,矮终端上的时间线就少一行。
  */
 export function fitParts(parts: Part[], available: number): Part[][] {
   const rows: Part[][] = [];
@@ -102,8 +149,43 @@ export function fitParts(parts: Part[], available: number): Part[][] {
   return rows;
 }
 
+/** 一组同侧的段,段间补分隔符。 */
+function Group(props: { parts: Part[] }): JSX.Element {
+  return (
+    <>
+      {props.parts.map((part, i) => (
+        <>
+          {i > 0 ? <Text color={theme.dim}>{sepAfter(props.parts[i - 1]!)}</Text> : null}
+          {part.render(part.plain)}
+        </>
+      ))}
+    </>
+  );
+}
+
 /**
- * 输入框下方的信息栏。工作状态已移到输入框上方的 StatusLine,这里只
+ * 状态条的一行:左组、空白、右组。空白是显式算出来的空格串,不用
+ * justifyContent——flex 的两端对齐在超宽时收缩的还是子节点(见 fitParts),
+ * 自己算宽度才能保证"绝不超宽"这件事只由一处逻辑负责。
+ */
+function BarRow(props: { row: Part[]; available: number }): JSX.Element {
+  const left = sideOf(props.row, 'left');
+  const right = sideOf(props.row, 'right');
+  // fitParts 已保证 rowWidth <= available,余量至少是 GROUP_GAP;右组独占
+  // 整行时(左组被丢光)余量把它推到右边缘。
+  const gap =
+    right.length > 0 ? props.available - groupWidth(left) - groupWidth(right) : 0;
+  return (
+    <Box>
+      <Group parts={left} />
+      {gap > 0 ? <Text>{' '.repeat(gap)}</Text> : null}
+      <Group parts={right} />
+    </Box>
+  );
+}
+
+/**
+ * 输入框下方的状态条。工作状态已移到输入框上方的 StatusLine,这里只
  * 剩可配置的信息段;全部关闭且无提醒时整个组件不渲染,不占行。
  *
  * 整体收进一个 memo 粗粒度重建:信息段之间有分隔符插入逻辑,细粒度追踪
@@ -122,14 +204,16 @@ export function Footer(props: Props): JSX.Element {
 
     const parts: Part[] = [];
     if (show.has('mode')) {
-      // 与 Header 共用同一套配色,见 theme.modeColor。
+      const chip = modeChipColors(props.mode);
       parts.push({
         id: 'mode',
-        plain: props.mode,
+        side: 'left',
+        // 左右各留一格内边距,反色块才像个徽章而不是被涂黑的单词。
+        plain: ` ${props.mode} `,
         // 点击命中的是这一段自己的 <text>(行是 flex row,每段各占自己的宽度),
         // 所以点在 model/cwd 上不会误切档位。
         render: (text) => (
-          <Text color={modeColor(props.mode)} onClick={props.onModeClick}>
+          <Text color={chip.fg} backgroundColor={chip.bg} bold onClick={props.onModeClick}>
             {text}
           </Text>
         ),
@@ -138,6 +222,7 @@ export function Footer(props: Props): JSX.Element {
     if (show.has('model')) {
       parts.push({
         id: 'model',
+        side: 'left',
         plain: props.model,
         render: (text) => <Text color={theme.dim}>{text}</Text>,
       });
@@ -145,6 +230,7 @@ export function Footer(props: Props): JSX.Element {
     if (show.has('cwd')) {
       parts.push({
         id: 'cwd',
+        side: 'left',
         plain: truncateWidthStart(shortenHome(props.root), CWD_WIDTH),
         render: (text) => <Text color={theme.dim}>{text}</Text>,
       });
@@ -153,21 +239,28 @@ export function Footer(props: Props): JSX.Element {
     if (show.has('think') && props.think !== 'auto') {
       parts.push({
         id: 'think',
+        side: 'left',
         plain: t('footer.think', { level: props.think }),
         render: (text) => <Text color={theme.dim}>{text}</Text>,
       });
     }
     if (show.has('context')) {
-      const counts = `${formatTokens(props.contextUsed)}/${formatTokens(props.contextWindow)}`;
+      // 逼近上限时整段变警示色:数字读起来要先换算,一条烧红的计量条不用。
+      const hot = pct > 0.85;
+      const bar = meterBar(pct, METER_CELLS);
+      const label = `${Math.round(pct * 100)}%`;
+      const full = `${bar.filled}${bar.empty} ${label}`;
       parts.push({
         id: 'context',
-        plain: `${t('footer.ctx')} ${counts}`,
-        // 收窄时会退化成整段一个颜色;正常宽度下用量单独着色,逼近上限时变警示色。
+        side: 'right',
+        plain: full,
+        // 收窄后(兜底硬截)退化成整段一个颜色,不去猜截断处落在条的哪一格。
         render: (text) =>
-          text.endsWith(counts) ? (
+          text === full ? (
             <Text color={theme.dim}>
-              {text.slice(0, text.length - counts.length)}
-              <Text color={pct > 0.85 ? theme.warn : theme.dim}>{counts}</Text>
+              <Text color={hot ? theme.warn : theme.accent}>{bar.filled}</Text>
+              {bar.empty}
+              <Text color={hot ? theme.warn : theme.dim}> {label}</Text>
             </Text>
           ) : (
             <Text color={theme.dim}>{text}</Text>
@@ -177,6 +270,7 @@ export function Footer(props: Props): JSX.Element {
     if (show.has('total')) {
       parts.push({
         id: 'total',
+        side: 'right',
         plain: t('footer.total', { n: formatTokens(props.cumulativeTokens) }),
         render: (text) => <Text color={theme.dim}>{text}</Text>,
       });
@@ -212,14 +306,7 @@ export function Footer(props: Props): JSX.Element {
           <Text color={theme.warn}>{truncateWidth(props.notice, available)}</Text>
         ) : null}
         {rows.map((row) => (
-          <Box>
-            {row.map((part, i) => (
-              <>
-                {i > 0 ? <Text color={theme.dim}> · </Text> : null}
-                {part.render(part.plain)}
-              </>
-            ))}
-          </Box>
+          <BarRow row={row} available={available} />
         ))}
       </Box>
     );

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Box } from '../../src/ui/kit.js';
 import { TimelineEntry } from '../../src/ui/Timeline.js';
 import type { TimelineItem } from '../../src/ui/types.js';
+import { renderPixelLogo } from '../../src/ui/logo.js';
+import { APP_NAME } from '../../src/config/paths.js';
 import { renderUi } from '../support/otui.js';
 
 function entries(items: TimelineItem[], columns = 80, expanded = false) {
@@ -164,9 +166,9 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
           mode: 'ask',
         },
       ]),
-      { width: 60, height: 10 },
+      { width: 60, height: 16 },
     );
-    expect(ui.frame()).toContain('mojocode');
+    expect(ui.frame()).toContain(renderPixelLogo(APP_NAME)[0]!.join(''));
     expect(ui.frame()).toContain('kimi-k3');
     await ui.destroy();
   });

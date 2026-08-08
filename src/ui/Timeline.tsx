@@ -152,6 +152,7 @@ export function TimelineEntry(props: {
           root={item.root}
           mode={item.mode}
           mcpSummary={item.mcpSummary}
+          columns={props.columns}
         />
       );
 

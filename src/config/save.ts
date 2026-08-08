@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { globalConfigPath, projectConfigPath } from './paths.js';
-import { isEphemeralPermissions, type Permissions } from './schema.js';
+import { type Permissions } from './schema.js';
 
 /**
  * 对全局配置文件做读取-修改-写回。文件可能存有 API key,因此总是以 0600
@@ -132,16 +132,16 @@ export async function saveTimelineMode(mode: string, file?: string): Promise<str
  * 写进 `~/.mojocode/config.json` 会让一次临时放宽泄漏到之后每个目录的每次启动,
  * 而界面上除了状态栏一行小字没有任何提示。
  *
- * full-access(danger-full-access)永不落盘——它绕过硬拒名单,是"就这一次"的
- * 逃生口。返回 undefined 表示未保存,调用方据此告知用户仅本次会话有效。
+ * 全部档位一视同仁地落盘,full-access 也不例外:用户显式选的档位就该活到
+ * 下一次启动,而不是每次重开都被静默改回去。代价是它绕过硬拒名单,所以选中
+ * 那一档的路径都要在时间线上留一条警告(见 App 的 applyMode)。
  * 顺带清掉旧版单轴字段 permissionMode,完成一次性迁移。
  */
 export async function savePermissions(
   root: string,
   permissions: Permissions,
   file?: string,
-): Promise<string | undefined> {
-  if (isEphemeralPermissions(permissions)) return undefined;
+): Promise<string> {
   return updateProjectConfig(
     root,
     (config) => {

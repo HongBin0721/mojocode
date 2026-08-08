@@ -104,16 +104,17 @@ describe('savePermissions', () => {
     const saved = await savePermissions(dir, presetById('read-only'));
 
     expect(saved).toBe(path.join(dir, '.mojocode', 'config.json'));
-    expect(JSON.parse(await fs.readFile(saved!, 'utf8'))).toEqual({
+    expect(JSON.parse(await fs.readFile(saved, 'utf8'))).toEqual({
       sandbox: 'read-only',
       approval: 'on-request',
     });
   });
 
-  // full-access 绕过硬拒名单,是"就这一次"的逃生口,落盘即静默全放行。
-  it('full-access 永不落盘,连文件都不创建', async () => {
-    expect(await savePermissions(dir, presetById('full-access'), file)).toBeUndefined();
-    await expect(fs.access(file)).rejects.toThrow();
+  // 用户显式选的档位一律留存,full-access 也不例外(它绕过硬拒名单,代价是
+  // 选中它的每条路径都要在时间线上留警告——见 App 的 applyMode)。
+  it('full-access 同样落盘', async () => {
+    expect(await savePermissions(dir, presetById('full-access'), file)).toBe(file);
+    expect(await readConfig()).toEqual({ sandbox: 'danger-full-access', approval: 'never' });
   });
 
   it('保留项目配置里已有的权限规则,并顺带清掉旧版 permissionMode', async () => {

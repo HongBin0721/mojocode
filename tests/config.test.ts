@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   configSchema,
   fromLegacyMode,
-  isEphemeralPermissions,
+  isDangerousPermissions,
   nextCycleStep,
   planReturnFor,
   presetById,
@@ -128,13 +128,14 @@ describe('思考强度解析', () => {
 });
 
 describe('两轴权限的规则', () => {
-  it('full-access 是临时组合,其余会持久化', () => {
-    expect(isEphemeralPermissions(presetById('full-access'))).toBe(true);
+  // 危险 ≠ 不留存:full-access 一样落盘,但选中它的路径必须留下警告。
+  it('只有 full-access 算危险档位', () => {
+    expect(isDangerousPermissions(presetById('full-access'))).toBe(true);
     for (const id of ['read-only', 'ask', 'auto'] as const) {
-      expect(isEphemeralPermissions(presetById(id))).toBe(false);
+      expect(isDangerousPermissions(presetById(id))).toBe(false);
     }
     // 自由组合同理:只看 sandbox 轴。
-    expect(isEphemeralPermissions({ sandbox: 'danger-full-access', approval: 'untrusted' })).toBe(
+    expect(isDangerousPermissions({ sandbox: 'danger-full-access', approval: 'untrusted' })).toBe(
       true,
     );
   });
@@ -166,40 +167,40 @@ describe('两轴权限的规则', () => {
 });
 
 describe('shift+tab 的档位循环', () => {
-  it('在 ask → auto → plan 之间循环', () => {
+  it('按放宽递增走完四个预设,再经 plan 回到最紧的一档', () => {
+    expect(nextCycleStep(presetById('read-only'), false)).toEqual({ preset: 'ask' });
     expect(nextCycleStep(presetById('ask'), false)).toEqual({ preset: 'auto' });
-    expect(nextCycleStep(presetById('auto'), false)).toEqual({ plan: true });
-    expect(nextCycleStep(presetById('auto'), true)).toEqual({ preset: 'ask' });
+    expect(nextCycleStep(presetById('auto'), false)).toEqual({ preset: 'full-access' });
+    expect(nextCycleStep(presetById('full-access'), false)).toEqual({ plan: true });
+    expect(nextCycleStep(presetById('auto'), true)).toEqual({ preset: 'read-only' });
   });
 
-  // 落到 plan 而不是 ask:plan 写不了任何东西,所以无论从哪起步,误触都
-  // 只可能收紧权限,不可能放宽。full-access 绕过硬拒名单,绝不能离一个
-  // 快捷键只有一步之遥。
-  it('从循环外的组合按下时落到 plan,绝不放宽权限', () => {
-    expect(nextCycleStep(presetById('read-only'), false)).toEqual({ plan: true });
-    expect(nextCycleStep(presetById('full-access'), false)).toEqual({ plan: true });
+  // 自由组合不在循环里,落到 plan:它写不了任何东西,误触只会收紧权限。
+  it('循环外的自由组合落到 plan', () => {
     expect(nextCycleStep({ sandbox: 'read-only', approval: 'never' }, false)).toEqual({
+      plan: true,
+    });
+    expect(nextCycleStep({ sandbox: 'workspace-write', approval: 'never' }, false)).toEqual({
       plan: true,
     });
   });
 
-  it('从任意组合出发,连按给出的档位永远不是 full-access', () => {
-    for (const id of ['read-only', 'ask', 'auto', 'full-access'] as const) {
-      let perms: Permissions = presetById(id);
-      let plan = false;
-      for (let i = 0; i < 8; i += 1) {
-        const step = nextCycleStep(perms, plan);
-        if ('plan' in step) {
-          plan = true;
-        } else {
-          // 循环给出的每个预设都必须是可留存的普通档位。
-          expect(step.preset === 'ask' || step.preset === 'auto').toBe(true);
-          perms = presetById(step.preset);
-          plan = false;
-          expect(isEphemeralPermissions(perms)).toBe(false);
-        }
+  it('连按能走遍全部五档,不会卡在某一档上', () => {
+    let perms: Permissions = presetById('read-only');
+    let plan = false;
+    const seen = new Set<string>();
+    for (let i = 0; i < 5; i += 1) {
+      const step = nextCycleStep(perms, plan);
+      if ('plan' in step) {
+        plan = true;
+        seen.add('plan');
+      } else {
+        perms = presetById(step.preset);
+        plan = false;
+        seen.add(step.preset);
       }
     }
+    expect(seen).toEqual(new Set(['read-only', 'ask', 'auto', 'full-access', 'plan']));
   });
 });
 

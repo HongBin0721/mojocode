@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { setTimeout as sleep } from 'node:timers/promises';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 
 import { App } from '../../src/ui/App.js';
@@ -9,6 +12,23 @@ import { t } from '../../src/i18n/index.js';
 import { presetById, type Permissions } from '../../src/config/schema.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
+
+/**
+ * 切档位会落盘到 <root>/.mojocode/config.json,所以工作区根用真的临时目录:
+ * 既不污染仓库,也让"档位确实写进了文件"这件事可以被断言。
+ */
+const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-plan-'));
+afterAll(async () => {
+  await fs.rm(projectRoot, { recursive: true, force: true });
+});
+
+/** 读工作区配置;还没落盘时返回 undefined。 */
+async function readProjectConfig(): Promise<Record<string, unknown> | undefined> {
+  return fs
+    .readFile(path.join(projectRoot, '.mojocode', 'config.json'), 'utf8')
+    .then((raw) => JSON.parse(raw) as Record<string, unknown>)
+    .catch(() => undefined);
+}
 
 /**
  * 覆盖 /plan:裸命令只切模式,`/plan <任务>` 顺带以任务原文发起一轮。
@@ -37,7 +57,7 @@ async function setup(
     config.plan = active;
   });
   const session = {
-    root: '/tmp/project',
+    root: projectRoot,
     config,
     provider,
     agent: {
@@ -253,11 +273,20 @@ describe('计划模式下没提交方案的兜底提示', () => {
 });
 
 describe('shift+tab 循环切权限模式', () => {
-  it('ask → auto → plan → ask', async () => {
-    const { setPermissions, setPlan, ui } = await setup();
+  it('read-only → ask → auto → full-access → plan → read-only', async () => {
+    const { setPermissions, setPlan, ui } = await setup(
+      {},
+      { permissions: presetById('read-only') },
+    );
+
+    await ui.press('tab', { shift: true });
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('ask'));
 
     await ui.press('tab', { shift: true });
     expect(setPermissions).toHaveBeenLastCalledWith(presetById('auto'));
+
+    await ui.press('tab', { shift: true });
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('full-access'));
 
     await ui.press('tab', { shift: true });
     expect(setPlan).toHaveBeenLastCalledWith(true);
@@ -265,26 +294,64 @@ describe('shift+tab 循环切权限模式', () => {
     expect(ui.frame()).toContain('permission mode: plan');
 
     await ui.press('tab', { shift: true });
-    expect(setPermissions).toHaveBeenLastCalledWith(presetById('ask'));
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('read-only'));
     await ui.destroy();
   });
 
-  // full-access 绕过硬拒名单,绝不能离一个快捷键只有一步之遥。
-  it('从 full-access 按下落到 plan,而不是留在原地或滑向更宽松', async () => {
+  /**
+   * full-access 绕过硬拒名单,而且和别的档位一样留到下次启动——底栏那两秒的
+   * 回显翻不出来,时间线上必须留下一条,事后看记录能认出这一段跑在无沙箱下。
+   */
+  it('切到 full-access 会在时间线上留一条警告', async () => {
+    const { setPermissions, ui } = await setup({}, { permissions: presetById('auto') });
+
+    await ui.press('tab', { shift: true });
+
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('full-access'));
+    expect(ui.frame()).toContain('bypasses the hard-deny list');
+    await ui.destroy();
+  });
+
+  // 循环外的自由组合按下去落到 plan:它写不了任何东西,误触只会收紧。
+  it('从自由组合按下落到 plan', async () => {
+    const { setPlan, ui } = await setup(
+      {},
+      { permissions: { sandbox: 'read-only', approval: 'never' } },
+    );
+
+    await ui.press('tab', { shift: true });
+
+    expect(setPlan).toHaveBeenLastCalledWith(true);
+    await ui.destroy();
+  });
+
+  // 一次按键选的档位要活到下次启动,否则每开一个会话都得重按几下。
+  it('切完的档位落盘到工作区配置', async () => {
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
+    const { ui } = await setup({}, { permissions: presetById('ask') });
+
+    await ui.press('tab', { shift: true });
+    // 落盘是 fire-and-forget 的,等它真的写完。
+    let saved: Record<string, unknown> | undefined;
+    for (let i = 0; i < 50 && !saved; i += 1) {
+      saved = await readProjectConfig();
+      if (!saved) await sleep(10);
+    }
+
+    expect(saved).toEqual({ sandbox: 'workspace-write', approval: 'on-request' });
+    await ui.destroy();
+  });
+
+  // plan 是一次协作方式的选择,不是档位:存下来会让每个新会话都开在计划模式。
+  it('plan 不落盘', async () => {
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
     const { setPlan, ui } = await setup({}, { permissions: presetById('full-access') });
 
     await ui.press('tab', { shift: true });
+    await sleep(50);
 
     expect(setPlan).toHaveBeenLastCalledWith(true);
-    await ui.destroy();
-  });
-
-  it('从 read-only 按下落到 plan,同样写不了东西', async () => {
-    const { setPlan, ui } = await setup({}, { permissions: presetById('read-only') });
-
-    await ui.press('tab', { shift: true });
-
-    expect(setPlan).toHaveBeenLastCalledWith(true);
+    expect(await readProjectConfig()).toBeUndefined();
     await ui.destroy();
   });
 
@@ -329,7 +396,7 @@ describe('点击底栏档位弹出的选项框', () => {
     await clickLast(ui, 'ask');
     const frame = ui.frame();
     expect(frame).toContain('Permission mode');
-    // 四个预设 + plan 全部列出,不像 shift+tab 那样只能循环到其中三个。
+    // 四个预设 + plan 全部列出——与 shift+tab 的循环一一对应,只是由你指定落点。
     for (const id of ['read-only', 'ask', 'auto', 'full-access', 'plan']) {
       expect(frame).toContain(id);
     }
@@ -382,9 +449,8 @@ describe('点击底栏档位弹出的选项框', () => {
   });
 
   /**
-   * full-access 绕过硬拒名单。shift+tab 的循环刻意够不着它,选项框却够得着——
-   * 那就必须在时间线上留一条记录,事后翻记录能看出这一段是在无沙箱下跑的
-   * (底栏那两秒的回显翻不出来)。
+   * full-access 绕过硬拒名单,时间线上必须留一条记录,事后翻记录能看出这一段
+   * 是在无沙箱下跑的(底栏那两秒的回显翻不出来)。
    */
   it('选到 full-access 会在时间线上留一条警告', async () => {
     const { setPermissions, ui } = await setup();
@@ -394,7 +460,7 @@ describe('点击底栏档位弹出的选项框', () => {
     await clickLast(ui, 'full-access');
 
     expect(setPermissions).toHaveBeenLastCalledWith(presetById('full-access'));
-    expect(ui.frame()).toContain('applies to this session only');
+    expect(ui.frame()).toContain('bypasses the hard-deny list');
     await ui.destroy();
   });
 

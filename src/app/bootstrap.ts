@@ -5,7 +5,6 @@ import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../a
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
 import { resolveSearchBackend } from '../config/search.js';
 import {
-  isEphemeralPermissions,
   planReturnFor,
   type Config,
   type Permissions,
@@ -141,19 +140,18 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // 会话状态快照:todos + 会话级授权规则 + 当前两轴权限。gate/store 在下方
   // 才创建,闭包按绑定取值,实际调用时都已就绪。
   const snapshotState = (): SessionState => {
-    // 两种情况不把权限写进会话记录:
-    // 1. full-access(danger-full-access)——"就这一次"的逃生口,复活即静默全放行;
-    // 2. permsPromoted——read-only+never 下批准方案被提升到 ask,那是"这一次
-    //    批准"换来的放宽,不该活到下一次 `mojocode -c`。
+    // 只有一种情况不把权限写进会话记录:permsPromoted——read-only+never 下批准
+    // 方案被提升到 ask,那是"这一次批准"换来的放宽,不是用户选的档位,不该活到
+    // 下一次 `mojocode -c`。用户显式切的档位一律留存,full-access 也不例外。
     //
     // 计划模式**不**在此列:SessionState 根本不存 plan 标志,恢复时不可能停在
     // 计划模式;而进入计划模式时两轴保持不变(setPlan 原样传当前组合),所以
     // 这里存的就是进入前的选择。漏存反而会抹掉它——状态记录是整份替换,
-    // shift+tab 切到 auto 再切进 plan,记录就被重写成没有权限,`mojocode -c`
-    // 回到配置默认的 ask,用户的选择凭空消失(shift+tab 刻意不落盘到项目
-    // 配置,会话文件是它唯一的留存处)。
+    // shift+tab 切到 auto 再切进 plan,记录就被重写成没有权限,恢复这个会话时
+    // 用户的选择凭空消失(项目配置里存的是"这个工作区最后一次选的档",会话
+    // 记录存的是"这个会话当时的档",两者各管各的)。
     const perms: Permissions = { sandbox: config.sandbox, approval: config.approval };
-    const omit = isEphemeralPermissions(perms) || permsPromoted;
+    const omit = permsPromoted;
     const activeGoal = goal.state;
     // allowNet 与 goal 同一手法:空时整个字段不出现,老会话的状态记录
     // JSON 保持一字不差,脏检查不会平白多写一条记录。
@@ -520,7 +518,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     bus.emit({ type: 'permission-change', permissions, plan: opts.plan });
   };
 
-  /** 用户显式切换两轴:一律留存(受 isEphemeralPermissions 约束),并退出计划模式。 */
+  /** 用户显式切换两轴:一律留存(写会话记录;项目配置由 UI 侧的 savePermissions 落盘),并退出计划模式。 */
   const setPermissions = (permissions: Permissions): void =>
     applyPermissions(permissions, { plan: false, promoted: false });
 

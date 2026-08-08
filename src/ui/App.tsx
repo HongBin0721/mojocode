@@ -49,7 +49,7 @@ import type { TodoItem } from '../tools/index.js';
 import {
   APPROVAL_PRESETS,
   canEverWrite,
-  isEphemeralPermissions,
+  isDangerousPermissions,
   nextCycleStep,
   permissionsLabel,
   presetById,
@@ -319,11 +319,32 @@ export function App(props: Props): JSX.Element {
     permission() !== undefined || rewind() !== undefined || settingsOpen() || modePickerOpen();
 
   /**
+   * 把两轴档位写进本工作区的 `.mojocode/config.json`(shift+tab、底栏选项框、
+   * /approvals 共用这一条落盘路径)。
+   *
+   * 落盘是尽力而为:写不进去只提示一句,本会话的档位早已生效,不该被一个
+   * 写文件的失败拖住。返回配置文件路径,失败为 undefined。
+   */
+  const persistPermissions = async (next: Permissions): Promise<string | undefined> =>
+    savePermissions(session.root, next).catch((err: Error) => {
+      push({
+        kind: 'notice',
+        level: 'warn',
+        message: t('notice.modeSaveFailed', { message: err.message }),
+      });
+      return undefined;
+    });
+
+  /**
    * 切到某一档权限(预设 id 或 'plan')。shift+tab 的循环、点击底栏弹出的
    * 选项框都归到这一个出口上。
    *
-   * 只改本会话,不落盘:一个随手的按键/点击不该改写工作区配置(要写进
-   * `.mojocode/config.json` 只有 /approvals 一条路)。
+   * 档位会落盘到本工作区的 `.mojocode/config.json`(与 /approvals 同一个出口),
+   * 所以选一次就管到下次启动,不必每开一个会话重按几下。落盘是尽力而为:
+   * 写失败只提示,本会话的档位照样已经生效。
+   *
+   * plan 不落盘——它是一次协作方式的选择(方案批准后就该还原),不是档位;
+   * 存下来会让每个新会话都莫名其妙地开在计划模式里。
    */
   const applyMode = (id: ApprovalPresetId | 'plan') => {
     if (id === 'plan') {
@@ -334,12 +355,12 @@ export function App(props: Props): JSX.Element {
       session.setPermissions(next);
       setPerms(next);
       setPlanActive(false);
-      // full-access 绕过硬拒名单。shift+tab 的循环够不着它,但选项框够得着——
-      // 只给底栏两秒的回显不够:得在时间线上留一条,事后翻记录也看得见这一
-      // 段是在无沙箱下跑的。
-      if (isEphemeralPermissions(next)) {
-        push({ kind: 'notice', level: 'warn', message: t('notice.modeSessionOnly', { mode: id }) });
+      // full-access 绕过硬拒名单,而且现在会一直留到下次启动——只给底栏两秒的
+      // 回显不够:得在时间线上留一条,事后翻记录也看得见这一段是在无沙箱下跑的。
+      if (isDangerousPermissions(next)) {
+        push({ kind: 'notice', level: 'warn', message: t('notice.modeDanger', { mode: id }) });
       }
+      void persistPermissions(next);
     }
     // 档位可能在 /setting 里被关掉、Header 又早已滚出屏幕,没有回显就等于
     // 没有反馈。
@@ -349,7 +370,7 @@ export function App(props: Props): JSX.Element {
   };
 
   /**
-   * 权限档位循环一步(ask → auto → plan)。full-access 刻意不在循环里。
+   * 权限档位循环一步(read-only → ask → auto → full-access → plan → read-only)。
    *
    * 调用方负责挡住覆盖层打开时的情形:授权确认框开着时改规则,等于在"要不要
    * 放行这一次"的中途改掉规则本身;其余覆盖层渲染期间 Footer 已卸载,切了档位
@@ -409,7 +430,15 @@ export function App(props: Props): JSX.Element {
   // 本轮的起点与起始累计 token,收尾行(kind: 'turn')的耗时与本轮用量由
   // 它们相减得出。累计量取 UI 侧的镜像:turn-start 时它还停在上一轮的终值。
   let turnStartedAt = 0;
-  let turnStartTokens = 0;
+  // 信号而非裸 let:状态行要按它实时显示"本轮已烧了多少 token"。
+  const [turnStartTokens, setTurnStartTokens] = createSignal(0);
+  /**
+   * 本轮到此刻的 token 增量,给状态行。每个 step-end 刷新一次 usage,所以
+   * 它按步跳而不是按 delta 连续涨——够说明"还在往前走"了。turnStartedAt
+   * 为 0(没见过本轮的 turn-start,如 --attach 半途接入)时不报数,免得把
+   * 整个会话的累计量当成这一轮的开销。
+   */
+  const turnTokens = () => (turnStartedAt ? Math.max(0, usage().total - turnStartTokens()) : 0);
 
   // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段渲染时
   // 不再带 ● 前缀,只缩进对齐。
@@ -487,7 +516,7 @@ export function App(props: Props): JSX.Element {
             planSubmitted = false;
             planAtTurnStart = session.config.plan;
             turnStartedAt = Date.now();
-            turnStartTokens = usage().total;
+            setTurnStartTokens(usage().total);
             // 新一轮从零开始计时,不沿用上一轮残留的 since。
             setWork({ phase: 'thinking', since: Date.now() });
             break;
@@ -612,7 +641,7 @@ export function App(props: Props): JSX.Element {
                 kind: 'turn',
                 model: model(),
                 durationMs: Date.now() - turnStartedAt,
-                tokens: Math.max(0, event.usage.cumulativeTotalTokens - turnStartTokens),
+                tokens: Math.max(0, event.usage.cumulativeTotalTokens - turnStartTokens()),
               });
               // 基准一次性消费:下一轮的 turn-start 会重新落桩,漏收的那轮
               // 不该借用上一轮的起点。
@@ -1146,19 +1175,18 @@ export function App(props: Props): JSX.Element {
         setPerms(next);
         setPlanActive(false);
         push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: preset.id }) });
-        // 落盘范围是本工作区的 .mojocode/config.json;full-access 不保存,
-        // 提示它只管这一次。
-        const saved = await savePermissions(session.root, next).catch((err: Error) => {
-          push({ kind: 'notice', level: 'warn', message: t('notice.modeSaveFailed', { message: err.message }) });
-          return undefined;
-        });
-        if (isEphemeralPermissions(next)) {
+        // full-access 绕过硬拒名单,而且和别的档位一样会留到下次启动——
+        // 时间线上必须留一条,事后翻记录能认出这一段跑在无沙箱下。
+        if (isDangerousPermissions(next)) {
           push({
             kind: 'notice',
             level: 'warn',
-            message: t('notice.modeSessionOnly', { mode: preset.id }),
+            message: t('notice.modeDanger', { mode: preset.id }),
           });
-        } else if (saved) {
+        }
+        // 落盘范围是本工作区的 .mojocode/config.json,不碰全局配置。
+        const saved = await persistPermissions(next);
+        if (saved) {
           push({ kind: 'notice', level: 'info', message: t('notice.modeSavedTo', { path: saved }) });
         }
         break;
@@ -1814,6 +1842,8 @@ export function App(props: Props): JSX.Element {
             detail={work()!.detail}
             since={work()!.since}
             todoHint={todoPanelActive() ? (todoPanelOpen() ? 'hide' : 'show') : undefined}
+            tokens={turnTokens()}
+            columns={size.columns}
           />
         </Show>
         <Show when={todoPanelVisible()}>

@@ -5,19 +5,51 @@ import { Footer } from '../../src/ui/Footer.js';
 import { TodoPanel } from '../../src/ui/TodoPanel.js';
 import { StatusLine } from '../../src/ui/StatusLine.js';
 import { GoalLine } from '../../src/ui/GoalLine.js';
+import { renderPixelLogo } from '../../src/ui/logo.js';
+import { APP_NAME } from '../../src/config/paths.js';
 import { renderUi } from '../support/otui.js';
 
 describe('叶子组件在 OpenTUI 下渲染', () => {
-  it('Header:边框横幅与信息行', async () => {
+  it('Header:像素字 logo 与信息行', async () => {
     const ui = await renderUi(
-      () => <Header providerLabel="DeepSeek" model="deepseek-chat" root="/tmp/proj" mode="ask" />,
-      { width: 60, height: 8 },
+      () => (
+        <Header
+          providerLabel="DeepSeek"
+          model="deepseek-chat"
+          root="/tmp/proj"
+          mode="ask"
+          columns={60}
+        />
+      ),
+      { width: 60, height: 16 },
     );
     const frame = ui.frame();
-    expect(frame).toContain('mojocode');
+    // 宽度够时画像素字,行首不再重复写名字。
+    expect(frame).toContain(renderPixelLogo(APP_NAME)[0]!.join(''));
+    expect(frame).not.toContain(APP_NAME);
     expect(frame).toContain('DeepSeek');
     expect(frame).toContain('deepseek-chat');
     expect(frame).toContain('╭');
+    await ui.destroy();
+  });
+
+  it('Header:窄终端退回纯文字标题', async () => {
+    // 40 列放不下 47 列的像素字:必须整块不画,而不是折行成噪点。
+    const ui = await renderUi(
+      () => (
+        <Header
+          providerLabel="DeepSeek"
+          model="deepseek-chat"
+          root="/tmp/proj"
+          mode="ask"
+          columns={40}
+        />
+      ),
+      { width: 40, height: 20 },
+    );
+    const frame = ui.frame();
+    expect(frame).toContain(APP_NAME);
+    expect(frame).not.toContain('▀');
     await ui.destroy();
   });
 
@@ -41,6 +73,54 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     const frame = ui.frame();
     expect(frame).toContain('kimi-k3');
     expect(frame).toContain('再按一次 ctrl+c 退出');
+    await ui.destroy();
+  });
+
+  it('Footer:用量段靠右对齐,档位是带内边距的徽章', async () => {
+    const columns = 70;
+    const ui = await renderUi(
+      () => <Footer
+        contextUsed={30000}
+        contextWindow={128000}
+        cumulativeTokens={38200}
+        todos={[]}
+        model="kimi-k3"
+        mode="plan"
+        root="/tmp/proj"
+        think="auto"
+        segments={['mode', 'model', 'context']}
+        columns={columns}
+      />,
+      { width: columns, height: 3 },
+    );
+    const line = ui.frame().split('\n').find((l) => l.includes('▰'))!;
+    // 计量条那一组顶到右边缘(留 1 列换行余量),中间是空白而不是 ` · `。
+    expect(line.length).toBe(columns - 1);
+    expect(line).toMatch(/▰▰▱▱▱▱▱▱ 23%$/);
+    expect(line).toMatch(/ {2,}▰/);
+    // 徽章左右各留一格内边距,后面只跟一个空格——不再叠一个 ` · `。
+    expect(line).toMatch(/^ plan {2}kimi-k3/);
+    await ui.destroy();
+  });
+
+  it('Footer:上下文逼近上限时计量条画满到倒数第二格', async () => {
+    const ui = await renderUi(
+      () => <Footer
+        contextUsed={127000}
+        contextWindow={128000}
+        cumulativeTokens={38200}
+        todos={[]}
+        model="kimi-k3"
+        mode="ask"
+        root="/tmp/proj"
+        think="auto"
+        segments={['context']}
+        columns={70}
+      />,
+      { width: 70, height: 3 },
+    );
+    // 99% 不画满:满条是"到顶了"的信号,不能被 99% 冒充。
+    expect(ui.frame()).toContain('▰▰▰▰▰▰▰▱ 99%');
     await ui.destroy();
   });
 
@@ -120,13 +200,39 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
   });
 
   it('StatusLine:阶段标签与提示', async () => {
-    const ui = await renderUi(() => <StatusLine phase="thinking" since={Date.now() - 3000} />, {
-      width: 60,
-      height: 3,
-    });
+    const ui = await renderUi(
+      () => <StatusLine phase="thinking" since={Date.now() - 3500} tokens={1234} columns={60} />,
+      { width: 60, height: 3 },
+    );
     // 阶段文案本地化,断言结构字符(spinner 帧集合里的任意一个)存在即可
     expect(ui.frame().trim().length).toBeGreaterThan(0);
+    // 已用时与本轮 token 都在:跑长任务时它是"还在动"的唯一证据。
+    expect(ui.frame()).toContain('3s');
+    expect(ui.frame()).toContain('1.2k tok');
     await ui.destroy();
+  });
+
+  it('StatusLine:窄终端按优先级丢尾部,绝不折行', async () => {
+    // 这一行每 100ms 重绘一次,折行会让底部区域每秒抖一次高度。
+    for (const columns of [12, 20, 30, 46]) {
+      const ui = await renderUi(
+        () => <StatusLine
+          phase="tool"
+          detail="bash"
+          since={Date.now() - 3000}
+          tokens={1234}
+          todoHint="show"
+          columns={columns}
+        />,
+        { width: columns, height: 4 },
+      );
+      const lines = ui.frame().split('\n').filter((l) => l.trim());
+      expect(lines.length, `${columns} 列`).toBe(1);
+      for (const line of lines) {
+        expect(stringWidth(line), `${columns} 列: ${line}`).toBeLessThanOrEqual(columns);
+      }
+      await ui.destroy();
+    }
   });
 
   it('GoalLine:靠右对齐的目标进度行', async () => {

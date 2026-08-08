@@ -14,12 +14,13 @@ export const zhCN: Record<keyof typeof en, string> = {
   'goal.progress': '目标 {turn}/{max} · {elapsed}',
   'goal.pending': '目标待续 — 发条消息就接着做',
   'status.ctrlcAgain': '再按一次 ctrl+c 退出',
-  'status.meta': '({s}s · esc 中断{extra})',
+  'status.elapsed': '{s}s',
+  'status.tokens': '{n} tok',
+  'status.interrupt': 'esc 中断',
   'status.todoHide': 'ctrl+t 隐藏任务',
   'status.todoShow': 'ctrl+t 显示任务',
 
   'footer.tasks': '任务',
-  'footer.ctx': '上下文',
   'footer.total': '累计 {n} tokens',
   'footer.think': '思考 {level}',
 
@@ -52,7 +53,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'approvalopt.plan': '先调研 — 只读不写，方案获批前不动文件',
 
   'modepicker.title': '权限档位',
-  'modepicker.note': '仅本会话生效 · /approvals 还会写进工作区配置',
+  'modepicker.note': '会写进本工作区配置，重启后仍是这一档',
 
   'perm.title': '需要授权',
   'perm.allowOnce': '允许一次',
@@ -163,7 +164,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.modeSet': '权限模式已设为 {mode}。',
   'notice.modeSaveFailed': '权限模式保存失败：{message}',
   'notice.modeSavedTo': '已保存到本工作区的 {path}。',
-  'notice.modeSessionOnly': '{mode} 仅对本次会话生效，不会被保存。',
+  'notice.modeDanger':
+    '{mode} 绕过硬拒名单（rm -rf、sudo、工作区外写入），且会一直生效到你切走为止。',
   'notice.approvalsUsage': '用法：/approvals <{list}>（当前 {mode}）',
   'notice.langSet': '语言已切换为 {lang}。',
   'notice.langSaveFailed': '语言偏好保存失败：{message}',
