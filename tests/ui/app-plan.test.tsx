@@ -422,6 +422,53 @@ describe('点击底栏档位弹出的选项框', () => {
     await ui.destroy();
   });
 
+  /** 同一类问题的另外两支:设置面板与回退选择器同样被确认框抢占。 */
+  it('设置面板被确认框抢占后不会复活', async () => {
+    const { bus, ui } = await setup();
+
+    await ui.type('/setting');
+    await ui.press('return');
+    await ui.tick();
+    expect(ui.frame()).toContain(t('settings.title'));
+
+    bus.emit({
+      type: 'permission-request',
+      request: { id: 'w1', toolName: 'write', title: 'write a.ts', risk: 'write' },
+    });
+    await ui.tick();
+    await ui.press('escape'); // 拒绝
+    await ui.tick();
+
+    expect(ui.frame()).not.toContain(t('settings.title'));
+    await ui.destroy();
+  });
+
+  // 这一支最严重:复活后的回车会截断历史。
+  it('回退选择器被确认框抢占后不会复活', async () => {
+    const { bus, ui } = await setup({
+      history: [
+        { role: 'user', content: 'first ask' },
+        { role: 'assistant', content: 'ok' },
+      ],
+    });
+
+    await ui.press('escape');
+    await ui.press('escape');
+    await ui.tick();
+    expect(ui.frame()).toContain(t('rewind.title'));
+
+    bus.emit({
+      type: 'permission-request',
+      request: { id: 'w2', toolName: 'write', title: 'write a.ts', risk: 'write' },
+    });
+    await ui.tick();
+    await ui.press('escape'); // 拒绝
+    await ui.tick();
+
+    expect(ui.frame()).not.toContain(t('rewind.title'));
+    await ui.destroy();
+  });
+
   // 每段各占自己的宽度,命中区不该外溢到邻段上。
   it('点在别的信息段上不弹', async () => {
     const { ui } = await setup({}, { statusBar: ['mode', 'model'] });

@@ -382,12 +382,19 @@ export function App(props: Props): JSX.Element {
   };
 
   /**
-   * 授权确认框抢占屏幕底部。档位选项框必须就地关掉:它虽然渲染不出来,信号
-   * 还开着——用户决定完确认框之后它会"复活"盖在输入框上,那时一个下意识的
-   * 回车改的是权限档位,而不是提交消息。
+   * 弹出授权确认框,并关掉被它抢占的那些覆盖层。
+   *
+   * 确认框在 <Switch> 里优先级最高,底下三个只是渲染不出来、信号还开着——
+   * 不就地关掉的话,用户决定完确认框它们就"复活"盖在输入框上,那时一个下意识
+   * 的回车按到的是它们的确认动作(改权限档位 / 回退到某条消息 / 进设置分区),
+   * 而不是提交消息。回退那一支尤其严重:它会截断历史。
+   *
+   * 关掉等价于按 esc:三者都只有游标和草稿这类本地状态,丢弃即可。
    */
   const showPermission = (request: PermissionRequest) => {
     setModePickerOpen(false);
+    setSettingsOpen(false);
+    setRewind(undefined);
     setPermission(request);
   };
 
