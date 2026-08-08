@@ -58,7 +58,15 @@ export function SessionPicker(props: Props): JSX.Element {
           {(meta, i) => {
             const active = () => windowStart() + i() === cursor();
             return (
-              <Text color={active() ? theme.accent : undefined} wrap="truncate-end">
+              // 点击即选中该会话并退出选择器(等价于移光标 + 回车)。
+              <Text
+                color={active() ? theme.accent : undefined}
+                wrap="truncate-end"
+                onClick={() => {
+                  props.onSelect(meta.id);
+                  exit();
+                }}
+              >
                 {active() ? `${glyphs.pointer} ` : '  '}
                 {meta.id.slice(0, 8)}
                 <Text color={theme.dim}>

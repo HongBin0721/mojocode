@@ -27,6 +27,10 @@ export interface UiHandle {
   press(name: string, mods?: { ctrl?: boolean; shift?: boolean; meta?: boolean }): Promise<void>;
   /** bracketed paste 粘贴一段文本。 */
   paste(text: string): Promise<void>;
+  /** 左键单击终端第 (x, y) 格(按下与抬起同格,即 kit 的点击判定)。 */
+  click(x: number, y: number): Promise<void>;
+  /** 在终端第 (x, y) 格上滚一格滚轮。 */
+  scroll(x: number, y: number, direction: 'up' | 'down'): Promise<void>;
   resize(width: number, height: number): void;
   destroy(): Promise<void>;
   /** 带样式的帧捕获(fg/bg/attributes 断言用)。 */
@@ -85,6 +89,8 @@ export async function renderUi(
         else mockInput.pressKey(name, mods);
       }),
     paste: (text) => withTick(() => mockInput.pasteBracketedText(text)),
+    click: (x, y) => withTick(() => setup.mockMouse.click(x, y)),
+    scroll: (x, y, direction) => withTick(() => setup.mockMouse.scroll(x, y, direction)),
     resize: (width, height) => setup.resize(width, height),
     spans: () => setup.captureSpans(),
     destroy: async () => {

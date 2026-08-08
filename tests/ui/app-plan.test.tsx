@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 
 import { App } from '../../src/ui/App.js';
@@ -7,7 +8,7 @@ import { EventBus } from '../../src/core/events.js';
 import { t } from '../../src/i18n/index.js';
 import { presetById, type Permissions } from '../../src/config/schema.js';
 import type { Session } from '../../src/app/bootstrap.js';
-import { renderUi } from '../support/otui.js';
+import { renderUi, type UiHandle } from '../support/otui.js';
 
 /**
  * 覆盖 /plan:裸命令只切模式,`/plan <任务>` 顺带以任务原文发起一轮。
@@ -15,7 +16,7 @@ import { renderUi } from '../support/otui.js';
  */
 async function setup(
   agentOverrides: Record<string, unknown> = {},
-  options: { permissions?: Permissions; plan?: boolean } = {},
+  options: { permissions?: Permissions; plan?: boolean; statusBar?: string[] } = {},
 ) {
   const bus = new EventBus();
   const provider = { id: 'test', label: 'Test', model: 'test-model', contextWindow: 100_000 };
@@ -25,7 +26,7 @@ async function setup(
     sandbox: perms.sandbox,
     approval: perms.approval,
     plan: options.plan ?? false,
-    statusBar: ['mode'],
+    statusBar: options.statusBar ?? ['mode'],
   };
   const setPermissions = vi.fn((next: Permissions) => {
     config.sandbox = next.sandbox;
@@ -299,6 +300,138 @@ describe('shift+tab 循环切权限模式', () => {
 
     expect(setPermissions).not.toHaveBeenCalled();
     expect(setPlan).not.toHaveBeenCalled();
+    await ui.destroy();
+  });
+});
+
+/**
+ * 底栏在屏幕最下方,而横幅里也印着档位和模型名——同一段文字出现多次时一律
+ * 取最后一处,取到的才是底栏那一行。
+ */
+async function clickLast(ui: UiHandle, needle: string): Promise<void> {
+  const lines = ui.frame().split('\n');
+  for (let y = lines.length - 1; y >= 0; y -= 1) {
+    const x = lines[y]!.indexOf(needle);
+    if (x >= 0) {
+      await ui.click(x, y);
+      return;
+    }
+  }
+  throw new Error(`帧里找不到 ${JSON.stringify(needle)}`);
+}
+
+describe('点击底栏档位弹出的选项框', () => {
+  it('点一下弹出全部档位,选中项标出当前档', async () => {
+    const { setPermissions, setPlan, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    const frame = ui.frame();
+    expect(frame).toContain('Permission mode');
+    // 四个预设 + plan 全部列出,不像 shift+tab 那样只能循环到其中三个。
+    for (const id of ['read-only', 'ask', 'auto', 'full-access', 'plan']) {
+      expect(frame).toContain(id);
+    }
+    expect(frame).toContain('current');
+    // 只是弹出来,还没改任何东西。
+    expect(setPermissions).not.toHaveBeenCalled();
+    expect(setPlan).not.toHaveBeenCalled();
+    await ui.destroy();
+  });
+
+  it('点选项框里的一档即生效(只改本会话)', async () => {
+    const { setPermissions, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    // 选项框正铺在底栏刚才那一片格子上,得越过 kit 的点击落定窗口——不等就
+    // 会被当成双击的第二下吞掉(那正是这个窗口存在的理由)。
+    await sleep(300);
+    await clickLast(ui, 'read-only');
+
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('read-only'));
+    // 选完即关,底栏回来了(选项框的注脚不再出现)。
+    expect(ui.frame()).not.toContain('Permission mode');
+    await ui.destroy();
+  });
+
+  it('键盘同样可用:↑/↓ + 回车', async () => {
+    const { setPlan, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    // 光标开在当前档(ask,第 2 项)上;plan 是第 5 项,往下三步。
+    await ui.press('down');
+    await ui.press('down');
+    await ui.press('down');
+    await ui.press('return');
+
+    expect(setPlan).toHaveBeenLastCalledWith(true);
+    await ui.destroy();
+  });
+
+  it('esc 取消,一档都不改', async () => {
+    const { setPermissions, setPlan, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    await ui.press('escape');
+
+    expect(setPermissions).not.toHaveBeenCalled();
+    expect(setPlan).not.toHaveBeenCalled();
+    expect(ui.frame()).not.toContain('Permission mode');
+    await ui.destroy();
+  });
+
+  /**
+   * full-access 绕过硬拒名单。shift+tab 的循环刻意够不着它,选项框却够得着——
+   * 那就必须在时间线上留一条记录,事后翻记录能看出这一段是在无沙箱下跑的
+   * (底栏那两秒的回显翻不出来)。
+   */
+  it('选到 full-access 会在时间线上留一条警告', async () => {
+    const { setPermissions, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    await sleep(300);
+    await clickLast(ui, 'full-access');
+
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('full-access'));
+    expect(ui.frame()).toContain('applies to this session only');
+    await ui.destroy();
+  });
+
+  /**
+   * 授权确认框抢占屏幕底部时选项框只是渲染不出来,信号还开着;不就地关掉的话
+   * 用户决定完它会"复活"盖在输入框上,那时一个下意识的回车改的是权限档位。
+   */
+  it('授权确认框抢占后不会复活', async () => {
+    const { bus, setPermissions, ui } = await setup();
+
+    await clickLast(ui, 'ask');
+    expect(ui.frame()).toContain('Permission mode');
+
+    bus.emit({
+      type: 'permission-request',
+      request: { id: 'w1', toolName: 'write', title: 'write a.ts', risk: 'write' },
+    });
+    await ui.tick();
+    expect(ui.frame()).not.toContain('Permission mode');
+
+    await ui.press('escape'); // 拒绝,确认框关闭
+    await ui.tick();
+    expect(ui.frame()).not.toContain('Permission mode');
+    // 回车回到"提交消息"的语义,不会改档位。
+    await ui.press('return');
+    expect(setPermissions).not.toHaveBeenCalled();
+    await ui.destroy();
+  });
+
+  // 每段各占自己的宽度,命中区不该外溢到邻段上。
+  it('点在别的信息段上不弹', async () => {
+    const { ui } = await setup({}, { statusBar: ['mode', 'model'] });
+
+    await clickLast(ui, 'test-model');
+    expect(ui.frame()).not.toContain('Permission mode');
+
+    // 同一行上点 mode 段确实弹得出来——否则上面的"没弹"只是因为整行都没点中。
+    await clickLast(ui, 'ask');
+    expect(ui.frame()).toContain('Permission mode');
     await ui.destroy();
   });
 });

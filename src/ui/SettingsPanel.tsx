@@ -129,6 +129,50 @@ export function SettingsPanel(props: Props): JSX.Element {
     });
   };
 
+  /** 多选:切换第 index 个信息段的勾选状态(空格 / 点击共用)。 */
+  const toggleSegment = (index: number) => {
+    const segment = STATUS_SEGMENTS[index];
+    if (!segment) return;
+    setDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(segment)) next.delete(segment);
+      else next.add(segment);
+      return next;
+    });
+  };
+
+  /** 提交状态栏草稿。按固定顺序提交,勾选先后不影响状态栏的排布。 */
+  const commitStatusBar = () => {
+    const picked = STATUS_SEGMENTS.filter((s) => draft().has(s));
+    back('statusbar');
+    props.onStatusBar(picked);
+  };
+
+  /**
+   * 落在第 index 行上的动作,回车与点击共用。
+   *
+   * 注意状态栏那一支:它是多选,行的动作是勾选而不是提交(回车才提交),
+   * 所以点击一行也只是勾选——点击不能比回车做得更多。
+   */
+  const activate = (index: number) => {
+    const id = section();
+    if (!id) {
+      const target = SECTIONS[index];
+      if (target) enter(target);
+      return;
+    }
+    if (id === 'language') {
+      const locale = LOCALES[index];
+      // back() 要先走:选中语言会让 App 按 locale 重挂载整棵界面树(见
+      // App 末尾的 keyed Show),本组件随之销毁,之后的 setSection 就落在
+      // 一个没人再读的信号上了。
+      back(id);
+      if (locale) props.onLanguage(locale);
+      return;
+    }
+    toggleSegment(index);
+  };
+
   useInput((input, key) => {
     const id = section();
     if (key.escape) {
@@ -148,36 +192,16 @@ export function SettingsPanel(props: Props): JSX.Element {
     }
     // 多选:空格切换光标处信息段的勾选状态。
     if (id === 'statusbar' && input === ' ' && !key.return) {
-      const segment = STATUS_SEGMENTS[cursor()];
-      if (!segment) return;
-      setDraft((prev) => {
-        const next = new Set(prev);
-        if (next.has(segment)) next.delete(segment);
-        else next.add(segment);
-        return next;
-      });
+      toggleSegment(cursor());
       return;
     }
     if (!key.return) return;
-
-    if (!id) {
-      const target = SECTIONS[cursor()];
-      if (target) enter(target);
+    // 二级多选里回车是"提交草稿",不是行动作。
+    if (id === 'statusbar') {
+      commitStatusBar();
       return;
     }
-    if (id === 'language') {
-      const locale = LOCALES[cursor()];
-      // back() 要先走:选中语言会让 App 按 locale 重挂载整棵界面树(见
-      // App 末尾的 keyed Show),本组件随之销毁,之后的 setSection 就落在
-      // 一个没人再读的信号上了。
-      back(id);
-      if (locale) props.onLanguage(locale);
-      return;
-    }
-    // 按固定顺序提交,勾选先后不影响状态栏的排布。
-    const picked = STATUS_SEGMENTS.filter((s) => draft().has(s));
-    back(id);
-    props.onStatusBar(picked);
+    activate(cursor());
   });
 
   const windowStart = createMemo(() =>
@@ -208,10 +232,20 @@ export function SettingsPanel(props: Props): JSX.Element {
         </Show>
         <For each={rows().slice(windowStart(), windowStart() + WINDOW)}>
           {(row, i) => {
-            const active = () => windowStart() + i() === cursor();
+            const index = () => windowStart() + i();
+            const active = () => index() === cursor();
             const checked = row.checked;
             return (
-              <Text color={active() ? theme.accent : undefined} wrap="truncate-end">
+              // 点击 = 光标移过来 + 执行该行的动作(状态栏那一支即勾选)。
+              <Text
+                color={active() ? theme.accent : undefined}
+                wrap="truncate-end"
+                onClick={() => {
+                  const target = index();
+                  setCursor(target);
+                  activate(target);
+                }}
+              >
                 {active() ? `${glyphs.pointer} ` : '  '}
                 <Show when={checked}>
                   <Text color={checked!() ? theme.success : theme.dim}>

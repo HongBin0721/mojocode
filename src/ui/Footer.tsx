@@ -14,6 +14,10 @@ interface Props {
   model: string;
   /** 当前权限模式,启用 mode 段时显示在最前。 */
   mode: string;
+  /**
+   * 点击 mode 段(App 用它弹出档位选项框)。不传则该段只是文字。
+   */
+  onModeClick?: () => void;
   /** 当前工作区根目录,启用 cwd 段时以 `~` 缩写展示。 */
   root: string;
   /** 当前思考强度,auto(默认)时不占位。 */
@@ -122,7 +126,13 @@ export function Footer(props: Props): JSX.Element {
       parts.push({
         id: 'mode',
         plain: props.mode,
-        render: (text) => <Text color={modeColor(props.mode)}>{text}</Text>,
+        // 点击命中的是这一段自己的 <text>(行是 flex row,每段各占自己的宽度),
+        // 所以点在 model/cwd 上不会误切档位。
+        render: (text) => (
+          <Text color={modeColor(props.mode)} onClick={props.onModeClick}>
+            {text}
+          </Text>
+        ),
       });
     }
     if (show.has('model')) {

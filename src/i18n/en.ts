@@ -55,6 +55,10 @@ export const en = {
   'approvalopt.ask': 'confirm before writes and shell commands (default)',
   'approvalopt.auto': 'workspace edits are free, shell commands still confirm',
   'approvalopt.fullAccess': 'no sandbox, no prompts — use with care',
+  'approvalopt.plan': 'research first — reads only, no writes until you approve the plan',
+
+  'modepicker.title': 'Permission mode',
+  'modepicker.note': 'this session only · /approvals also saves it to the workspace config',
 
   'perm.title': 'Permission needed',
   'perm.allowOnce': 'Allow once',

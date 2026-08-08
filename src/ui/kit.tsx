@@ -23,7 +23,14 @@
  * Solid 纪律(改这层时牢记):组件内**不解构 props**(会断开响应式追踪),
  * JSX 里内联访问 `props.x`;需要成组传递时用 createMemo 包对象再 spread。
  */
-import { createCliRenderer, decodePasteBytes, TextAttributes, type CliRenderer, type KeyEvent } from '@opentui/core';
+import {
+  createCliRenderer,
+  decodePasteBytes,
+  TextAttributes,
+  type CliRenderer,
+  type KeyEvent,
+  type MouseEvent as OtuiMouseEvent,
+} from '@opentui/core';
 import {
   render as solidRender,
   useKeyboard,
@@ -204,6 +211,117 @@ export function useInput(
 }
 
 // ---------------------------------------------------------------------------
+// 鼠标:点击与滚轮
+// ---------------------------------------------------------------------------
+
+/** 滚轮方向。横向滚轮(left/right)本项目用不到,不往上暴露。 */
+export type ScrollDirection = 'up' | 'down';
+
+/** 点击信息。x/y 是终端格坐标(左上角为 0,0)。 */
+export interface ClickInfo {
+  x: number;
+  y: number;
+  shift: boolean;
+  alt: boolean;
+  ctrl: boolean;
+}
+
+/**
+ * 指针状态,**按渲染器共享一份**(而不是每个可点击元素各存一份)。
+ *
+ * 各存一份会漏状态:按下落在 A、拖走后在别处抬起,A 永远等不到自己的那次
+ * up,按下坐标就一直武装着;之后任何**结束**在同一格的拖动(比如反向划一次
+ * 选区)都会被 A 判成点击。在授权确认框里那就是凭空放行一次。一个渲染器只有
+ * 一个指针、同一时刻只有一次按下,共享一份才是事实本身。
+ *
+ * 挂在渲染器上而不是模块上,是因为测试会在同一进程里先后建多个渲染器——模块
+ * 级的话,上一个渲染器留下的 lastClickAt 会让下一个界面的第一次点击落进落定
+ * 窗口被吞掉。
+ */
+interface PointerState {
+  /** 上一次按下的格子。 */
+  downX: number;
+  downY: number;
+  /**
+   * 上一次生效点击的时刻,与"落定窗口"配合使用。
+   *
+   * 点击常常会换掉屏幕上同一片格子的内容(点设置面板的「语言」进二级,语言
+   * 列表就铺在刚才那几行上;点底栏档位弹出选项框同理)。双击的第二下于是落在
+   * 第一下刚变出来的行上并立刻生效——双击「语言」= 静默把界面切成列表里那
+   * 一项。凡是在上一次点击之后才挂载的元素,这段时间内不接受点击。
+   */
+  lastClickAt: number;
+}
+
+const CLICK_SETTLE_MS = 250;
+const pointerStates = new WeakMap<CliRenderer, PointerState>();
+
+function pointerStateOf(renderer: CliRenderer): PointerState {
+  let state = pointerStates.get(renderer);
+  if (!state) {
+    state = { downX: -1, downY: -1, lastClickAt: 0 };
+    pointerStates.set(renderer, state);
+  }
+  return state;
+}
+
+/**
+ * 点击判定:按下与抬起落在**同一格**才算一次点击。
+ *
+ * 这个"零位移"的严格标准是必须的,不能放宽成"落在同一行/同一元素":
+ * OpenTUI 的选择层在 <text> 上按下就开始拖选(useSelectionCopy 依赖它),
+ * 用户横向划过一行去复制文字时,按下和抬起都落在这一行——一旦按元素判定,
+ * 复制一段文本就顺手把这一行"点"了。
+ *
+ * 只认左键(button 0);滚轮在上游是 scroll 事件,不走这里。
+ */
+function clickHandlers(
+  renderer: CliRenderer,
+  onClick: () => ((info: ClickInfo) => void) | undefined,
+) {
+  // 组件 setup 期即挂载时刻(Solid 同步创建组件树)。
+  const mountedAt = Date.now();
+  const state = pointerStateOf(renderer);
+  return {
+    handleDown(event: OtuiMouseEvent): void {
+      if (event.button !== 0) return;
+      // 同一个事件对象会沿父链冒泡,嵌套的可点击元素写的是同一份坐标,重复
+      // 赋值无副作用。
+      state.downX = event.x;
+      state.downY = event.y;
+    },
+    handleUp(event: OtuiMouseEvent): void {
+      if (event.button !== 0) return;
+      const hit = event.x === state.downX && event.y === state.downY;
+      state.downX = -1;
+      state.downY = -1;
+      if (!hit) return;
+      // 内层消费掉的点击不再冒泡:嵌套的可点击元素里应当只有最内层生效。
+      // 落定窗口内也要吞:这一下已经"用掉"了,不该再穿透给外层。
+      event.stopPropagation();
+      const now = Date.now();
+      if (mountedAt >= state.lastClickAt && now - state.lastClickAt < CLICK_SETTLE_MS) return;
+      state.lastClickAt = now;
+      onClick()?.({ x: event.x, y: event.y, ...event.modifiers });
+    },
+  };
+}
+
+/**
+ * 滚轮事件的公共实现。一次事件走一步,不看 delta:终端每格一个事件,
+ * 按 delta 放大只会让列表一滚就飞过去。
+ */
+function scrollHandler(onScroll: () => ((direction: ScrollDirection) => void) | undefined) {
+  return (event: OtuiMouseEvent): void => {
+    const direction = event.scroll?.direction;
+    if (direction !== 'up' && direction !== 'down') return;
+    // 消费掉,不再冒泡给外层的滚动容器(否则滚菜单会顺带滚动时间线)。
+    event.stopPropagation();
+    onScroll()?.(direction);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 选择复制
 // ---------------------------------------------------------------------------
 
@@ -331,6 +449,15 @@ export interface TextProps {
   strikethrough?: boolean;
   /** Ink 的 wrap;本项目只用到 'truncate-end'(默认折行)。 */
   wrap?: 'wrap' | 'truncate-end';
+  /**
+   * 左键单击(判定见 clickHandlers)。列表面板的"点哪行选哪行"就挂在这里:
+   * 列容器里的 <text> 被 Yoga 拉满整行宽(alignItems 默认 stretch),所以
+   * 整行——包括文字右侧的空白——都是命中区,不必额外套一层 Box。
+   *
+   * **嵌套的 <Text> 渲染成 span(TextNode),不是 Renderable,不进命中网格**,
+   * 挂在上面不会有任何反应;点击只能挂在行的最外层 Text 上。
+   */
+  onClick?: (info: ClickInfo) => void;
   children?: JSX.Element;
 }
 
@@ -396,6 +523,7 @@ export function Text(props: TextProps): JSX.Element {
   // context 值在同一挂载点上是静态的(Provider 的 value 从不动态翻转),
   // setup 期读一次即可。
   const nested = useContext(NestedText);
+  const click = clickHandlers(useRenderer(), () => props.onClick);
   const styled = createMemo(() => ({
     ...(props.color !== undefined ? { fg: props.color } : {}),
     ...(props.backgroundColor !== undefined ? { bg: props.backgroundColor } : {}),
@@ -425,6 +553,10 @@ export function Text(props: TextProps): JSX.Element {
       {...styled()}
       wrapMode={props.wrap === 'truncate-end' ? 'none' : 'word'}
       truncate={props.wrap === 'truncate-end'}
+      // 不可点时显式给 undefined:上游 setter 收到 undefined 会删掉监听,
+      // 与「从未挂过」等价,不留额外开销。
+      onMouseDown={props.onClick ? click.handleDown : undefined}
+      onMouseUp={props.onClick ? click.handleUp : undefined}
     >
       <NestedText.Provider value={true}>
         <TextChildren>{props.children}</TextChildren>
@@ -488,6 +620,13 @@ export interface BoxProps {
   /** Ink 只有名字差异:'round' → OpenTUI 'rounded'。 */
   borderStyle?: 'round';
   borderColor?: string;
+  /** 左键单击(判定见 clickHandlers)。命中区就是这个 Box 的布局矩形。 */
+  onClick?: (info: ClickInfo) => void;
+  /**
+   * 滚轮。命中区同上——事件在子节点上产生、冒泡到这里,所以挂在容器 Box 上
+   * 就覆盖整块区域,不必逐行去挂。
+   */
+  onScroll?: (direction: ScrollDirection) => void;
   children?: JSX.Element;
 }
 
@@ -498,8 +637,12 @@ export function Box(props: BoxProps): JSX.Element {
     'borderStyle',
     'borderColor',
     'paddingX',
+    'onClick',
+    'onScroll',
     'children',
   ]);
+  const click = clickHandlers(useRenderer(), () => local.onClick);
+  const scroll = scrollHandler(() => local.onScroll);
   // 条件键收进 memo 再 spread:直接写 `borderColor={undefined}` 会以
   // undefined 覆盖 renderable 的默认值,语义与「不传」不同。
   const extras = createMemo(() => ({
@@ -515,6 +658,9 @@ export function Box(props: BoxProps): JSX.Element {
       flexShrink={local.flexShrink ?? 1} // Ink 默认 1(Yoga 裸默认 0)
       {...extras()}
       {...rest}
+      onMouseDown={local.onClick ? click.handleDown : undefined}
+      onMouseUp={local.onClick ? click.handleUp : undefined}
+      onMouseScroll={local.onScroll ? scroll : undefined}
     >
       {/* Box 边界重置嵌套判定:Box 内的 <Text> 是新的顶层文本块 */}
       <NestedText.Provider value={false}>{local.children}</NestedText.Provider>

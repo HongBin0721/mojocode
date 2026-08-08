@@ -403,3 +403,114 @@ describe('tab 与 shift+tab 的分工', () => {
     await ui.destroy();
   });
 });
+
+/**
+ * 列表本来就随光标滚动(8 行的窗口 + 上/下省略提示),这里补的是"用滚轮
+ * 滚":滚轮与上下键共用同一份移动实现,所以行为(含首尾环绕)必须一致。
+ */
+describe('滚轮滚列表', () => {
+  const many: SlashCommand[] = Array.from({ length: 12 }, (_, i) => ({
+    name: `cmd${String(i + 1).padStart(2, '0')}`,
+    description: '',
+  }));
+
+  /** 菜单里某一行的坐标。滚轮命中区是整个菜单容器,取哪一行都一样。 */
+  function rowAt(frame: string, needle: string): { x: number; y: number } {
+    const lines = frame.split('\n');
+    const y = lines.findIndex((line) => line.includes(needle));
+    expect(y, `帧里找不到 ${needle}`).toBeGreaterThanOrEqual(0);
+    return { x: lines[y]!.indexOf(needle), y };
+  }
+
+  it('命令菜单:向下滚一格 = 按一次 ↓', async () => {
+    const { submitted, ui: p } = setup(many);
+    const ui = await p;
+    await ui.type('/');
+    const row = rowAt(ui.frame(), 'cmd03');
+
+    await ui.scroll(row.x, row.y, 'down');
+    await ui.press('return');
+
+    expect(submitted).toEqual(['/cmd02']);
+    await ui.destroy();
+  });
+
+  it('命令菜单:滚过头会环绕,与上下键一致', async () => {
+    const { submitted, ui: p } = setup(many);
+    const ui = await p;
+    await ui.type('/');
+    const row = rowAt(ui.frame(), 'cmd03');
+
+    await ui.scroll(row.x, row.y, 'up'); // 从第 1 项往上 → 绕到最后一项
+
+    await ui.press('return');
+    expect(submitted).toEqual(['/cmd12']);
+    await ui.destroy();
+  });
+
+  it('命令菜单:滚到窗口外时列表窗口跟着滚', async () => {
+    const { ui: p } = setup(many);
+    const ui = await p;
+    await ui.type('/');
+    const row = rowAt(ui.frame(), 'cmd03');
+    // 一屏 8 项:cmd01–cmd08 可见,cmd12 在窗口外。
+    expect(ui.frame()).toContain('cmd08');
+    expect(ui.frame()).not.toContain('cmd12');
+
+    for (let i = 0; i < 8; i += 1) await ui.scroll(row.x, row.y, 'down');
+
+    const frame = ui.frame();
+    expect(frame).toContain('cmd12');
+    expect(frame).not.toContain('cmd01');
+    await ui.destroy();
+  });
+
+  it('滚在菜单外不动光标', async () => {
+    const { submitted, ui: p } = setup(many);
+    const ui = await p;
+    await ui.type('/');
+
+    // 第 0 行是输入框那一块,在菜单容器之外。
+    await ui.scroll(4, 0, 'down');
+    await ui.press('return');
+
+    expect(submitted).toEqual(['/cmd01']);
+    await ui.destroy();
+  });
+
+  it('@ 文件菜单同样可滚', async () => {
+    const files = ['src/ui/Input.tsx', 'src/agent/loop.ts', 'README.md'];
+    const { submitted, ui: p } = setup([], undefined, () => Promise.resolve(files));
+    const ui = await p;
+    await ui.type('看看 @src');
+    await ui.tick();
+    const row = rowAt(ui.frame(), 'src/ui/Input.tsx');
+
+    await ui.scroll(row.x, row.y, 'down');
+    await ui.press('return'); // 插入选中项
+    await ui.press('return'); // 菜单已关,这次提交
+
+    expect(submitted).toEqual(['看看 @src/agent/loop.ts']);
+    await ui.destroy();
+  });
+
+  it('二级选择器同样可滚', async () => {
+    const picker: SlashCommand = {
+      name: 'picker',
+      description: '',
+      options: () => [{ value: 'alpha' }, { value: 'beta' }, { value: 'gamma' }],
+    };
+    const { submitted, ui: p } = setup([picker]);
+    const ui = await p;
+    await ui.type('/picker');
+    await ui.press('return');
+    await ui.tick();
+    const row = rowAt(ui.frame(), 'beta');
+
+    await ui.scroll(row.x, row.y, 'down'); // alpha → beta
+    await ui.press('return');
+
+    expect(submitted).toEqual(['/picker beta']);
+    await ui.destroy();
+  });
+});

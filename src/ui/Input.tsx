@@ -1,5 +1,5 @@
 import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
-import { Box, Text, useInput, type JSX } from './kit.js';
+import { Box, Text, useInput, type JSX, type ScrollDirection } from './kit.js';
 import { theme, glyphs, inputModeStyle } from './theme.js';
 import { t } from '../i18n/index.js';
 import { fuzzyFilter } from '../app/file-index.js';
@@ -403,6 +403,29 @@ export function Input(props: Props): JSX.Element {
     );
   }
 
+  /**
+   * 三个列表的光标各挪一步。上下键与滚轮共用同一份实现——滚轮就是"上下键,
+   * 只是用手滚的",两者行为(含首尾环绕)必须一致,否则滚到边界时停住、按键
+   * 却会绕回去,同一个列表两套手感。
+   */
+  const moveMenu = (step: -1 | 1) => {
+    const total = matches().length;
+    if (total === 0) return;
+    setMenuIndex((menuCursor() + total + step) % total);
+  };
+  const moveFileMenu = (step: -1 | 1) => {
+    const total = fileMatches().length;
+    if (total === 0) return;
+    setFileMenuTouched(true);
+    setFileMenuIndex((fileCursor() + total + step) % total);
+  };
+  const moveSelector = (step: -1 | 1) =>
+    setSelector((s) =>
+      s && s.options.length > 0
+        ? { ...s, cursor: (s.cursor + s.options.length + step) % s.options.length }
+        : s,
+    );
+
   const insert = (text: string) => {
     const v = value();
     const c = cursor();
@@ -422,13 +445,11 @@ export function Input(props: Props): JSX.Element {
         }
         if (sel.loading || sel.options.length === 0) return;
         if (key.upArrow) {
-          setSelector((s) =>
-            s && { ...s, cursor: (s.cursor + s.options.length - 1) % s.options.length },
-          );
+          moveSelector(-1);
           return;
         }
         if (key.downArrow) {
-          setSelector((s) => s && { ...s, cursor: (s.cursor + 1) % s.options.length });
+          moveSelector(1);
           return;
         }
         // 多选:空格切换光标处选项的选中状态。
@@ -595,21 +616,12 @@ export function Input(props: Props): JSX.Element {
       if (key.upArrow || key.downArrow) {
         // 文件菜单打开 → 在文件菜单里移动(优先于历史/多行光标逻辑)。
         if (fileMatches().length > 0) {
-          setFileMenuTouched(true);
-          setFileMenuIndex(
-            key.upArrow
-              ? (fileCursor() + fileMatches().length - 1) % fileMatches().length
-              : (fileCursor() + 1) % fileMatches().length,
-          );
+          moveFileMenu(key.upArrow ? -1 : 1);
           return;
         }
         // 菜单打开 → 在菜单里移动。
         if (matches().length > 0) {
-          setMenuIndex(
-            key.upArrow
-              ? (menuCursor() + matches().length - 1) % matches().length
-              : (menuCursor() + 1) % matches().length,
-          );
+          moveMenu(key.upArrow ? -1 : 1);
           return;
         }
         // 正在浏览历史(内容未被编辑) → 继续翻历史,即使条目是多行的。
@@ -695,7 +707,12 @@ export function Input(props: Props): JSX.Element {
           </Show>
         </Box>
         <Show when={matches().length > 0}>
-          <Box flexDirection="column" paddingLeft={2}>
+          {/* 滚轮挂在容器上,整块菜单区域都是命中区(事件从行上冒泡过来)。 */}
+          <Box
+            flexDirection="column"
+            paddingLeft={2}
+            onScroll={(direction) => moveMenu(direction === 'up' ? -1 : 1)}
+          >
             <Show when={menuWindowStart() > 0}>
               <Text color={theme.dim}>{t('selector.moreAbove', { n: menuWindowStart() })}</Text>
             </Show>
@@ -721,7 +738,17 @@ export function Input(props: Props): JSX.Element {
           </Box>
         </Show>
         <Show when={fileLoading() || fileMatches().length > 0}>
-          <Box flexDirection="column" paddingLeft={2}>
+          <Box
+            flexDirection="column"
+            paddingLeft={2}
+            // 加载中(还没有任何候选)时不挂:处理器会把滚轮消费掉却什么都不
+            // 做,滚轮既不动光标也到不了下面的时间线。
+            onScroll={
+              fileMatches().length > 0
+                ? (direction) => moveFileMenu(direction === 'up' ? -1 : 1)
+                : undefined
+            }
+          >
             <Show
               when={!fileLoading()}
               fallback={
@@ -767,7 +794,9 @@ export function Input(props: Props): JSX.Element {
         </Show>
       </Box>
     }>
-      {(sel: SelectorState) => <SelectorView state={sel} />}
+      {(sel: SelectorState) => (
+        <SelectorView state={sel} onScroll={(d) => moveSelector(d === 'up' ? -1 : 1)} />
+      )}
     </Show>
   );
 }
@@ -777,7 +806,10 @@ export function Input(props: Props): JSX.Element {
  * (光标移动经 setSelector({...s})),keyed 让整块视图随之重建——不到
  * 十行的列表,重建成本可忽略,换来"组件体内读值即安全"。
  */
-function SelectorView(props: { state: SelectorState }): JSX.Element {
+function SelectorView(props: {
+  state: SelectorState;
+  onScroll?: (direction: ScrollDirection) => void;
+}): JSX.Element {
   const { options, cursor: selCursor, loading, selected } = props.state;
   const multi = props.state.command.multi === true;
   const windowStart = Math.max(
@@ -786,7 +818,7 @@ function SelectorView(props: { state: SelectorState }): JSX.Element {
   );
   const visible = options.slice(windowStart, windowStart + SELECTOR_WINDOW);
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" onScroll={props.onScroll}>
       <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
         <Text bold color={theme.accent}>
           /{props.state.command.name}

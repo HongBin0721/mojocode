@@ -49,6 +49,10 @@ export const zhCN: Record<keyof typeof en, string> = {
   'approvalopt.ask': '写入和 shell 命令都先确认（默认）',
   'approvalopt.auto': '工作区内编辑自由，shell 命令仍需确认',
   'approvalopt.fullAccess': '无沙箱、无确认 — 谨慎使用',
+  'approvalopt.plan': '先调研 — 只读不写，方案获批前不动文件',
+
+  'modepicker.title': '权限档位',
+  'modepicker.note': '仅本会话生效 · /approvals 还会写进工作区配置',
 
   'perm.title': '需要授权',
   'perm.allowOnce': '允许一次',

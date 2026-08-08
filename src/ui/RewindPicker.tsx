@@ -57,7 +57,12 @@ export function RewindPicker(props: Props): JSX.Element {
           {(entry, i) => {
             const active = () => windowStart() + i() === cursor();
             return (
-              <Text color={active() ? theme.accent : undefined} wrap="truncate-end">
+              // 点击即选中该条(等价于把光标移过去再回车)。
+              <Text
+                color={active() ? theme.accent : undefined}
+                wrap="truncate-end"
+                onClick={() => props.onPick(entry)}
+              >
                 {active() ? `${glyphs.pointer} ` : '  '}
                 <Text color={theme.dim}>#{entry.ordinal} </Text>
                 {entry.text.replace(/\s+/g, ' ').trim()}

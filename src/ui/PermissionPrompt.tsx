@@ -180,7 +180,11 @@ export function PermissionPrompt(props: Props): JSX.Element {
             const active = () => index() === selected();
             const color = () => (option.danger ? theme.error : active() ? theme.accent : undefined);
             return (
-              <Text color={active() ? color() ?? theme.accent : undefined}>
+              // 点击直接决策,与数字键直达同一档语义(都不经过光标)。
+              <Text
+                color={active() ? color() ?? theme.accent : undefined}
+                onClick={() => props.onDecide(option.decision)}
+              >
                 {active() ? `${glyphs.pointer} ` : '  '}
                 <Text color={theme.dim}>{index() + 1}.</Text>{' '}
                 <Text color={color()} bold={active()}>

@@ -44,6 +44,7 @@ import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { ModePicker, type ModeOption } from './ModePicker.js';
 import type { TodoItem } from '../tools/index.js';
 import {
   APPROVAL_PRESETS,
@@ -278,6 +279,8 @@ export function App(props: Props): JSX.Element {
   // /setting 设置面板(语言、状态栏)。开着时 Input 与 Footer 卸载,面板
   // 自带按键处理——与回退选择器同一套互斥渲染。
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  // 点底栏权限档位弹出的选项框。与设置面板同一套互斥渲染(Input/Footer 卸载)。
+  const [modePickerOpen, setModePickerOpen] = createSignal(false);
   // esc-esc 回退:第一次 esc 预备(footer 提示),第二次打开回退选择器。
   const [escArmed, setEscArmed] = createSignal(false);
   // shift+tab 切换后在状态栏短暂回显新档位:mode 段可能在 /setting 里被关掉,
@@ -307,11 +310,86 @@ export function App(props: Props): JSX.Element {
   const clearPrefill = () => setPrefill(undefined);
 
   /**
-   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、设置面板三选一(见下方
-   * 渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已卸载,所以任何
-   * 「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
+   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、档位选项框、设置面板
+   * 四选一(见下方渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已
+   * 卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
    */
-  const overlayOpen = () => permission() !== undefined || rewind() !== undefined || settingsOpen();
+  const overlayOpen = () =>
+    permission() !== undefined || rewind() !== undefined || settingsOpen() || modePickerOpen();
+
+  /**
+   * 切到某一档权限(预设 id 或 'plan')。shift+tab 的循环、点击底栏弹出的
+   * 选项框都归到这一个出口上。
+   *
+   * 只改本会话,不落盘:一个随手的按键/点击不该改写工作区配置(要写进
+   * `.mojocode/config.json` 只有 /approvals 一条路)。
+   */
+  const applyMode = (id: ApprovalPresetId | 'plan') => {
+    if (id === 'plan') {
+      session.setPlan(true);
+      setPlanActive(true);
+    } else {
+      const next = presetById(id);
+      session.setPermissions(next);
+      setPerms(next);
+      setPlanActive(false);
+      // full-access 绕过硬拒名单。shift+tab 的循环够不着它,但选项框够得着——
+      // 只给底栏两秒的回显不够:得在时间线上留一条,事后翻记录也看得见这一
+      // 段是在无沙箱下跑的。
+      if (isEphemeralPermissions(next)) {
+        push({ kind: 'notice', level: 'warn', message: t('notice.modeSessionOnly', { mode: id }) });
+      }
+    }
+    // 档位可能在 /setting 里被关掉、Header 又早已滚出屏幕,没有回显就等于
+    // 没有反馈。
+    setModeFlash(id);
+    if (modeFlashTimer) clearTimeout(modeFlashTimer);
+    modeFlashTimer = setTimeout(() => setModeFlash(undefined), 2000);
+  };
+
+  /**
+   * 权限档位循环一步(ask → auto → plan)。full-access 刻意不在循环里。
+   *
+   * 调用方负责挡住覆盖层打开时的情形:授权确认框开着时改规则,等于在"要不要
+   * 放行这一次"的中途改掉规则本身;其余覆盖层渲染期间 Footer 已卸载,切了档位
+   * 没有任何反馈。
+   */
+  const cycleMode = () => {
+    const step = nextCycleStep(
+      { sandbox: session.config.sandbox, approval: session.config.approval },
+      session.config.plan,
+    );
+    applyMode('plan' in step ? 'plan' : step.preset);
+  };
+
+  /**
+   * 底栏档位的选项框(点一下弹出)。它比 shift+tab 多的只是"由你指定落在
+   * 哪一档"——同样只改本会话。plan 与四个预设并列列出:底栏那一段显示的
+   * 就是这五种取值。
+   */
+  const modeOptions = (): ModeOption[] => [
+    ...APPROVAL_PRESETS.map((p) => ({
+      id: p.id as string,
+      label: t(PRESET_DESCRIPTIONS[p.id]),
+      current: !planActive() && p.id === permissionsLabel(perms()),
+    })),
+    { id: 'plan', label: t('approvalopt.plan'), current: planActive() },
+  ];
+
+  const pickMode = (id: string) => {
+    setModePickerOpen(false);
+    applyMode(id as ApprovalPresetId | 'plan');
+  };
+
+  /**
+   * 授权确认框抢占屏幕底部。档位选项框必须就地关掉:它虽然渲染不出来,信号
+   * 还开着——用户决定完确认框之后它会"复活"盖在输入框上,那时一个下意识的
+   * 回车改的是权限档位,而不是提交消息。
+   */
+  const showPermission = (request: PermissionRequest) => {
+    setModePickerOpen(false);
+    setPermission(request);
+  };
 
   // 待处理的权限 resolver。Solid 下就是普通变量:处理器读的永远是当前值。
   let resolvePermission: ((decision: PermissionDecision) => void) | undefined;
@@ -486,7 +564,7 @@ export function App(props: Props): JSX.Element {
             break;
 
           case 'permission-request':
-            setPermission(event.request);
+            showPermission(event.request);
             beginWork('waiting');
             break;
 
@@ -650,7 +728,7 @@ export function App(props: Props): JSX.Element {
 
   // 把权限门禁的询问回调桥接到确认提示组件。
   session.gate.setAsker((request) => {
-    setPermission(request);
+    showPermission(request);
     return new Promise<PermissionDecision>((resolve) => {
       resolvePermission = resolve;
     });
@@ -676,26 +754,7 @@ export function App(props: Props): JSX.Element {
     // 其余覆盖层(回退选择器、设置面板)打开时同样不接:它们渲染期间 Footer
     // 已卸载,切了档位没有任何反馈,之后的写操作会在用户不知情的模式下放行。
     if (key.tab && key.shift && !overlayOpen()) {
-      const step = nextCycleStep(
-        { sandbox: session.config.sandbox, approval: session.config.approval },
-        session.config.plan,
-      );
-      let label: string;
-      if ('plan' in step) {
-        session.setPlan(true);
-        setPlanActive(true);
-        label = 'plan';
-      } else {
-        const next = presetById(step.preset);
-        session.setPermissions(next);
-        setPerms(next);
-        setPlanActive(false);
-        label = step.preset;
-      }
-      // 只在本会话生效,不落盘:一个随手的按键不该改写工作区配置。
-      setModeFlash(label);
-      if (modeFlashTimer) clearTimeout(modeFlashTimer);
-      modeFlashTimer = setTimeout(() => setModeFlash(undefined), 2000);
+      cycleMode();
       return;
     }
     if (key.ctrl && input === 't') {
@@ -1547,6 +1606,9 @@ export function App(props: Props): JSX.Element {
         todos={todoPanelVisible() ? [] : todos()}
         model={model()}
         mode={modeLabel()}
+        // 点底栏的档位弹出选项框(覆盖层打开时 Footer 不在,也就没有"确认框
+        // 中途改规则"的口子)。
+        onModeClick={() => setModePickerOpen(true)}
         root={session.root}
         think={think()}
         segments={statusSegments()}
@@ -1676,9 +1738,9 @@ export function App(props: Props): JSX.Element {
         </Show>
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
-            授权确认框 > 回退选择器 > 设置面板 > 常态输入框,按这个优先级取第一
-            个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者每加一个
-            覆盖层就多一级缩进,还得改上一个人的那一支。 */}
+            授权确认框 > 回退选择器 > 档位选项框 > 设置面板 > 常态输入框,按这个
+            优先级取第一个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者
+            每加一个覆盖层就多一级缩进,还得改上一个人的那一支。 */}
         <Switch fallback={<InputArea />}>
           <Match when={permission()} keyed>
             {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
@@ -1691,6 +1753,13 @@ export function App(props: Props): JSX.Element {
                 onCancel={() => setRewind(undefined)}
               />
             )}
+          </Match>
+          <Match when={modePickerOpen()}>
+            <ModePicker
+              options={modeOptions()}
+              onPick={pickMode}
+              onCancel={() => setModePickerOpen(false)}
+            />
           </Match>
           <Match when={settingsOpen()}>
             <SettingsPanel
