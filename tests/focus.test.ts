@@ -92,7 +92,7 @@ describe('collapseItems 各档语义', () => {
     expect(kinds(collapseItems(items, 'compact'))).toEqual(['user', 'assistant']);
   });
 
-  // /doctor 的整份报告、/mode /think /lang /focus 的确认都是 info 提示,
+  // /doctor 的整份报告、/mode /think /setting /focus 的确认都是 info 提示,
   // 藏掉就成了"敲了命令什么都没发生"。
   it('info 提示恒可见,并像 warn 一样切断折叠段', () => {
     const items = [user(), tool(), notice('info'), tool(), tool(), assistant()];

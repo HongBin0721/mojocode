@@ -167,7 +167,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `ctrl+v` | 粘贴剪贴板中的图片：输入框出现 `[image #N]` 占位符，提交时图片随消息发给模型（macOS 为主平台，Linux 需 `xclip`/`wl-paste`）。注意 DeepSeek 官方 SDK 不支持图片，会被忽略并提示 |
 
 图片长边超过 1568px 时会自动等比降采样（PNG 用 `node:zlib` 手写编解码，JPEG 走纯 JS 的 `jpeg-js`，缩放统一用盒式滤波）——服务商本身就会缩到这个尺寸，多传的像素只会白白撑大会话文件并在后续每一步重传。格式保持不变，重编码后反而更大时保留原图；GIF/WebP 不处理。所有图片另受 5MB/张、10MB/条的上限约束。
-| 命令菜单回车 | 带枚举参数的命令（`/model` `/provider` `/approvals` `/lang`）会进入二级选择器 |
+| 命令菜单回车 | 带枚举参数的命令（`/model` `/provider` `/approvals` `/think` `/focus`）会进入二级选择器 |
 
 **斜杠命令**：
 
@@ -180,7 +180,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `/model <id>` | 切换模型；不带参数列出可用模型 |
 | `/provider <id>` | 切换服务商（kimi / deepseek / glm / …） |
 | `/approvals <预设>` | 切换沙箱与确认策略预设 |
-| `/lang zh-CN` | 切换界面语言 |
+| `/setting` | 打开设置面板：界面语言、状态栏显示项。`↑`/`↓` 选择、回车进入、`esc` 逐级返回；状态栏是多选，空格勾选、回车生效。改动即时生效并写入 `~/.mojocode/config.json` |
 | `/focus <full\|compact\|result>` | 时间线密度并落盘:`full` 全量、`compact` 折叠成段的工具调用为「⋯ N 个工具调用已折叠」、`result` 只看问答。`ctrl+o` 会话内循环切换,随时双向可逆;回答、报错与各类提示在任何档位都不隐藏 |
 | `/compact` | 手动压缩上下文 |
 | `/clear` | 开始新对话 |
@@ -378,7 +378,7 @@ tsls 没有工作区 typescript@5 时命令在而起不来。`--offline` 跳过�
 ### 界面语言
 
 界面内置英文和简体中文。解析顺序：配置 `language` → `MOJOCODE_LANG` → 系统 `LANG`/`LC_ALL`
-（任何 `zh*` 都映射到 zh-CN）。运行中可用 `/lang zh-CN` / `/lang en` 即时切换。
+（任何 `zh*` 都映射到 zh-CN）。运行中在 `/setting` 设置面板里选「语言」即时切换并落盘。
 
 回喂给模型的文本（工具报错、拒绝原因）刻意保持英文——那是 prompt 的一部分，
 混语言会影响 function calling 质量。语言文件在 `src/i18n/`，有 parity 测试保证

@@ -1,4 +1,15 @@
-import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import {
+  batch,
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  on,
+  onCleanup,
+  Show,
+  Switch,
+} from 'solid-js';
 import { Box, ScrollArea, Text, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
 import { Footer } from './Footer.js';
 import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
@@ -32,10 +43,10 @@ import type { SessionHandle } from '../app/session-handle.js';
 import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
+import { SettingsPanel } from './SettingsPanel.js';
 import type { TodoItem } from '../tools/index.js';
 import {
   APPROVAL_PRESETS,
-  STATUS_SEGMENTS,
   canEverWrite,
   isEphemeralPermissions,
   nextCycleStep,
@@ -60,14 +71,14 @@ import {
   saveTimelineMode,
 } from '../config/save.js';
 import { supportedEfforts } from '../model/reasoning.js';
-import { LOCALES, getLocale, isLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
+import { getLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 import { INIT_PROMPT } from '../agent/init.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
 import { readClipboardImage } from '../app/clipboard.js';
 import { formatDoctor } from '../app/doctor.js';
 
-/** 每次渲染时重建,使 /lang 与配置中的语言设置都能生效。 */
+/** 每次渲染时重建,使 /setting 里的语言切换与配置中的语言设置都能生效。 */
 function buildCommands(): SlashCommand[] {
   return [
     { name: 'help', description: t('cmd.help') },
@@ -78,8 +89,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'provider', description: t('cmd.provider') },
     { name: 'approvals', description: t('cmd.approvals') },
     { name: 'think', description: t('cmd.think') },
-    { name: 'lang', description: t('cmd.lang') },
-    { name: 'statusbar', description: t('cmd.statusbar'), multi: true },
+    { name: 'setting', aliases: ['settings'], description: t('cmd.setting') },
     { name: 'focus', description: t('cmd.focus') },
     { name: 'compact', description: t('cmd.compact') },
     { name: 'new', description: t('cmd.new') },
@@ -138,22 +148,6 @@ const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
   full: 'focusopt.full',
   compact: 'focusopt.compact',
   result: 'focusopt.result',
-};
-
-const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
-  mode: 'statusopt.mode',
-  model: 'statusopt.model',
-  cwd: 'statusopt.cwd',
-  think: 'statusopt.think',
-  context: 'statusopt.context',
-  total: 'statusopt.total',
-  todos: 'statusopt.todos',
-};
-
-/** 语言名用各自的母语写法展示,不做翻译。 */
-const LOCALE_LABELS: Record<Locale, string> = {
-  en: 'English',
-  'zh-CN': '简体中文',
 };
 
 /**
@@ -281,9 +275,12 @@ export function App(props: Props): JSX.Element {
   const [ctrlCArmed, setCtrlCArmed] = createSignal(false);
   const [locale, setLocaleState] = createSignal(getLocale());
   const [statusSegments, setStatusSegments] = createSignal<StatusSegment[]>(session.config.statusBar);
+  // /setting 设置面板(语言、状态栏)。开着时 Input 与 Footer 卸载,面板
+  // 自带按键处理——与回退选择器同一套互斥渲染。
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   // esc-esc 回退:第一次 esc 预备(footer 提示),第二次打开回退选择器。
   const [escArmed, setEscArmed] = createSignal(false);
-  // shift+tab 切换后在状态栏短暂回显新档位:mode 段可能被 /statusbar 关掉,
+  // shift+tab 切换后在状态栏短暂回显新档位:mode 段可能在 /setting 里被关掉,
   // Header 又只在默认档时不显示且早已滚出屏幕——没有这个回显,按下去会毫无反馈。
   const [modeFlash, setModeFlash] = createSignal<string | undefined>(undefined);
   let modeFlashTimer: NodeJS.Timeout | undefined;
@@ -308,6 +305,13 @@ export function App(props: Props): JSX.Element {
   // 用户的新草稿。
   const [prefill, setPrefill] = createSignal<{ text: string } | undefined>(undefined);
   const clearPrefill = () => setPrefill(undefined);
+
+  /**
+   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、设置面板三选一(见下方
+   * 渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已卸载,所以任何
+   * 「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
+   */
+  const overlayOpen = () => permission() !== undefined || rewind() !== undefined || settingsOpen();
 
   // 待处理的权限 resolver。Solid 下就是普通变量:处理器读的永远是当前值。
   let resolvePermission: ((decision: PermissionDecision) => void) | undefined;
@@ -669,9 +673,9 @@ export function App(props: Props): JSX.Element {
     // shift+tab 循环切权限档位(ask → auto → plan),与 Claude Code /
     // Codex 的手感一致。full-access 刻意不在循环里。授权确认框开着时不接:
     // 那会在你决定"要不要放行这一次"的中途改掉规则本身。
-    // 回退选择器打开时同样不接:它渲染期间 Footer 已卸载,切了档位没有任何
-    // 反馈,之后的写操作会在用户不知情的模式下放行。
-    if (key.tab && key.shift && !permission() && !rewind()) {
+    // 其余覆盖层(回退选择器、设置面板)打开时同样不接:它们渲染期间 Footer
+    // 已卸载,切了档位没有任何反馈,之后的写操作会在用户不知情的模式下放行。
+    if (key.tab && key.shift && !overlayOpen()) {
       const step = nextCycleStep(
         { sandbox: session.config.sandbox, approval: session.config.approval },
         session.config.plan,
@@ -835,6 +839,35 @@ export function App(props: Props): JSX.Element {
     setPrefill({ text: entry.text });
   };
 
+  /**
+   * 设置面板选定语言。setLocaleState 会让整棵界面树按新 locale 重挂载
+   * (见文件末尾的 keyed Show),所以提示文案在切换之后才取——那句话本身
+   * 就该用新语言说。
+   */
+  const applyLanguage = (next: Locale) => {
+    if (next === locale()) return;
+    setLocale(next);
+    setLocaleState(next);
+    push({ kind: 'notice', level: 'info', message: t('notice.langSet', { lang: next }) });
+    void saveLanguage(next).catch((err: Error) => {
+      push({ kind: 'notice', level: 'warn', message: t('notice.langSaveFailed', { message: err.message }) });
+    });
+  };
+
+  /** 设置面板确认状态栏信息段(面板已按 STATUS_SEGMENTS 顺序规范化)。 */
+  const applyStatusBar = (next: StatusSegment[]) => {
+    setStatusSegments(next);
+    session.config.statusBar = next;
+    push({
+      kind: 'notice',
+      level: 'info',
+      // 空状态栏用与面板同一个词(中文下是「无」),别一边写「无」一边写 none。
+      message: t('notice.statusbarSet', { list: next.join(' ') || t('settings.none') }),
+    });
+    void saveStatusBar(next).catch((err: Error) => {
+      push({ kind: 'notice', level: 'warn', message: t('notice.statusbarSaveFailed', { message: err.message }) });
+    });
+  };
 
   const runCommand = async (raw: string) => {
     const [name, ...rest] = raw.slice(1).trim().split(/\s+/);
@@ -1088,23 +1121,15 @@ export function App(props: Props): JSX.Element {
         break;
       }
 
-      case 'lang': {
-        if (!arg || !isLocale(arg)) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.langUsage', { lang: getLocale() }),
-          });
-          break;
-        }
-        setLocale(arg);
-        setLocaleState(arg);
-        push({ kind: 'notice', level: 'info', message: t('notice.langSet', { lang: arg }) });
-        await saveLanguage(arg).catch((err: Error) => {
-          push({ kind: 'notice', level: 'warn', message: t('notice.langSaveFailed', { message: err.message }) });
-        });
+      // 设置面板:语言与状态栏都收在这里(旧的 /lang、/statusbar 已并入)。
+      // 面板自己带按键处理,命令只负责把它打开。
+      //
+      // 刻意不进 BUSY_BLOCKED_COMMANDS:面板只改显示层,碰不到进行中的流。
+      // 代价是它开着时 Input 卸载,想插话引导得先 esc 关掉面板。
+      case 'setting':
+      case 'settings':
+        setSettingsOpen(true);
         break;
-      }
 
       case 'focus': {
         if (!arg || !(TIMELINE_MODES as readonly string[]).includes(arg)) {
@@ -1128,41 +1153,6 @@ export function App(props: Props): JSX.Element {
             level: 'warn',
             message: t('notice.focusSaveFailed', { message: err.message }),
           });
-        });
-        break;
-      }
-
-      case 'statusbar': {
-        const currentList = statusSegments().join(' ') || 'none';
-        if (!arg) {
-          push({
-            kind: 'notice',
-            level: 'info',
-            message: t('notice.statusbarUsage', { list: currentList }),
-          });
-          break;
-        }
-        const parts = arg === 'none' ? [] : arg.split(/\s+/);
-        const invalid = parts.filter((p) => !(STATUS_SEGMENTS as readonly string[]).includes(p));
-        if (invalid.length > 0) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.statusbarUsage', { list: currentList }),
-          });
-          break;
-        }
-        // 按固定顺序规范化,同时去重。
-        const next = STATUS_SEGMENTS.filter((s) => parts.includes(s));
-        setStatusSegments(next);
-        session.config.statusBar = next;
-        push({
-          kind: 'notice',
-          level: 'info',
-          message: t('notice.statusbarSet', { list: next.join(' ') || 'none' }),
-        });
-        await saveStatusBar(next).catch((err: Error) => {
-          push({ kind: 'notice', level: 'warn', message: t('notice.statusbarSaveFailed', { message: err.message }) });
         });
         break;
       }
@@ -1444,7 +1434,7 @@ export function App(props: Props): JSX.Element {
   };
 
   // 枚举参数的取值来源:在命令菜单上回车会进入二级选择器。
-  // locale() 进依赖:/lang 切换后菜单文案立刻换语言。
+  // locale() 进依赖:设置面板切换语言后菜单文案立刻跟着换。
   const commands = createMemo<SlashCommand[]>(() => {
     locale();
     const optionSources: Record<string, SlashCommand['options']> = {
@@ -1459,14 +1449,6 @@ export function App(props: Props): JSX.Element {
           value: l,
           label: t(THINK_DESCRIPTIONS[l]),
           current: l === think(),
-        })),
-      lang: () =>
-        LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l], current: l === locale() })),
-      statusbar: () =>
-        STATUS_SEGMENTS.map((s) => ({
-          value: s,
-          label: t(SEGMENT_DESCRIPTIONS[s]),
-          current: statusSegments().includes(s),
         })),
       focus: () =>
         TIMELINE_MODES.map((m) => ({
@@ -1520,8 +1502,76 @@ export function App(props: Props): JSX.Element {
   // /focus 过滤在渲染层做,items 数据全量保留——切换档位只是换谓词重画。
   const visibleItems = createMemo(() => collapseItems(items(), timelineMode()));
 
+  /**
+   * 常态的底部区域:目标行 + 输入框 + 状态栏。抽出来只为让下面那串
+   * 「授权确认 / 回退选择器 / 设置面板 / 输入框」的互斥分支一眼看得清。
+   *
+   * 写成组件而不是裸函数,是为了白拿 createComponent 的 untrack:否则将来
+   * 谁在这里加一句顶层的同步信号读取(`const busy = running(); return …`),
+   * 那个信号就成了外层 Switch 的依赖,一变就整块拆了重建——打字打到一半
+   * 草稿没了,而且编译期毫无提示。
+   */
+  const InputArea = () => (
+    <Box flexDirection="column" marginTop={1}>
+      {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
+          而不必敲 /goal 去问。授权确认框、回退选择器或设置面板打开时不渲染
+          (它们走的是那串互斥分支的其他支)。 */}
+      <Show when={goalActive()}>
+        <GoalLine snapshot={goalSnapshot} columns={size.columns} />
+      </Show>
+      <Input
+        onSubmit={handleSubmit}
+        disabled={false}
+        placeholder={
+          running() || work()
+            ? t('input.steer')
+            : planActive()
+              ? t('input.planPlaceholder')
+              : t('input.placeholder')
+        }
+        mode={modeLabel()}
+        busy={running() || Boolean(work())}
+        commands={commands()}
+        onEscape={handleEscape}
+        prefill={prefill()}
+        onPrefillConsumed={clearPrefill}
+        fileIndex={fileLister}
+        readClipboardImage={readClipboardImage}
+        onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
+      />
+      <Footer
+        contextUsed={usage().used}
+        contextWindow={usage().window}
+        cumulativeTokens={usage().total}
+        // 实时面板已在上方展开时,底栏不再重复一行摘要。
+        todos={todoPanelVisible() ? [] : todos()}
+        model={model()}
+        mode={modeLabel()}
+        root={session.root}
+        think={think()}
+        segments={statusSegments()}
+        columns={size.columns}
+        notice={
+          ctrlCArmed()
+            ? t('status.ctrlcAgain')
+            : escArmed()
+              ? t('status.escAgainRewind')
+              : modeFlash()
+                ? t('status.modeCycled', { mode: modeFlash()! })
+                : focusFlash()
+                  ? t('status.focusCycled', { mode: focusFlash()! })
+                  : expandFlash() !== undefined
+                    ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
+                    : copyFlash() !== undefined
+                      ? t('status.selectionCopied', { n: copyFlash()! })
+                      : undefined
+        }
+      />
+    </Box>
+  );
+
   // 界面 JSX 抽成函数,由下方 <Show keyed> 按 locale 重挂载:Solid 没有
-  // "整树重渲染",/lang 切换后的静态文案(占位符、提示、footer 标签)只有
+  // "整树重渲染",切换语言后的静态文案(占位符、提示、footer 标签)只有
   // 重建 JSX 才会重新求值。信号都活在外层,重挂载不丢任何状态;代价是
   // Input 的草稿/历史清空、滚动位置回到粘底——对一个改语言的显式操作可接受。
   const body = () => (
@@ -1625,91 +1675,44 @@ export function App(props: Props): JSX.Element {
           <TodoPanel todos={todos()} columns={size.columns} />
         </Show>
 
-        <Show
-          when={permission()}
-          keyed
-          fallback={
-            <Show
-              when={rewind()}
-              keyed
-              fallback={
-                <Box flexDirection="column" marginTop={1}>
-                  {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
-                      而不必敲 /goal 去问。授权确认框或回退选择器打开时不渲染
-                      (它们走的是这个三元的另外两支)。 */}
-                  <Show when={goalActive()}>
-                    <GoalLine snapshot={goalSnapshot} columns={size.columns} />
-                  </Show>
-                  <Input
-                    onSubmit={handleSubmit}
-                    disabled={false}
-                    placeholder={
-                      running() || work()
-                        ? t('input.steer')
-                        : planActive()
-                          ? t('input.planPlaceholder')
-                          : t('input.placeholder')
-                    }
-                    mode={modeLabel()}
-                    busy={running() || Boolean(work())}
-                    commands={commands()}
-                    onEscape={handleEscape}
-                    prefill={prefill()}
-                    onPrefillConsumed={clearPrefill}
-                    fileIndex={fileLister}
-                    readClipboardImage={readClipboardImage}
-                    onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
-                  />
-                  <Footer
-                    contextUsed={usage().used}
-                    contextWindow={usage().window}
-                    cumulativeTokens={usage().total}
-                    // 实时面板已在上方展开时,底栏不再重复一行摘要。
-                    todos={todoPanelVisible() ? [] : todos()}
-                    model={model()}
-                    mode={modeLabel()}
-                    root={session.root}
-                    think={think()}
-                    segments={statusSegments()}
-                    columns={size.columns}
-                    notice={
-                      ctrlCArmed()
-                        ? t('status.ctrlcAgain')
-                        : escArmed()
-                          ? t('status.escAgainRewind')
-                          : modeFlash()
-                            ? t('status.modeCycled', { mode: modeFlash()! })
-                            : focusFlash()
-                              ? t('status.focusCycled', { mode: focusFlash()! })
-                              : expandFlash() !== undefined
-                                ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
-                                : copyFlash() !== undefined
-                                  ? t('status.selectionCopied', { n: copyFlash()! })
-                                  : undefined
-                    }
-                  />
-                </Box>
-              }
-            >
-              {(entries: RewindEntry[]) => (
-                <RewindPicker
-                  entries={entries}
-                  onPick={handleRewindPick}
-                  onCancel={() => setRewind(undefined)}
-                />
-              )}
-            </Show>
-          }
-        >
-          {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
-        </Show>
+        {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
+            授权确认框 > 回退选择器 > 设置面板 > 常态输入框,按这个优先级取第一
+            个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者每加一个
+            覆盖层就多一级缩进,还得改上一个人的那一支。 */}
+        <Switch fallback={<InputArea />}>
+          <Match when={permission()} keyed>
+            {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
+          </Match>
+          <Match when={rewind()} keyed>
+            {(entries: RewindEntry[]) => (
+              <RewindPicker
+                entries={entries}
+                onPick={handleRewindPick}
+                onCancel={() => setRewind(undefined)}
+              />
+            )}
+          </Match>
+          <Match when={settingsOpen()}>
+            <SettingsPanel
+              language={locale()}
+              segments={statusSegments()}
+              onLanguage={applyLanguage}
+              onStatusBar={applyStatusBar}
+              onClose={() => setSettingsOpen(false)}
+            />
+          </Match>
+        </Switch>
       </Box>
     </Box>
   );
 
+  // 回调**必须**带上参数(哪怕用不到):Solid 的 Show 靠 `children.length > 0`
+  // 判断这是不是「按值调用的子函数」。零元的箭头会被当成普通的响应式子节点
+  // 原样返回,memo 每次拿到的是同一个函数引用 → 语言换了却什么都不重建,
+  // 静态文案(占位符、菜单提示、面板标题)会一直停在旧语言上。
   return (
     <Show when={locale()} keyed>
-      {() => body()}
+      {(_current: Locale) => body()}
     </Show>
   );
 }

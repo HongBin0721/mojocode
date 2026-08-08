@@ -18,7 +18,7 @@ interface Props {
   root: string;
   /** 当前思考强度,auto(默认)时不占位。 */
   think: string;
-  /** 显示哪些信息段,由 /statusbar 配置。 */
+  /** 显示哪些信息段,在 /setting 设置面板里配置。 */
   segments: StatusSegment[];
   /** 终端列数。整行绝不能超宽,见 fitParts 的说明。 */
   columns: number;

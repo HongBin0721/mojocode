@@ -122,8 +122,10 @@ describe('Input esc 分发', () => {
 });
 
 describe('Input 多选选择器', () => {
-  const statusbar: SlashCommand = {
-    name: 'statusbar',
+  // 内置命令目前没有用 multi 的(状态栏已并入 /setting 面板),这里用一个
+  // 假命令测 Input 自带的多选能力本身。
+  const picker: SlashCommand = {
+    name: 'picker',
     description: '',
     multi: true,
     options: () => [
@@ -134,34 +136,34 @@ describe('Input 多选选择器', () => {
   };
 
   it('空格勾选、回车按选项顺序提交所有选中值', async () => {
-    const { submitted, ui: p } = setup([statusbar]);
+    const { submitted, ui: p } = setup([picker]);
     const ui = await p;
-    await ui.type('/statusbar');
+    await ui.type('/picker');
     await ui.press('return'); // 进入选择器
     await ui.tick();
     await ui.press('down'); // 光标移到 context
     await ui.type(' '); // 勾选
     await ui.press('return');
-    expect(submitted).toEqual(['/statusbar model context']);
+    expect(submitted).toEqual(['/picker model context']);
     await ui.destroy();
   });
 
   it('全部取消勾选后回车提交 none', async () => {
-    const { submitted, ui: p } = setup([statusbar]);
+    const { submitted, ui: p } = setup([picker]);
     const ui = await p;
-    await ui.type('/statusbar');
+    await ui.type('/picker');
     await ui.press('return');
     await ui.tick();
     await ui.type(' '); // 取消预选的 model
     await ui.press('return');
-    expect(submitted).toEqual(['/statusbar none']);
+    expect(submitted).toEqual(['/picker none']);
     await ui.destroy();
   });
 
   it('esc 关闭选择器且不提交', async () => {
-    const { submitted, ui: p } = setup([statusbar]);
+    const { submitted, ui: p } = setup([picker]);
     const ui = await p;
-    await ui.type('/statusbar');
+    await ui.type('/picker');
     await ui.press('return');
     await ui.tick();
     await ui.press('escape');

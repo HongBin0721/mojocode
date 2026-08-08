@@ -148,7 +148,7 @@ function cwdFromArgv(argv: string[]): string {
 
 // 语言必须在构建 commander 之前应用:所有命令/选项描述在下面构建时就用
 // t() 求值,晚了的话 `--help` 和 models/sessions 等子命令就只认环境变量,
-// `/lang` 保存的偏好在这些入口上形同虚设——"下次打开恢复默认"的观感即源于此。
+// 设置面板保存的语言偏好在这些入口上形同虚设——"下次打开恢复默认"的观感即源于此。
 // runMain 里的再次应用仍保留:它拿的是完整解析后的配置(含 CLI 覆盖项)。
 await applyConfigLocale(cwdFromArgv(process.argv));
 

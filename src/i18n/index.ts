@@ -26,7 +26,7 @@ export function isLocale(value: string): value is Locale {
 }
 
 // 在 import 时就按环境变量检测,使模块加载时求值的字符串(commander 帮助)
-// 已经是本地化的。之后配置或 `/lang` 会通过 setLocale() 覆盖。
+// 已经是本地化的。之后配置或设置面板的选择会通过 setLocale() 覆盖。
 let current: Locale = detectLocale();
 
 export function setLocale(locale: Locale): void {

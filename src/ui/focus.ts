@@ -13,7 +13,7 @@ export type { TimelineMode };
  * tests/focus.test.ts 锁死,改这里前先看那边。
  *
  * notice 整类都不隐藏,包括 info:斜杠命令的回执正是 info 提示——`/doctor`
- * 的整份报告、`/mode` `/think` `/lang` 的确认、乃至 `/focus` 自己的确认
+ * 的整份报告、`/mode` `/think` `/setting` 的确认、乃至 `/focus` 自己的确认
  * 都是,藏掉就成了"敲了命令什么都没发生"。真正的噪音是工具调用与思考,
  * 提示本身量很小。
  *

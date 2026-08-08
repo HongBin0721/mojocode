@@ -329,7 +329,7 @@ export const configSchema = z.object({
   systemPromptAppend: z.string().optional(),
   /** UI 语言。`auto` 跟随 MOJOCODE_LANG / LANG。 */
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
-  /** 状态栏显示的信息段,可用 /statusbar 调整。 */
+  /** 状态栏显示的信息段,可在 /setting 设置面板里调整。 */
   statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),
   /**
    * 时间线显示密度,/focus 或 ctrl+o 切换。full = 全量;compact = 折叠

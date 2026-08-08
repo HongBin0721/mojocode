@@ -111,7 +111,7 @@ export async function saveReasoningEffort(
   }, file);
 }
 
-/** 保存 `/statusbar` 选择的状态栏信息段。 */
+/** 保存设置面板(/setting)里选择的状态栏信息段。 */
 export async function saveStatusBar(segments: string[], file?: string): Promise<string> {
   return updateGlobalConfig((config) => {
     config.statusBar = segments;
@@ -153,7 +153,7 @@ export async function savePermissions(
   );
 }
 
-/** 保存顶层 `language`,让 `/lang` 的选择在下次启动时生效。 */
+/** 保存顶层 `language`,让设置面板里选的语言在下次启动时生效。 */
 export async function saveLanguage(language: string, file?: string): Promise<string> {
   return updateGlobalConfig((config) => {
     config.language = language;
