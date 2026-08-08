@@ -27,6 +27,7 @@ import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { ModelInfo } from '../model/registry.js';
 import type { DoctorReport } from './doctor.js';
 import type { ImageAttachment } from './attachments.js';
+import type { SkillCommandInfo } from '../skills/discovery.js';
 
 export interface RunOptions {
   display?: string;
@@ -92,5 +93,13 @@ export interface SessionHandle {
   listModels(): Promise<ModelInfo[]>;
   doctor(options: { offline: boolean }): Promise<DoctorReport>;
   refreshEnvironment(): Promise<void>;
+  /** user-invocable 技能投影(命令菜单用),同步读取(远程侧走 SSE 镜像)。 */
+  readonly skills: SkillCommandInfo[];
+  /** 技能列表实质变化时通知(菜单据此重算)。返回退订函数。 */
+  skillsChanged(listener: () => void): () => void;
+  /** 强制重扫技能目录(`/skills`)。 */
+  refreshSkills(): Promise<SkillCommandInfo[]>;
+  /** 斜杠调用技能:激活+展开+跑一整轮,远程侧是 deferred RPC。 */
+  runSkill(name: string, args: string, options?: { display?: string }): Promise<void>;
   dispose(): Promise<void>;
 }

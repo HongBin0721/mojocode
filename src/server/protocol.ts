@@ -24,6 +24,7 @@ import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalStatus } from '../agent/goal.js';
+import type { SkillCommandInfo } from '../skills/discovery.js';
 
 export interface WireError {
   name: string;
@@ -53,6 +54,12 @@ export interface StateSnapshot {
     restored?: boolean;
   };
   todos: TodoItem[];
+  /**
+   * user-invocable 技能的元数据投影(name/description/argument-hint)。
+   * 只有元数据:正文可能含工作区任何内容且体积不限,永不进快照——
+   * 调用走 runSkill RPC,在 server 侧展开。
+   */
+  skills: SkillCommandInfo[];
   /** server 侧的取样时刻,client 外推 goal 计时用。 */
   sentAt: number;
 }
@@ -85,7 +92,7 @@ export interface PermissionReply {
 }
 
 /** 这些方法可能一跑几小时:POST 立即 ack,完成经 SSE call-result 送达。 */
-export const DEFERRED_METHODS = new Set(['run', 'goalRun', 'compact']);
+export const DEFERRED_METHODS = new Set(['run', 'goalRun', 'compact', 'runSkill']);
 
 export function toWireError(error: unknown): WireError {
   if (error instanceof Error) return { name: error.name, message: error.message };

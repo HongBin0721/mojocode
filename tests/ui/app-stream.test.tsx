@@ -32,6 +32,8 @@ async function setup() {
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(async () => {}),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},

@@ -32,6 +32,8 @@ function fakeSession() {
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(async () => {}),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'sess', messages: [] },
     switch: () => provider,
     setMode: () => {},

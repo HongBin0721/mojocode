@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { createTwoFilesPatch } from 'diff';
-import { resolveInsideWorkspace } from '../permissions/sandbox.js';
+import { resolveInsideWorkspace, resolveReadable } from '../permissions/sandbox.js';
 import { truncate, type ToolContext } from './context.js';
 
 const MAX_READ_BYTES = 400_000;
@@ -37,7 +37,11 @@ export function createFileTools(ctx: ToolContext) {
       limit: z.number().int().min(1).max(5000).optional().describe('Maximum number of lines.'),
     }),
     execute: async ({ path: filePath, offset, limit }) => {
-      const resolved = await resolveInsideWorkspace(filePath, sandbox);
+      // 只读路径可落在已激活技能的目录里(L3 资源);写路径仍然只认工作区。
+      const resolved = await resolveReadable(filePath, {
+        ...sandbox,
+        extraReadRoots: ctx.extraReadRoots(),
+      });
       const stat = await fs.stat(resolved.absolute);
       if (stat.isDirectory()) {
         throw new Error(`${resolved.relative} is a directory. Use the glob tool to list its contents.`);

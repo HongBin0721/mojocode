@@ -35,6 +35,8 @@ function makeSession(messages: ModelMessage[]): Session {
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(async () => {}),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'resumed-session-id', messages },
     switch: () => provider,
     setMode: () => {},

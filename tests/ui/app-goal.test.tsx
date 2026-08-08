@@ -65,6 +65,8 @@ async function setup(options?: {
       dispose: () => {},
     },
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setPermissions: () => {},

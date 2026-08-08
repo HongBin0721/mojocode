@@ -390,6 +390,59 @@ tsls 没有工作区 typescript@5 时命令在而起不来。`--offline` 跳过�
 在项目根放 `AGENTS.md`（或 `MOJOCODE.md`），内容会注入系统提示，用来声明项目规范
 （构建命令、代码风格、禁改目录等）。
 
+### 技能（Agent Skills）
+
+技能是可复用的指令包，遵循 [agentskills.io](https://agentskills.io) 开放标准——一个目录
+一个技能，入口是 `SKILL.md`（YAML frontmatter + Markdown 正文），Claude Code / opencode
+生态里现成的技能可以直接拿来用。发现目录按优先级：
+
+```
+<项目>/.mojocode/skills/<名字>/SKILL.md    项目级（可提交进仓库）
+~/.mojocode/skills/<名字>/SKILL.md         全局
+<项目>/.claude/skills/<名字>/SKILL.md      兼容 Claude Code 的项目技能
+~/.claude/skills/<名字>/SKILL.md           兼容 Claude Code 的全局技能
+```
+
+最小示例（`~/.mojocode/skills/release/SKILL.md`）：
+
+```markdown
+---
+description: 发布一个新版本。用户要求发版、打 tag 或更新 changelog 时使用。
+argument-hint: "[版本号]"
+---
+
+按以下步骤发布版本 $0：
+1. 跑通 npm test 与 npm run typecheck
+2. 更新 CHANGELOG.md 与 package.json 的版本号
+3. 提交并打 tag v$0
+```
+
+两个入口：**模型自主调用**——技能的 name+description 常驻在内置 `skill` 工具的描述里
+（每个技能只占几十 token），模型判断相关时自己加载正文；**斜杠直接调用**——技能名
+出现在 `/` 补全菜单里，`/release 1.2.0` 直接展开正文发起一轮（`$ARGUMENTS`、`$0`…`$N`
+被替换成参数），`-p "/release 1.2.0"` 在脚本里同样可用。`/skills` 强制重扫并列出全部
+技能；平时的增删改在 15 秒内自动生效。与内置命令同名的技能不进菜单——内置命令优先。
+
+frontmatter 可选字段：`name`（缺省取目录名，写了必须与目录名一致）、`argument-hint`
+（补全菜单里的参数提示）、`disable-model-invocation: true`（只允许用户斜杠触发，适合
+发版、部署这类有副作用的流程）、`user-invocable: false`（只允许模型加载，适合背景知识）、
+`context: fork`（正文交给子 agent 在独立上下文里执行，只把报告带回主对话，走 task 工具
+同一条通道）、`allowed-tools`（见下）。未知字段一律忽略。
+
+技能目录里可以放 `references/`、`scripts/` 等附属文件,激活后该目录自动成为**只读**
+扩展根——`read`/`glob` 够得着技能自带的资料,但任何写入仍然只限工作区,`.env`、密钥
+等拒绝规则在技能目录里同样生效。
+
+`allowed-tools: Bash(git tag:*) Bash(npm publish:*)` 声明技能希望预先放行的规则。
+**首次激活时会弹一次确认框**,列出全部规则,批准后进本会话的临时授权(等价于确认框里
+的「本次会话始终允许」),拒绝则技能照常加载、后续操作回到逐条确认。规则永远不会
+被技能自动写进配置文件——frontmatter 是随仓库来的内容,落盘授权只能由用户在确认框里
+逐条选择。
+
+**安全提示**:技能正文是喂给模型的指令,与随仓库而来的任何可执行内容一样,存在提示
+注入面——只使用你自己写的或审阅过的技能,`/skills` 与 `mojocode doctor` 都会列出当前
+生效的技能及其来源目录。
+
 ---
 
 ## 四、权限模型

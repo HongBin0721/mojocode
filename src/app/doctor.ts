@@ -19,6 +19,7 @@ import { resolveLspServers, type LspRuntimeStatus } from '../lsp/manager.js';
 import { LspClient } from '../lsp/client.js';
 import { connectMcpServers, type McpStatus } from '../mcp/client.js';
 import { probeModels } from '../model/registry.js';
+import { discoverSkills, skillLocations } from '../skills/discovery.js';
 import { t } from '../i18n/index.js';
 
 /** 每一项检查的结论。`info` 是纯陈述,不计入通过/告警/失败的汇总。 */
@@ -123,7 +124,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
 
   // 各分节并发跑,再按固定顺序组装。三项联网检查(registry 8s、端点 8s、
   // MCP 15s)串起来就是半分钟起步的干等,而它们之间毫无依赖。
-  const [envC, configC, providerC, searchC, lspC, mcpC, sessionsC, workspaceC] = await Promise.all([
+  const [envC, configC, providerC, searchC, lspC, mcpC, sessionsC, workspaceC, skillsC] = await Promise.all([
     envChecks({ version, offline, fetchImpl: input.fetchImpl }),
     configChecks(input),
     config ? providerChecks(config, env, offline, input.fetchImpl) : undefined,
@@ -132,6 +133,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
     config ? mcpChecks(config, offline, input.mcpStatuses) : undefined,
     sessionChecks(input.sessionsDir ?? defaultSessionsDir(), config),
     workspaceChecks(input.root),
+    skillsChecks(input.root),
   ]);
 
   const sections: DoctorSection[] = [
@@ -150,6 +152,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
   sections.push(
     { id: 'sessions', title: t('doctor.section.sessions'), checks: sessionsC },
     { id: 'workspace', title: t('doctor.section.workspace'), checks: workspaceC },
+    { id: 'skills', title: t('doctor.section.skills'), checks: skillsC },
   );
 
   const counts = { ok: 0, warn: 0, fail: 0 };
@@ -848,6 +851,73 @@ async function workspaceChecks(root: string): Promise<DoctorCheck[]> {
     level: 'info',
     detail: memoryFiles.length > 0 ? memoryFiles.join(', ') : t('doctor.memoryNone'),
   });
+
+  return checks;
+}
+
+/**
+ * 技能发现体检:数量、来源分布、解析失败。纯文件系统,不触发激活,
+ * 也不影响会话状态——doctor 里的重扫与 SkillManager 的缓存互不相干。
+ */
+async function skillsChecks(root: string): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+  let index: Awaited<ReturnType<typeof discoverSkills>>;
+  try {
+    index = await discoverSkills(root);
+  } catch (err) {
+    return [
+      {
+        id: 'skills.count',
+        label: t('doctor.check.skillsCount'),
+        level: 'warn',
+        detail: (err as Error).message,
+      },
+    ];
+  }
+
+  const userInvocable = index.skills.filter((s) => s.userInvocable).length;
+  const modelInvocable = index.skills.filter((s) => !s.disableModelInvocation).length;
+  checks.push({
+    id: 'skills.count',
+    label: t('doctor.check.skillsCount'),
+    level: 'info',
+    detail:
+      index.skills.length > 0
+        ? t('doctor.skillsCount', {
+            n: index.skills.length,
+            user: userInvocable,
+            model: modelInvocable,
+          })
+        : t('doctor.skillsNone'),
+  });
+
+  // 来源分布:只列真实存在的目录,`~/.claude/skills` 一类的缺席是常态。
+  const bySource = new Map<string, number>();
+  for (const skill of index.skills) {
+    bySource.set(skill.source, (bySource.get(skill.source) ?? 0) + 1);
+  }
+  const sourceLines: string[] = [];
+  for (const location of skillLocations(root)) {
+    if (!(await fileExists(location.dir))) continue;
+    sourceLines.push(`${location.dir}: ${bySource.get(location.source) ?? 0}`);
+  }
+  if (sourceLines.length > 0) {
+    checks.push({
+      id: 'skills.sources',
+      label: t('doctor.check.skillsSources'),
+      level: 'info',
+      detail: sourceLines.join('\n'),
+    });
+  }
+
+  if (index.failures.length > 0) {
+    checks.push({
+      id: 'skills.parse',
+      label: t('doctor.check.skillsParse'),
+      level: 'warn',
+      detail: index.failures.map((f) => `${f.file}: ${f.reason}`).join('\n'),
+    });
+  }
 
   return checks;
 }

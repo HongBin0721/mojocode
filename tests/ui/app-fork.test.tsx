@@ -35,6 +35,8 @@ async function setup(overrides: { forkSession?: () => Promise<unknown>; isRunnin
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(async () => {}),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'source-session-id', messages: [] },
     forkSession,
     switch: () => provider,

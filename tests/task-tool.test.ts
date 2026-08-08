@@ -288,6 +288,7 @@ describe('子 agent 的 readFiles 与主 agent 隔离', () => {
       gate: { assertCanMutate: () => {}, checkWrite: async () => {} },
       rules: { denyPath: [] },
       readFiles: new Set<string>(),
+      extraReadRoots: () => [],
     };
     // bootstrap 里 subagentTools() 的做法:同一个 context 展开,换一个新的 Set。
     const subContext = { ...base, readFiles: new Set<string>(), subagent: true };

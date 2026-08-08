@@ -78,6 +78,156 @@ export const EXPLORE_PROMPT = `## Explore mode
 This task is read-only research. You only have read/search/web tools — no write, edit or bash.
 Do not attempt changes and do not ask for permission to make them; investigate and report.`;
 
+export interface RunTaskOptions {
+  description: string;
+  prompt: string;
+  mode: TaskMode;
+  toolCallId: string;
+  abortSignal?: AbortSignal;
+}
+
+export interface TaskRunResult {
+  result: string;
+  steps: number;
+  tokens: number;
+  incomplete?: string;
+}
+
+/**
+ * 跑一个子 agent 到收尾并带回最终报告。原来是 task 工具 execute 的主体,
+ * 抽出来是为了让 skill 工具的 `context: fork` 走同一条通道:同样的进度
+ * 事件、同样的 transcript 落盘、同样的 incomplete 契约。
+ */
+export async function runTaskSubagent(deps: TaskToolDeps, opts: RunTaskOptions): Promise<TaskRunResult> {
+  const { description, prompt, mode, toolCallId, abortSignal } = opts;
+  if (abortSignal?.aborted) throw new Error('Task was interrupted before it started.');
+
+  const innerBus = new EventBus();
+  // 子任务用自己的步数上限(taskMaxSteps),缺省沿用 maxSteps。克隆 config
+  // 只为改这一个值;子任务是有界的,轮中 /think 之类的就地修改赶不上它。
+  const maxSteps = deps.config.taskMaxSteps ?? deps.config.maxSteps;
+  const agent = new Agent({
+    model: deps.model(),
+    provider: deps.provider(),
+    config: { ...deps.config, maxSteps },
+    systemPrompt: deps.systemPrompt(mode),
+    tools: deps.tools(mode),
+    bus: innerBus,
+  });
+
+  let steps = 0;
+  let tokens = 0;
+  let currentTool: string | undefined;
+  /** 整轮的收尾原因。'tool-calls' 表示撞上 maxSteps 被截停,不是自然收工。 */
+  let finishReason: string | undefined;
+  /** 最近启动的工具调用(旧→新),供 UI 画过程轨迹。 */
+  const recentCalls: Array<{ toolName: string; input: unknown }> = [];
+  // Agent.run 从不抛错:流级异常以 error 事件呈现后正常收尾。记下最后
+  // 一条,子 agent 一个字都没产出时用它当失败原因,而不是含糊的"没结果"。
+  let lastError: Error | undefined;
+
+  const emitProgress = (): void => {
+    deps.bus.emit({
+      type: 'task-progress',
+      callId: toolCallId,
+      description,
+      steps,
+      tokens,
+      currentTool,
+      recentCalls: [...recentCalls],
+    });
+  };
+
+  innerBus.on((event) => {
+    switch (event.type) {
+      case 'tool-start':
+        currentTool = event.toolName;
+        recentCalls.push({ toolName: event.toolName, input: event.input });
+        if (recentCalls.length > 3) recentCalls.shift();
+        emitProgress();
+        break;
+      case 'tool-end':
+        currentTool = undefined;
+        break;
+      case 'step-end':
+        steps += 1;
+        tokens = event.usage.cumulativeTotalTokens;
+        emitProgress();
+        break;
+      case 'turn-end':
+        finishReason = event.finishReason;
+        break;
+      case 'error':
+        lastError = event.error;
+        break;
+      default:
+        break;
+    }
+  });
+
+  // esc 中断主轮时子 agent 必须跟着停,否则它还在后台烧 token、弹确认框。
+  const onAbort = (): void => agent.abort();
+  abortSignal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    await agent.run(prompt);
+  } finally {
+    abortSignal?.removeEventListener('abort', onAbort);
+    // 中断/失败也要把已花掉的钱记上——token 确实花了。
+    deps.onTokens(tokens);
+    // 过程落盘同样不挑收尾方式:中断/失败恰恰是最需要回查的时候。
+    deps.onTranscript?.({
+      callId: toolCallId,
+      description,
+      mode,
+      steps,
+      tokens,
+      finishReason,
+      ...(lastError ? { error: lastError.message } : {}),
+      messages: [...agent.history],
+    });
+  }
+
+  if (abortSignal?.aborted) throw new Error('Task was interrupted.');
+
+  const result = finalAssistantText(agent.history);
+  if (!result) {
+    throw new Error(
+      lastError
+        ? `The subagent failed: ${lastError.message}`
+        : 'The subagent finished without producing a report.',
+    );
+  }
+
+  /**
+   * 报告是否可信。拿到文字不等于跑完了:
+   * - 'tool-calls' 收尾 = 撞上 maxSteps 被截停,末条 assistant 只有工具调用,
+   *   finalAssistantText 往回找到的多半是开头那句"我先 grep 一下"——把它
+   *   当结论交给主 agent 是最坏的一种错。
+   * - 'length' = 输出被模型的长度上限截断,报告写了一半。
+   * - 有 error 事件 = 中途 429/500,后面的活儿根本没干。
+   * 三种都照常返回已有内容(有总比没有强),但必须明说不完整,否则主 agent
+   * 会把半截调研当成定论。
+   */
+  const incomplete =
+    lastError !== undefined
+      ? `The subagent hit an error and stopped early: ${lastError.message}`
+      : finishReason === 'tool-calls'
+        ? `The subagent ran out of its step budget (${maxSteps} steps) before ` +
+          'finishing. The text below is its last message, not a considered final report.'
+        : finishReason === 'length'
+          ? 'The subagent hit the model output limit; the report is cut off.'
+          : undefined;
+
+  return {
+    // 与所有其他工具一样封顶:子 agent 存在的意义就是别让中间产物淹没
+    // 主上下文,自己却往回灌一份无上限的报告说不过去。
+    result: truncate(result),
+    steps,
+    tokens,
+    ...(incomplete ? { incomplete } : {}),
+  };
+}
+
 export function createTaskTool(deps: TaskToolDeps) {
   return tool({
     description:
@@ -98,134 +248,8 @@ export function createTaskTool(deps: TaskToolDeps) {
         .default('general')
         .describe("'explore' = read-only research (read/glob/grep/web only); 'general' = full tools."),
     }),
-    execute: async ({ description, prompt, mode }, { toolCallId, abortSignal }) => {
-      if (abortSignal?.aborted) throw new Error('Task was interrupted before it started.');
-
-      const innerBus = new EventBus();
-      // 子任务用自己的步数上限(taskMaxSteps),缺省沿用 maxSteps。克隆 config
-      // 只为改这一个值;子任务是有界的,轮中 /think 之类的就地修改赶不上它。
-      const maxSteps = deps.config.taskMaxSteps ?? deps.config.maxSteps;
-      const agent = new Agent({
-        model: deps.model(),
-        provider: deps.provider(),
-        config: { ...deps.config, maxSteps },
-        systemPrompt: deps.systemPrompt(mode),
-        tools: deps.tools(mode),
-        bus: innerBus,
-      });
-
-      let steps = 0;
-      let tokens = 0;
-      let currentTool: string | undefined;
-      /** 整轮的收尾原因。'tool-calls' 表示撞上 maxSteps 被截停,不是自然收工。 */
-      let finishReason: string | undefined;
-      /** 最近启动的工具调用(旧→新),供 UI 画过程轨迹。 */
-      const recentCalls: Array<{ toolName: string; input: unknown }> = [];
-      // Agent.run 从不抛错:流级异常以 error 事件呈现后正常收尾。记下最后
-      // 一条,子 agent 一个字都没产出时用它当失败原因,而不是含糊的"没结果"。
-      let lastError: Error | undefined;
-
-      const emitProgress = (): void => {
-        deps.bus.emit({
-          type: 'task-progress',
-          callId: toolCallId,
-          description,
-          steps,
-          tokens,
-          currentTool,
-          recentCalls: [...recentCalls],
-        });
-      };
-
-      innerBus.on((event) => {
-        switch (event.type) {
-          case 'tool-start':
-            currentTool = event.toolName;
-            recentCalls.push({ toolName: event.toolName, input: event.input });
-            if (recentCalls.length > 3) recentCalls.shift();
-            emitProgress();
-            break;
-          case 'tool-end':
-            currentTool = undefined;
-            break;
-          case 'step-end':
-            steps += 1;
-            tokens = event.usage.cumulativeTotalTokens;
-            emitProgress();
-            break;
-          case 'turn-end':
-            finishReason = event.finishReason;
-            break;
-          case 'error':
-            lastError = event.error;
-            break;
-          default:
-            break;
-        }
-      });
-
-      // esc 中断主轮时子 agent 必须跟着停,否则它还在后台烧 token、弹确认框。
-      const onAbort = (): void => agent.abort();
-      abortSignal?.addEventListener('abort', onAbort, { once: true });
-      try {
-        await agent.run(prompt);
-      } finally {
-        abortSignal?.removeEventListener('abort', onAbort);
-        // 中断/失败也要把已花掉的钱记上——token 确实花了。
-        deps.onTokens(tokens);
-        // 过程落盘同样不挑收尾方式:中断/失败恰恰是最需要回查的时候。
-        deps.onTranscript?.({
-          callId: toolCallId,
-          description,
-          mode,
-          steps,
-          tokens,
-          finishReason,
-          ...(lastError ? { error: lastError.message } : {}),
-          messages: [...agent.history],
-        });
-      }
-
-      if (abortSignal?.aborted) throw new Error('Task was interrupted.');
-
-      const result = finalAssistantText(agent.history);
-      if (!result) {
-        throw new Error(
-          lastError
-            ? `The subagent failed: ${lastError.message}`
-            : 'The subagent finished without producing a report.',
-        );
-      }
-
-      /**
-       * 报告是否可信。拿到文字不等于跑完了:
-       * - 'tool-calls' 收尾 = 撞上 maxSteps 被截停,末条 assistant 只有工具调用,
-       *   finalAssistantText 往回找到的多半是开头那句"我先 grep 一下"——把它
-       *   当结论交给主 agent 是最坏的一种错。
-       * - 'length' = 输出被模型的长度上限截断,报告写了一半。
-       * - 有 error 事件 = 中途 429/500,后面的活儿根本没干。
-       * 三种都照常返回已有内容(有总比没有强),但必须明说不完整,否则主 agent
-       * 会把半截调研当成定论。
-       */
-      const incomplete =
-        lastError !== undefined
-          ? `The subagent hit an error and stopped early: ${lastError.message}`
-          : finishReason === 'tool-calls'
-            ? `The subagent ran out of its step budget (${maxSteps} steps) before ` +
-              'finishing. The text below is its last message, not a considered final report.'
-            : finishReason === 'length'
-              ? 'The subagent hit the model output limit; the report is cut off.'
-              : undefined;
-
-      return {
-        // 与所有其他工具一样封顶:子 agent 存在的意义就是别让中间产物淹没
-        // 主上下文,自己却往回灌一份无上限的报告说不过去。
-        result: truncate(result),
-        steps,
-        tokens,
-        ...(incomplete ? { incomplete } : {}),
-      };
-    },
+    execute: ({ description, prompt, mode }, { toolCallId, abortSignal }) =>
+      runTaskSubagent(deps, { description, prompt, mode, toolCallId, abortSignal }),
   });
 }
 

@@ -82,6 +82,8 @@ function fakeSession() {
     resumeSession: vi.fn(async () => {
       throw new ProviderSwitchError(new Error('missing key for glm'));
     }),
+    runSkill: vi.fn(async () => {}),
+    refreshSkills: vi.fn(async () => [{ name: 'demo', description: 'demo skill' }]),
   };
 
   const session = {
@@ -136,6 +138,10 @@ function fakeSession() {
     listModels: vi.fn(async () => [{ id: 'kimi-k2' }, { id: 'kimi-next' }]),
     doctor: vi.fn(async () => ({ healthy: true, sections: [] })),
     refreshEnvironment: vi.fn(async () => {}),
+    skills: [{ name: 'demo', description: 'demo skill' }],
+    skillsChanged: vi.fn(() => () => {}),
+    refreshSkills: spies.refreshSkills,
+    runSkill: spies.runSkill,
     dispose: vi.fn(async () => {}),
   } as unknown as Session;
 
@@ -223,6 +229,20 @@ describe('server ↔ remote client', () => {
     parts.todos.set([{ content: 'a', status: 'pending' }]);
     await waitFor(() => snapshots.length > 0);
     expect(remote.todos.get()).toEqual([{ content: 'a', status: 'pending' }]);
+  });
+
+  it('skills 进快照镜像;refreshSkills 即时调用;runSkill 走 deferred', async () => {
+    const { parts, remote } = await boot();
+    expect(remote.skills).toEqual([{ name: 'demo', description: 'demo skill' }]);
+
+    const list = await remote.refreshSkills();
+    expect(parts.spies.refreshSkills).toHaveBeenCalledOnce();
+    expect(list).toEqual([{ name: 'demo', description: 'demo skill' }]);
+
+    await remote.runSkill('demo', 'foo bar', { display: '/demo foo bar' });
+    expect(parts.spies.runSkill).toHaveBeenCalledWith('demo', 'foo bar', {
+      display: '/demo foo bar',
+    });
   });
 
   it('即时调用:switch 返回抹除凭据后的 provider,参数原样到达', async () => {
@@ -479,6 +499,7 @@ function minimalState(): StateSnapshot {
     agent: { isRunning: false, isCompacting: false, historyLength: 0 },
     goal: { active: false, busy: false },
     todos: [],
+    skills: [],
     sentAt: Date.now(),
   };
 }

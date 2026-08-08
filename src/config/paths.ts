@@ -40,3 +40,25 @@ export function projectDir(root: string): string {
 export function projectConfigPath(root: string): string {
   return path.join(projectDir(root), 'config.json');
 }
+
+/** `~/.mojocode/skills`——全局技能目录。 */
+export function globalSkillsDir(): string {
+  return path.join(globalDir(), 'skills');
+}
+
+/** `<workspace>/.mojocode/skills`——项目技能目录。 */
+export function projectSkillsDir(root: string): string {
+  return path.join(projectDir(root), 'skills');
+}
+
+/**
+ * `.claude/skills` 兼容目录。生态里现成的技能大多发布在这两个路径下
+ * (Claude Code 的约定),读它们与 gatherEnvironment 兜底读 CLAUDE.md 同理。
+ */
+export function claudeGlobalSkillsDir(): string {
+  return path.join(homeDir(), '.claude', 'skills');
+}
+
+export function claudeProjectSkillsDir(root: string): string {
+  return path.join(root, '.claude', 'skills');
+}

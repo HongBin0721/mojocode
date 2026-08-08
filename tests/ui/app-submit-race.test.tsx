@@ -76,6 +76,8 @@ async function setup(options?: { isRunning?: boolean }) {
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(run),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'test-session', messages: [] },
     newSession: async () => {
       newSessions++;

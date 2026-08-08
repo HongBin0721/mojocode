@@ -86,6 +86,16 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
       });
       return o.incomplete ? `${size} · ${t('sum.taskIncomplete')}` : size;
     }
+    // 内联加载只报名字;fork 形结果(带 steps)复用 task 的规模摘要与
+    // incomplete 提示——被截停的 fork 技能和被截停的子任务是同一种半成品。
+    case 'skill': {
+      if (o.steps === undefined) return t('sum.skill', { name: String(o.name) });
+      const size = t('sum.task', {
+        steps: Number(o.steps),
+        tokens: formatTokensShort(Number(o.tokens)),
+      });
+      return o.incomplete ? `${size} · ${t('sum.taskIncomplete')}` : size;
+    }
     case 'exit_plan':
       // 非计划模式下的误调也返回 approved:false,但那不是"用户打回了方案"
       // ——照直说成打回,时间线就在报告一次根本没发生过的审批。

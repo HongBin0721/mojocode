@@ -151,6 +151,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         ...(session.goal.state?.restored ? { restored: true } : {}),
       },
       todos: session.todos.get(),
+      skills: session.skills,
       sentAt: Date.now(),
     };
   };
@@ -216,6 +217,8 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
     if (!STATE_NEUTRAL_EVENTS.has(event.type)) pushState();
   });
   const offTodos = session.todos.subscribe(() => pushState());
+  // 技能与 todos 同理:非总线驱动的快照字段,变化各自订阅推送。
+  const offSkills = session.skillsChanged(() => pushState());
 
   /**
    * 立即返回结果的方法。抛错原样上抛,由调用处包成 WireError。
@@ -275,6 +278,8 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       case 'refreshEnvironment':
         await session.refreshEnvironment();
         return undefined;
+      case 'refreshSkills':
+        return session.refreshSkills();
       case 'listModels':
         return session.listModels();
       case 'doctor':
@@ -296,7 +301,13 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         ? session.agent.run(args['text'] as string, args['options'] as never)
         : call.method === 'goalRun'
           ? session.goal.run(args['text'] as string, args['options'] as never)
-          : session.agent.compact();
+          : call.method === 'runSkill'
+            ? session.runSkill(
+                args['name'] as string,
+                args['args'] as string,
+                args['options'] as never,
+              )
+            : session.agent.compact();
     void promise
       .then((value) => broadcast({ kind: 'call-result', callId: call.id, ok: true, value }))
       .catch((error: unknown) =>
@@ -446,6 +457,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
     close: async () => {
       offBus();
       offTodos();
+      offSkills();
       for (const client of sseClients) client.end();
       sseClients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));

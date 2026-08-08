@@ -626,3 +626,62 @@ describe('硬停理由按调用方身份措辞', () => {
     );
   });
 });
+
+describe('confirmSessionRules(技能 allowed-tools 预授权)', () => {
+  it('批准后按规则形状分桶进会话规则', async () => {
+    const { gate, asked } = makeGate(presetById('ask'));
+    const ok = await gate.confirmSessionRules('demo', [
+      'Bash(git status:*)',
+      'Mcp(some_tool)',
+      'WebSearch',
+      'WebFetch(domain:example.com)',
+      'docs/**',
+    ]);
+    expect(ok).toBe(true);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.toolName).toBe('skill');
+    expect(asked[0]!.risk).toBe('execute');
+    expect(asked[0]!.suggestedRule).toBeUndefined();
+    const rules = gate.exportSessionRules();
+    expect(rules.allowBash).toEqual(['Bash(git status:*)', 'Mcp(some_tool)']);
+    expect(rules.allowNet).toEqual(['WebSearch', 'WebFetch(domain:example.com)']);
+    expect(rules.allowWrite).toEqual(['docs/**']);
+  });
+
+  it('批准后预授权的命令不再逐条弹确认', async () => {
+    const { gate, ask } = makeGate(presetById('ask'));
+    await gate.confirmSessionRules('demo', ['Bash(git log:*)']);
+    ask.mockClear();
+    await expect(gate.checkBash('git log --oneline', '.')).resolves.toBeUndefined();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('拒绝返回 false、不抛错、桶不动', async () => {
+    const { gate, ask } = makeGate(presetById('ask'), { type: 'deny' });
+    const ok = await gate.confirmSessionRules('demo', ['Bash(git status:*)']);
+    expect(ok).toBe(false);
+    expect(ask).toHaveBeenCalledOnce();
+    const rules = gate.exportSessionRules();
+    expect(rules.allowBash).toEqual([]);
+    expect(rules.allowWrite).toEqual([]);
+    expect(rules.allowNet).toEqual([]);
+  });
+
+  it('danger-full-access 短路为 true 不弹框;空规则同样不弹', async () => {
+    const { gate, ask } = makeGate(presetById('full-access'));
+    await expect(gate.confirmSessionRules('demo', ['Bash(rm -rf /:*)'])).resolves.toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+    // 短路不落桶:full-access 本来就全放行,规则进桶反而会在切回 ask 后残留。
+    expect(gate.exportSessionRules().allowBash).toEqual([]);
+
+    const askGate = makeGate(presetById('ask'));
+    await expect(askGate.gate.confirmSessionRules('demo', [])).resolves.toBe(true);
+    expect(askGate.ask).not.toHaveBeenCalled();
+  });
+
+  it('计划模式下 full-access 不短路(计划模式压过沙箱)', async () => {
+    const { gate, ask } = makeGate(presetById('full-access'), { type: 'allow' }, true);
+    await gate.confirmSessionRules('demo', ['Bash(git status:*)']);
+    expect(ask).toHaveBeenCalledOnce();
+  });
+});

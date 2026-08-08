@@ -343,6 +343,39 @@ export class PermissionGate {
     return { approved: false, reason: decision.type === 'deny' ? decision.reason : undefined };
   }
 
+  /**
+   * 技能 allowed-tools 的一次性会话预授权(整批问一次,与逐条确认的
+   * request() 相对)。拒绝返回 false 而不抛错——技能正文照常加载,只是
+   * 后续工具调用回到逐条确认的常态,与"用户打回方案"同一态度:这是正常
+   * 选择,不是失败。
+   *
+   * 批准后规则进**会话**桶(remember),不落盘:frontmatter 是随仓库来的
+   * 内容,让它一句话就把规则写进项目配置等于永久后门;要留存该走确认框
+   * 的 allow-persist,那是用户逐条看过的。danger-full-access 短路为 true:
+   * 反正全放行,弹框是纯打扰。
+   */
+  async confirmSessionRules(origin: string, rules: string[]): Promise<boolean> {
+    if (rules.length === 0) return true;
+    if (!this.options.plan && this.sandbox === 'danger-full-access') return true;
+
+    const req: PermissionRequest = {
+      id: randomUUID(),
+      toolName: 'skill',
+      title: t('perm.skillRules', { name: origin }),
+      detail: rules.join('\n'),
+      // execute 桶只是缺省归属;真正分桶在下面按规则前缀逐条判。
+      risk: 'execute',
+    };
+    const decision = await this.askSerialized(req);
+    this.options.bus.emit({ type: 'permission-resolved', id: req.id, decision });
+    if (decision.type === 'deny') return false;
+
+    for (const rule of rules) {
+      this.remember(riskOfRule(rule), rule);
+    }
+    return true;
+  }
+
   private async request(req: PermissionRequest): Promise<void> {
     const decision = await this.askSerialized(req);
     this.options.bus.emit({ type: 'permission-resolved', id: req.id, decision });
@@ -466,6 +499,17 @@ export class PermissionGate {
     else if (risk === 'network') this.options.rules.allowNet.push(rule);
     else this.options.rules.allowBash.push(ruleToPrefix(rule));
   }
+}
+
+/**
+ * allowed-tools 规则 → 会话桶。规则串的形状即桶的选择依据:
+ * `Bash(x:*)` / `Mcp(name)` 进 bash 桶(remember 的 execute 分支),
+ * `WebSearch` / `WebFetch(domain:x)` 进 net 桶,其余当写入 glob。
+ */
+function riskOfRule(rule: string): PermissionRequest['risk'] {
+  if (rule.startsWith('Bash(') || rule.startsWith('Mcp(')) return 'execute';
+  if (rule === 'WebSearch' || rule.startsWith('WebFetch(')) return 'network';
+  return 'write';
 }
 
 /** `src/foo/bar.ts` → `src/foo/**`,批准一个文件即覆盖其所在目录。 */

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -568,5 +568,48 @@ describe('LSP 真握手探测', () => {
     const check = find(report, 'lsp:probe');
     expect(check?.level).toBe('warn');
     expect(check?.detail).toContain('failed to start during this session');
+  });
+});
+
+describe('skills 检查', () => {
+  // 家目录也要指进临时目录:发现会扫 ~/.mojocode/skills 与 ~/.claude/skills,
+  // 不 mock 的话开发者机器上的真实技能会渗进计数断言。
+  beforeEach(() => {
+    vi.stubEnv('HOME', dir);
+    vi.stubEnv('USERPROFILE', dir);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('无技能:count 为 info,detail 提示 none', async () => {
+    const report = await collectDoctor(input());
+    const count = find(report, 'skills.count');
+    expect(count?.level).toBe('info');
+    expect(count?.detail).toContain('none');
+    expect(find(report, 'skills.parse')).toBeUndefined();
+  });
+
+  it('有技能与解析失败:计数正确,失败列 warn', async () => {
+    const skillsDir = path.join(dir, '.mojocode', 'skills');
+    await fs.mkdir(path.join(skillsDir, 'good'), { recursive: true });
+    await fs.writeFile(
+      path.join(skillsDir, 'good', 'SKILL.md'),
+      '---\ndescription: a fine skill\ndisable-model-invocation: true\n---\nbody\n',
+    );
+    await fs.mkdir(path.join(skillsDir, 'broken'), { recursive: true });
+    await fs.writeFile(path.join(skillsDir, 'broken', 'SKILL.md'), '---\nname: broken\n---\n');
+
+    const report = await collectDoctor(input());
+    const count = find(report, 'skills.count');
+    expect(count?.detail).toContain('1 skills');
+    expect(count?.detail).toContain('1 user-invocable');
+    expect(count?.detail).toContain('0 model-invocable');
+    const sources = find(report, 'skills.sources');
+    expect(sources?.detail).toContain(skillsDir);
+    const parse = find(report, 'skills.parse');
+    expect(parse?.level).toBe('warn');
+    expect(parse?.detail).toContain('broken');
+    expect(parse?.detail).toContain('description');
   });
 });

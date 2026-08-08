@@ -38,6 +38,8 @@ async function setup(timeline: TimelineMode = 'full') {
     todos: { get: () => [], subscribe: () => () => {} },
     goal: stubGoal(async () => {}),
     mcpStatuses: [],
+    skills: [],
+    skillsChanged: () => () => {},
     store: { id: 'sess', messages: [] },
     switch: () => provider,
     setMode: () => {},

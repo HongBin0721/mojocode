@@ -4,6 +4,7 @@ import { summarizeToolResult } from '../tools/index.js';
 import { unwrapGuidance } from '../agent/loop.js';
 import { unwrapAttachments } from '../app/attachments.js';
 import { isInitPrompt } from '../agent/init.js';
+import { unwrapSkillPrompt } from '../skills/invocation.js';
 import { t } from '../i18n/index.js';
 
 /** 压缩摘要消息的开头标记,与 src/agent/compact.ts 写入的内容保持一致。 */
@@ -36,6 +37,12 @@ export function replayTimeline(messages: ModelMessage[]): NewTimelineItem[] {
       // /init 的完整指令在历史里;时间线还原为当时输入的命令本身。
       if (isInitPrompt(text)) {
         items.push({ kind: 'user', text: '/init' });
+        continue;
+      }
+      // 斜杠技能同理:历史里是展开后的正文,时间线还原成 `/name args`。
+      const skillCommand = unwrapSkillPrompt(text);
+      if (skillCommand) {
+        items.push({ kind: 'user', text: skillCommand });
         continue;
       }
       // 运行中插入的引导消息持久化的是包装后的版本;@ 引用展开的消息同理。
@@ -142,11 +149,13 @@ export function collectRewindEntries(messages: ModelMessage[]): RewindEntry[] {
     const text = contentText(message.content);
     const images = imageLabels(message.content);
     if ((!text && images.length === 0) || text.startsWith(COMPACT_MARKER)) return;
-    // /init 显示为命令本身:回退到它会把 `/init` 填回输入框,重发即重跑。
+    // /init 与斜杠技能都显示为命令本身:回退到它会把命令填回输入框,重发即重跑。
     entries.push({
       index,
       ordinal: entries.length + 1,
-      text: isInitPrompt(text) ? '/init' : joinWithImages(unwrapUserText(text), images),
+      text: isInitPrompt(text)
+        ? '/init'
+        : (unwrapSkillPrompt(text) ?? joinWithImages(unwrapUserText(text), images)),
     });
   });
   return entries.reverse();

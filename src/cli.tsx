@@ -26,6 +26,7 @@ import { formatDoctor, runDoctor } from './app/doctor.js';
 import { detectLocale, setLocale, t } from './i18n/index.js';
 import { INIT_PROMPT } from './agent/init.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
+import { parseSlashInvocation } from './skills/invocation.js';
 
 type TuiModule = typeof import('./ui/tui.js');
 
@@ -678,6 +679,20 @@ async function runMain(flags: MainFlags): Promise<void> {
       !loaded.config.plan;
     if (isInit && !writesFree) {
       session.bus.emit({ type: 'notice', level: 'warn', message: t('cli.initNeedsWrite') });
+    }
+    // `-p "/技能名 args"` 与 TUI 的斜杠技能调用对齐:runSkill 负责激活、
+    // 展开、跑轮次(参数不做 @ 展开——技能参数是字面值)。不认识的斜杠
+    // 文本照旧当普通 prompt 发出,与引入技能之前的行为一字不差。
+    if (!isInit) {
+      const invocation = parseSlashInvocation(flags.print!);
+      if (invocation && session.skills.some((s) => s.name === invocation.name)) {
+        await session.runSkill(invocation.name, invocation.args, {
+          display: flags.print!.trim(),
+        });
+        await session.dispose();
+        process.stdout.write('\n');
+        return;
+      }
     }
     // -p 同样支持 @文件引用(含图片):展开后发给模型,display 保留原文
     // (--json 的事件流与 --resume 回放看到的都是用户输入的原样)。

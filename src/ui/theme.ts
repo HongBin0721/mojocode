@@ -91,6 +91,7 @@ const TOOL_LABELS: Record<string, string> = {
   todo: 'Update Todos',
   exit_plan: 'Plan',
   task: 'Task',
+  skill: 'Skill',
 };
 
 export function toolDisplayName(name: string): string {
@@ -212,6 +213,8 @@ export function formatToolInput(toolName: string, input: unknown): string {
     // 完整 prompt 又长又是给子 agent 看的,括号里放用户可读的短标签。
     case 'task':
       return `${String(i.description ?? '')}${i.mode === 'explore' ? ' · explore' : ''}`;
+    case 'skill':
+      return `${String(i.name ?? '')}${i.arguments ? ` · ${String(i.arguments)}` : ''}`;
     // 不带参数:任务数在紧随其后的清单里一目了然,写进括号只是重复。
     case 'todo':
       return '';

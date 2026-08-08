@@ -69,6 +69,18 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   `plan`, so a stray keystroke can only tighten permissions, never loosen them.
 - `src/tools/` — builtin `read write edit glob grep bash web_fetch todo exit_plan`, plus
   `web_search` when a search backend resolves, plus `task` (subagent — one recursion level).
+- `src/skills/` — Agent Skills (agentskills.io `SKILL.md` dirs): discovery from
+  `.mojocode/skills` + `.claude/skills` (project > global, 15s-TTL `SkillManager`),
+  a `skill` tool whose description carries the L1 name+description list (rebuilt in place
+  on digest change — the tools object is shared by reference with the running Agent),
+  and slash invocation (`/name args` → `runSkill` on Session: activate → substitute
+  `$ARGUMENTS`/`$N` → run a turn wrapped in the `<skill-command>` replay envelope,
+  `invocation.ts` — first-line marker is a persistence contract like INIT_PROMPT_MARKER).
+  Activation adds the skill dir as a **read-only** extra root (`resolveReadable` in
+  sandbox.ts — read/glob only; writes still single-root) and, for `allowed-tools`,
+  asks once per session via `gate.confirmSessionRules` (session buckets only, never
+  persisted from frontmatter). `context: fork` runs the body through `runTaskSubagent`;
+  subagents get the skill tool without `runFork` (fork inlines — one recursion level).
 - `src/agent/` — loop, system prompt (`prompt.ts` injects this file), compaction (`compact.ts`).
 - `src/mcp/` — MCP client; MCP tools are wrapped as AI SDK tools through the same gate.
 - `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs with a parity test asserting key sets match.

@@ -96,6 +96,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
     { name: 'mcp', description: t('cmd.mcp') },
+    { name: 'skills', description: t('cmd.skills') },
     { name: 'doctor', description: t('cmd.doctor') },
     { name: 'cost', description: t('cmd.cost') },
     { name: 'resume', description: t('cmd.resume') },
@@ -719,6 +720,14 @@ export function App(props: Props): JSX.Element {
     onCleanup(off);
   }
 
+  // 技能列表变化(新增/删除 SKILL.md、/skills 强制重扫)时 bump 信号,
+  // 驱动 commands memo 重算,`/` 菜单跟着刷新。
+  const [skillsTick, setSkillsTick] = createSignal(0);
+  {
+    const off = session.skillsChanged(() => setSkillsTick((n) => n + 1));
+    onCleanup(off);
+  }
+
   // 启动时就带着目标(`mojocode -c` 恢复的会话):bootstrap 在 App 挂载之前
   // 就 restore 过了,那条 goal-start 没人听见。这里补一次提示。只在挂载时跑
   // 一次,所以 TUI 内 /resume 恢复的目标仍由实时事件呈现,不会重复两条。
@@ -1301,6 +1310,36 @@ export function App(props: Props): JSX.Element {
         });
         break;
 
+      // 强制重扫技能目录并列出(名字、参数提示、描述)。远程模式下这也是
+      // 把 server 侧刚出现的技能立刻拉进 `/` 菜单的手动通道(平时靠 TTL)。
+      case 'skills': {
+        try {
+          const list = await session.refreshSkills();
+          push({
+            kind: 'notice',
+            level: 'info',
+            message:
+              list.length > 0
+                ? t('notice.skillsList', {
+                    list: list
+                      .map(
+                        (s) =>
+                          `/${s.name}${s.argumentHint ? ` ${s.argumentHint}` : ''} — ${s.description}`,
+                      )
+                      .join('\n'),
+                  })
+                : t('notice.skillsNone'),
+          });
+        } catch (err) {
+          push({
+            kind: 'notice',
+            level: 'warn',
+            message: t('notice.skillsFailed', { message: (err as Error).message }),
+          });
+        }
+        break;
+      }
+
       // 体检读的是会话此刻的配置(含 /approvals、/model 改过的值),MCP 直接
       // 采信已连上的状态——重新连一遍会把每个 stdio server 的子进程再拉起
       // 一份。`/doctor offline` 跳过联网那两项(端点探测、版本比对)。
@@ -1400,8 +1439,33 @@ export function App(props: Props): JSX.Element {
         break;
       }
 
-      default:
+      default: {
+        // 不是内置命令:查技能表。命中则整轮交给 runSkill(激活、展开、
+        // 跑轮次都在会话进程侧),display 用用户敲的原文。
+        const skill = name ? session.skills.find((s) => s.name === name) : undefined;
+        if (skill) {
+          // 技能发起完整一轮,运行中禁止。与 `/plan <任务>` 同理走内联检查:
+          // BUSY_BLOCKED_COMMANDS 是静态表,列不进动态发现的名字。
+          if (busy) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name: name ?? '' }) });
+            break;
+          }
+          setRunning(true);
+          void session
+            .runSkill(skill.name, arg, { display: raw.trim() })
+            // runSkill 是 RPC:不接住的话传输层 rejection 会掀掉整个 TUI。
+            .catch((err: Error) => {
+              push({
+                kind: 'notice',
+                level: 'warn',
+                message: t('notice.skillRunFailed', { message: err.message }),
+              });
+            })
+            .finally(() => setRunning(false));
+          break;
+        }
         push({ kind: 'notice', level: 'warn', message: t('notice.unknownCommand', { name: name ?? '' }) });
+      }
     }
   };
 
@@ -1544,7 +1608,19 @@ export function App(props: Props): JSX.Element {
           }));
       },
     };
-    return buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
+    const builtin = buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
+    // 磁盘上的技能拼在内置命令之后。同名时**内置优先**(与 Claude Code 相反):
+    // 内置命令是不可替代的会话操作,不能被仓库里的一个文件顶掉。
+    // description 是用户内容,原样展示,不过 t()。
+    skillsTick();
+    const taken = new Set(builtin.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+    const skillCommands = session.skills
+      .filter((s) => !taken.has(s.name))
+      .map((s) => ({
+        name: s.name,
+        description: s.argumentHint ? `${s.description} · ${s.argumentHint}` : s.description,
+      }));
+    return [...builtin, ...skillCommands];
   });
 
   // 工作中且有任务时,状态行下方挂实时任务面板(Claude Code 的 ctrl+t 面板);

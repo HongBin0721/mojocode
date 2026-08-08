@@ -282,3 +282,21 @@ describe('collectRewindEntries', () => {
     expect(collectRewindEntries([])).toEqual([]);
   });
 });
+
+describe('斜杠技能信封的回放', () => {
+  it('replayTimeline 把技能信封还原成 /name args', () => {
+    const items = replayTimeline([
+      { role: 'user', content: '<skill-command>/demo foo bar</skill-command>\n\nexpanded body' },
+    ]);
+    expect(items).toEqual([{ kind: 'user', text: '/demo foo bar' }]);
+  });
+
+  it('collectRewindEntries 同样还原;普通消息不受影响', () => {
+    const entries = collectRewindEntries([
+      { role: 'user', content: '<skill-command>/demo x</skill-command>\n\nbody' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'plain question' },
+    ]);
+    expect(entries.map((e) => e.text)).toEqual(['plain question', '/demo x']);
+  });
+});

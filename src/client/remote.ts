@@ -35,6 +35,7 @@ import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { GoalStopReason } from '../core/events.js';
 import type { ModelInfo } from '../model/registry.js';
 import type { DoctorReport } from '../app/doctor.js';
+import type { SkillCommandInfo } from '../skills/discovery.js';
 import { ProviderSwitchError } from '../app/bootstrap.js';
 import type { RunOptions, SessionHandle } from '../app/session-handle.js';
 import {
@@ -88,6 +89,10 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
   // todos 迷你 store:App 用 get/subscribe,变化来自 state 推送。
   let todoItems: TodoItem[] = state.todos;
   const todoListeners = new Set<(items: TodoItem[]) => void>();
+  // skills 同款迷你 store(App 的命令菜单靠它感知列表变化)。老 server 的
+  // 快照没有 skills 字段,镜像为一律空表。
+  let skillItems = state.skills ?? [];
+  const skillListeners = new Set<() => void>();
   const applyState = (next: StateSnapshot): void => {
     state = next;
     if (next.agent.isRunning) optimistic.run = false;
@@ -96,6 +101,11 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     if (JSON.stringify(next.todos) !== JSON.stringify(todoItems)) {
       todoItems = next.todos;
       for (const listener of todoListeners) listener(todoItems);
+    }
+    const nextSkills = next.skills ?? [];
+    if (JSON.stringify(nextSkills) !== JSON.stringify(skillItems)) {
+      skillItems = nextSkills;
+      for (const listener of skillListeners) listener();
     }
   };
 
@@ -177,7 +187,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     });
     // 完成回执的历史刷新挂在 completion 上,ack 失败时一并收尾。
     const settled = completion.finally(() => {
-      if (method === 'run' || method === 'goalRun') {
+      if (method === 'run' || method === 'goalRun' || method === 'runSkill') {
         optimistic.run = false;
         optimistic.goal = false;
       }
@@ -189,7 +199,9 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // 那时 call-result 帧可能先于 ack 的 fetch promise 落地——上面的 finally
     // 先清了标志,ack 的 .then 再把它置回 true,就永远没人清了。isRunning
     // 从此恒为真:命令全被 busy 拦、esc 永远走中断、提交一律退化成 inject。
-    if (method === 'run') optimistic.run = true;
+    // runSkill 同样占 run 标志:它就是一整轮 agent.run,漏了这里就复现
+    // "ack 迟到把标志置回、永远没人清"的卡死。
+    if (method === 'run' || method === 'runSkill') optimistic.run = true;
     if (method === 'goalRun') {
       optimistic.run = true;
       optimistic.goal = true;
@@ -509,6 +521,23 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     listModels: () => call<ModelInfo[]>('listModels'),
     doctor: (opts) => call<DoctorReport>('doctor', opts),
     refreshEnvironment: () => call<void>('refreshEnvironment'),
+    get skills() {
+      return skillItems;
+    },
+    skillsChanged: (listener: () => void) => {
+      skillListeners.add(listener);
+      return () => skillListeners.delete(listener);
+    },
+    refreshSkills: async () => {
+      const list = await call<SkillCommandInfo[]>('refreshSkills');
+      // RPC 返回值直接更新镜像:随后的 state 推送内容相同,diff 后静默。
+      skillItems = list;
+      for (const listener of skillListeners) listener();
+      return list;
+    },
+    // deferred:一整轮 agent.run,乐观 run 标志的置位/清除见 callDeferred。
+    runSkill: (name, args, opts) =>
+      callDeferred('runSkill', { name, args, options: opts }).then(() => undefined),
     dispose: async () => {
       const wasClosed = closed;
       closed = true;

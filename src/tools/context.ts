@@ -33,6 +33,12 @@ export interface ToolContext {
    * 注入(它才够得着系统提示词重建与会话持久化);目前只有 exit_plan 调用。
    */
   exitPlanMode: () => Permissions;
+  /**
+   * 额外只读根(已激活技能的目录,realpath 过)。惰性 getter,理由同
+   * searchBackend:激活发生在会话中途,现取现算才拿到当下的集合。
+   * 只有 read 与 glob 消费它——写路径永远只认工作区单根。
+   */
+  extraReadRoots: () => string[];
 }
 
 /** 防止单个超大工具结果撑爆上下文窗口。 */
