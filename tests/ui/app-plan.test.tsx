@@ -325,24 +325,54 @@ describe('shift+tab 循环切权限模式', () => {
     await ui.destroy();
   });
 
-  // 一次按键选的档位要活到下次启动,否则每开一个会话都得重按几下。
-  it('切完的档位落盘到工作区配置', async () => {
+  /**
+   * 盲步进不落盘:按下去之前并不知道会落在哪一档,一次误触不该改写可提交的
+   * 项目配置。要留存就点底栏那个选项框(点名指定哪一档),或 /approvals。
+   */
+  it('循环不落盘,只改本会话', async () => {
     await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
-    const { ui } = await setup({}, { permissions: presetById('ask') });
+    const { setPermissions, ui } = await setup({}, { permissions: presetById('ask') });
 
     await ui.press('tab', { shift: true });
-    // 落盘是 fire-and-forget 的,等它真的写完。
-    let saved: Record<string, unknown> | undefined;
-    for (let i = 0; i < 50 && !saved; i += 1) {
-      saved = await readProjectConfig();
-      if (!saved) await sleep(10);
-    }
+    await sleep(50);
 
-    expect(saved).toEqual({ sandbox: 'workspace-write', approval: 'on-request' });
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('auto'));
+    expect(await readProjectConfig()).toBeUndefined();
     await ui.destroy();
   });
 
-  // plan 是一次协作方式的选择,不是档位:存下来会让每个新会话都开在计划模式。
+  /**
+   * 从 plan 出来这一步循环规定落到 read-only,那是"退出计划模式"的附带结果,
+   * 不是用户对档位的表态。真按它落盘的话,项目里签入的 auto 会被两下 tab 悄悄
+   * 改写成 read-only,反馈只有底栏闪的两秒。
+   */
+  it('退出 plan 不改写工作区配置', async () => {
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
+    const configPath = path.join(projectRoot, '.mojocode', 'config.json');
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    // 项目里签入的档位:auto。
+    await fs.writeFile(configPath, JSON.stringify(presetById('auto')));
+
+    const { setPermissions, setPlan, ui } = await setup(
+      {},
+      { permissions: presetById('auto'), plan: true },
+    );
+
+    await ui.press('tab', { shift: true });
+    await sleep(50);
+
+    expect(setPermissions).toHaveBeenLastCalledWith(presetById('read-only'));
+    expect(setPlan).not.toHaveBeenCalled();
+    // 文件原样:本会话收紧到 read-only,签入的 auto 不动。
+    expect(await readProjectConfig()).toEqual({
+      sandbox: 'workspace-write',
+      approval: 'on-request',
+    });
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
+    await ui.destroy();
+  });
+
+  // plan 任何路径都不落盘:存下来会让每个新会话都开在计划模式。
   it('plan 不落盘', async () => {
     await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
     const { setPlan, ui } = await setup({}, { permissions: presetById('full-access') });
@@ -407,7 +437,12 @@ describe('点击底栏档位弹出的选项框', () => {
     await ui.destroy();
   });
 
-  it('点选项框里的一档即生效(只改本会话)', async () => {
+  /**
+   * 点名指定的那一档要活到下次启动,否则每开一个会话都得重选一次;而且落盘
+   * 改的是可提交的项目配置,时间线上得说一句,不能只有底栏闪两秒。
+   */
+  it('点选项框里的一档即生效,并落盘到工作区配置', async () => {
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
     const { setPermissions, ui } = await setup();
 
     await clickLast(ui, 'ask');
@@ -419,6 +454,18 @@ describe('点击底栏档位弹出的选项框', () => {
     expect(setPermissions).toHaveBeenLastCalledWith(presetById('read-only'));
     // 选完即关,底栏回来了(选项框的注脚不再出现)。
     expect(ui.frame()).not.toContain('Permission mode');
+
+    // 落盘是 fire-and-forget 的,等它真的写完。
+    let saved: Record<string, unknown> | undefined;
+    for (let i = 0; i < 50 && !saved; i += 1) {
+      saved = await readProjectConfig();
+      if (!saved) await sleep(10);
+    }
+    expect(saved).toEqual({ ...presetById('read-only') });
+    await ui.tick();
+    expect(ui.frame()).toContain('Saved for this workspace');
+
+    await fs.rm(path.join(projectRoot, '.mojocode'), { recursive: true, force: true });
     await ui.destroy();
   });
 

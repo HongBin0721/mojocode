@@ -319,8 +319,8 @@ export function App(props: Props): JSX.Element {
     permission() !== undefined || rewind() !== undefined || settingsOpen() || modePickerOpen();
 
   /**
-   * 把两轴档位写进本工作区的 `.mojocode/config.json`(shift+tab、底栏选项框、
-   * /approvals 共用这一条落盘路径)。
+   * 把两轴档位写进本工作区的 `.mojocode/config.json`(底栏选项框与 /approvals
+   * 共用这一条落盘路径;shift+tab 不走,见 applyMode)。
    *
    * 落盘是尽力而为:写不进去只提示一句,本会话的档位早已生效,不该被一个
    * 写文件的失败拖住。返回配置文件路径,失败为 undefined。
@@ -339,14 +339,18 @@ export function App(props: Props): JSX.Element {
    * 切到某一档权限(预设 id 或 'plan')。shift+tab 的循环、点击底栏弹出的
    * 选项框都归到这一个出口上。
    *
-   * 档位会落盘到本工作区的 `.mojocode/config.json`(与 /approvals 同一个出口),
-   * 所以选一次就管到下次启动,不必每开一个会话重按几下。落盘是尽力而为:
-   * 写失败只提示,本会话的档位照样已经生效。
+   * `persist` 由调用方点名,没有默认值:落盘改的是可提交的项目配置,新加一个
+   * 入口时必须停下来想一次它算不算"用户点名指定了这一档"。
+   * - 选项框(与 /approvals 同理):用户指着某一档选的,落盘,选一次管到下次启动。
+   * - shift+tab:盲步进——按下去之前并不知道会落在哪一档,一次误触不该改写
+   *   项目配置。尤其是从 plan 出来那一步,循环规定落到 read-only,那是"退出
+   *   计划模式"的附带结果,不是用户对档位的表态;真按它落盘,项目里签入的
+   *   `auto` 就被两下 tab 悄悄改成了 read-only。
    *
-   * plan 不落盘——它是一次协作方式的选择(方案批准后就该还原),不是档位;
-   * 存下来会让每个新会话都莫名其妙地开在计划模式里。
+   * plan 任何情况下都不落盘——它是一次协作方式的选择(方案批准后就该还原),
+   * 不是档位;存下来会让每个新会话都莫名其妙地开在计划模式里。
    */
-  const applyMode = (id: ApprovalPresetId | 'plan') => {
+  const applyMode = (id: ApprovalPresetId | 'plan', opts: { persist: boolean }) => {
     if (id === 'plan') {
       session.setPlan(true);
       setPlanActive(true);
@@ -355,12 +359,24 @@ export function App(props: Props): JSX.Element {
       session.setPermissions(next);
       setPerms(next);
       setPlanActive(false);
-      // full-access 绕过硬拒名单,而且现在会一直留到下次启动——只给底栏两秒的
-      // 回显不够:得在时间线上留一条,事后翻记录也看得见这一段是在无沙箱下跑的。
+      // full-access 绕过硬拒名单——只给底栏两秒的回显不够:得在时间线上留一条,
+      // 事后翻记录也看得见这一段是在无沙箱下跑的。
       if (isDangerousPermissions(next)) {
         push({ kind: 'notice', level: 'warn', message: t('notice.modeDanger', { mode: id }) });
       }
-      void persistPermissions(next);
+      // 落盘的那条路要说出来:一次点选改掉了一个可提交的文件,不该只有底栏
+      // 闪两秒。(/approvals 自己会提示,它不走这里。)
+      if (opts.persist) {
+        void persistPermissions(next).then((saved) => {
+          if (saved) {
+            push({
+              kind: 'notice',
+              level: 'info',
+              message: t('notice.modeSavedTo', { path: saved }),
+            });
+          }
+        });
+      }
     }
     // 档位可能在 /setting 里被关掉、Header 又早已滚出屏幕,没有回显就等于
     // 没有反馈。
@@ -371,6 +387,7 @@ export function App(props: Props): JSX.Element {
 
   /**
    * 权限档位循环一步(read-only → ask → auto → full-access → plan → read-only)。
+   * 只改本会话,不落盘:盲步进的落点不算用户对档位的表态(见 applyMode)。
    *
    * 调用方负责挡住覆盖层打开时的情形:授权确认框开着时改规则,等于在"要不要
    * 放行这一次"的中途改掉规则本身;其余覆盖层渲染期间 Footer 已卸载,切了档位
@@ -381,13 +398,13 @@ export function App(props: Props): JSX.Element {
       { sandbox: session.config.sandbox, approval: session.config.approval },
       session.config.plan,
     );
-    applyMode('plan' in step ? 'plan' : step.preset);
+    applyMode('plan' in step ? 'plan' : step.preset, { persist: false });
   };
 
   /**
-   * 底栏档位的选项框(点一下弹出)。它比 shift+tab 多的只是"由你指定落在
-   * 哪一档"——同样只改本会话。plan 与四个预设并列列出:底栏那一段显示的
-   * 就是这五种取值。
+   * 底栏档位的选项框(点一下弹出)。它比 shift+tab 多的是"由你指定落在哪一档"
+   * ——正因为是点名指定的,这一档会落盘到本工作区,选一次管到下次启动。
+   * plan 与四个预设并列列出:底栏那一段显示的就是这五种取值。
    */
   const modeOptions = (): ModeOption[] => [
     ...APPROVAL_PRESETS.map((p) => ({
@@ -400,7 +417,7 @@ export function App(props: Props): JSX.Element {
 
   const pickMode = (id: string) => {
     setModePickerOpen(false);
-    applyMode(id as ApprovalPresetId | 'plan');
+    applyMode(id as ApprovalPresetId | 'plan', { persist: true });
   };
 
   /**
