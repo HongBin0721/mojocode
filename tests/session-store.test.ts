@@ -346,6 +346,109 @@ describe('fork', () => {
   });
 });
 
+describe('展示历史(displayMessages)', () => {
+  const MARKER = '[Earlier conversation, compacted]';
+  const summaryMsg = () => msg('user', `${MARKER}\n\n摘要正文\n\n[End of compacted history — continue from here.]`);
+
+  /** 模拟 doCompact:摘要 + 原历史的尾部切片(同一批对象引用)。 */
+  function compactedOf(history: ModelMessage[], keep: number): ModelMessage[] {
+    return [summaryMsg(), ...history.slice(history.length - keep)];
+  }
+
+  it('压缩不缩减展示历史;重开后由 display 字段恢复', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 3; i++) history.push(msg('user', `问 ${i}`), msg('assistant', `答 ${i}`));
+    await store.save(history);
+
+    const compacted = compactedOf(history, 2);
+    await store.save(compacted);
+    expect(store.messages).toHaveLength(3);
+    expect(store.displayMessages).toHaveLength(6);
+
+    // 压缩后继续对话:两份历史都要前进。
+    compacted.push(msg('user', '新问题'), msg('assistant', '新回答'));
+    await store.save(compacted);
+    expect(store.displayMessages).toHaveLength(8);
+    expect(String(store.displayMessages[0]!.content)).toBe('问 0');
+
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages).toHaveLength(5);
+    expect(reopened.displayMessages).toHaveLength(8);
+    expect(String(reopened.displayMessages[7]!.content)).toBe('新回答');
+    // 展示历史里没有摘要消息本身。
+    expect(reopened.displayMessages.every((m) => !String(m.content).startsWith(MARKER))).toBe(true);
+  });
+
+  it('rewind 是真删:展示历史同步截尾', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const history: ModelMessage[] = [msg('user', 'a'), msg('assistant', 'b'), msg('user', 'c'), msg('assistant', 'd')];
+    await store.save(history);
+    await store.save(history.slice(0, 2));
+
+    expect(store.displayMessages).toHaveLength(2);
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.displayMessages).toHaveLength(2);
+  });
+
+  it('压缩后 rewind:展示历史只截掉真被删的尾部', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 3; i++) history.push(msg('user', `问 ${i}`), msg('assistant', `答 ${i}`));
+    await store.save(history);
+
+    const compacted = compactedOf(history, 2); // [摘要, 问2, 答2]
+    await store.save(compacted);
+    await store.save(compacted.slice(0, 2)); // rewind 掉「答 2」
+
+    expect(store.displayMessages).toHaveLength(5);
+    expect(String(store.displayMessages[4]!.content)).toBe('问 2');
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.displayMessages).toHaveLength(5);
+  });
+
+  it('旧文件没有 display 字段:按快照形状启发式重建', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 3; i++) history.push(msg('user', `问 ${i}`), msg('assistant', `答 ${i}`));
+    await store.save(history);
+    await store.save(compactedOf(history, 2));
+
+    // 把快照记录里的 display 字段剥掉,模拟旧版本写出的文件。
+    const file = path.join(dir, `${store.id}.jsonl`);
+    const stripped = (await fs.readFile(file, 'utf8'))
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => {
+        const record = JSON.parse(l) as { kind: string; display?: unknown };
+        delete record.display;
+        return JSON.stringify(record);
+      })
+      .join('\n');
+    await fs.writeFile(file, `${stripped}\n`, 'utf8');
+
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages).toHaveLength(3);
+    expect(reopened.displayMessages).toHaveLength(6);
+    expect(String(reopened.displayMessages[0]!.content)).toBe('问 0');
+  });
+
+  it('fork 继承展示历史,重开分叉文件后仍在', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const history: ModelMessage[] = [];
+    for (let i = 0; i < 3; i++) history.push(msg('user', `问 ${i}`), msg('assistant', `答 ${i}`));
+    await store.save(history);
+    await store.save(compactedOf(history, 2));
+
+    const forked = await store.fork({ provider: 'kimi', model: 'm' });
+    expect(forked.displayMessages).toHaveLength(6);
+
+    const reopened = await SessionStore.open(forked.id, dir);
+    expect(reopened.messages).toHaveLength(3);
+    expect(reopened.displayMessages).toHaveLength(6);
+  });
+});
+
 describe('list 与旁车', () => {
   it('list 按 updatedAt 倒序、按 root 过滤,旁车损坏时回退', async () => {
     const a = await SessionStore.create({ root: '/w1', provider: 'kimi', model: 'm', dir });

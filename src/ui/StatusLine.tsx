@@ -1,7 +1,7 @@
 import { createSignal, onCleanup } from 'solid-js';
 import stringWidth from 'string-width';
 import { Box, Text, type JSX } from './kit.js';
-import { theme, formatTokens, toolDisplayName, truncateWidth } from './theme.js';
+import { theme, formatTokens, meterBar, toolDisplayName, truncateWidth } from './theme.js';
 import { t, type MessageKey } from '../i18n/index.js';
 
 /** 工作阶段。undefined(空闲)时整行不渲染,由 App 控制。 */
@@ -19,6 +19,12 @@ export interface WorkState {
   phase: WorkPhase;
   /** 附加信息(目前只有工具名)。 */
   detail?: string;
+  /**
+   * 进度(0–1),有值时在阶段名后画一条 ▰▱ 进度条。目前只有压缩用:摘要
+   * 总长事先未知,由 App 按典型长度估算并封顶在 99%,收尾事件到达即熄灯,
+   * 所以条永远不会自己走到满格(与 Footer 的 meterBar「满格=到顶」同语义)。
+   */
+  progress?: number;
   /** 本轮工作的起始时刻,用于显示已用时。 */
   since: number;
 }
@@ -37,6 +43,9 @@ interface Props extends WorkState {
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 const FRAME_MS = 100;
+
+/** 进度条格数,与 Footer 的上下文表同宽,视觉上是同一族。 */
+const BAR_CELLS = 10;
 
 /** 不同阶段用不同颜色,一眼区分在想、在答、在跑工具还是在等人。 */
 const PHASE_COLORS: Record<WorkPhase, string> = {
@@ -88,7 +97,26 @@ export function StatusLine(props: Props): JSX.Element {
 
   // 头部(spinner 两列 + 阶段)本身就超宽的极窄终端:硬截阶段名,绝不折行。
   const fittedLabel = () => truncateWidth(label(), Math.max(1, props.columns - 3));
-  const headWidth = () => 2 + stringWidth(fittedLabel());
+
+  // 进度条:` ▰▰▰▱▱▱▱▱▱▱ 42%`。装不下时整条不画(尾部各段先按 DROP_ORDER
+  // 让路,见 headWidth 把条宽计入后 tail 的自适应),绝不折行、绝不截半条。
+  const barParts = () => {
+    if (props.progress === undefined) return undefined;
+    const { filled, empty } = meterBar(props.progress, BAR_CELLS);
+    const pct = `${Math.round(Math.min(1, Math.max(0, props.progress)) * 100)}%`;
+    return { filled: ` ${filled}`, rest: `${empty} ${pct}` };
+  };
+  const barShown = () => {
+    const bar = barParts();
+    if (!bar) return undefined;
+    const width = stringWidth(bar.filled) + stringWidth(bar.rest);
+    return 2 + stringWidth(fittedLabel()) + width <= props.columns - 1 ? bar : undefined;
+  };
+  const headWidth = () => {
+    const bar = barShown();
+    const barWidth = bar ? stringWidth(bar.filled) + stringWidth(bar.rest) : 0;
+    return 2 + stringWidth(fittedLabel()) + barWidth;
+  };
 
   const tail = (): string => {
     const parts = new Map<TailId, string>();
@@ -116,6 +144,8 @@ export function StatusLine(props: Props): JSX.Element {
       <Text color={color()} bold>
         {fittedLabel()}
       </Text>
+      <Text color={color()}>{barShown()?.filled ?? ''}</Text>
+      <Text color={theme.dim}>{barShown()?.rest ?? ''}</Text>
       <Text color={theme.dim}>{tail()}</Text>
     </Box>
   );

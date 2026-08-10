@@ -1,14 +1,23 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ModelMessage } from 'ai';
 
-const { mockGenerateText } = vi.hoisted(() => ({ mockGenerateText: vi.fn() }));
+const { mockStreamText } = vi.hoisted(() => ({ mockStreamText: vi.fn() }));
 
-vi.mock('ai', () => ({ generateText: mockGenerateText }));
+vi.mock('ai', () => ({ streamText: mockStreamText }));
 
 import { compactMessages } from '../src/agent/compact.js';
 
+/** 模拟 streamText 的返回:按 chunks 逐段吐出 textStream。 */
+function streamOf(...chunks: string[]) {
+  return {
+    textStream: (async function* () {
+      yield* chunks;
+    })(),
+  };
+}
+
 beforeEach(() => {
-  mockGenerateText.mockReset().mockResolvedValue({ text: '摘要' });
+  mockStreamText.mockReset().mockImplementation(() => streamOf('摘要'));
 });
 
 /** 一轮长工具循环:开头一条用户消息,之后全是 assistant 调用与 tool 结果。 */
@@ -42,7 +51,7 @@ describe('摘要请求剥离图片', () => {
     const result = await compactMessages(messages, {} as never);
     expect(result.removedMessages).toBeGreaterThan(0);
 
-    const sent = mockGenerateText.mock.calls[0]![0].messages as ModelMessage[];
+    const sent = mockStreamText.mock.calls[0]![0].messages as ModelMessage[];
     const first = sent[0]!;
     expect(first.content).toEqual([
       { type: 'text', text: '看这张图' },
@@ -59,7 +68,7 @@ describe('compactMessages 的切分点', () => {
     const result = await compactMessages(toolLoop(20), {} as never);
 
     expect(result.removedMessages).toBeGreaterThan(0);
-    expect(mockGenerateText).toHaveBeenCalledTimes(1);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
   it('绝不把工具结果和产生它的 assistant 调用拆开', async () => {
@@ -91,7 +100,7 @@ describe('compactMessages 的切分点', () => {
     const result = await compactMessages(short, {} as never);
 
     expect(result).toEqual({ messages: short, removedMessages: 0, summaryChars: 0 });
-    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockStreamText).not.toHaveBeenCalled();
   });
 
   it('尾部全是工具结果时安全放弃,而不是切出孤立结果', async () => {
@@ -106,6 +115,48 @@ describe('compactMessages 的切分点', () => {
 
     const result = await compactMessages(messages, {} as never);
     expect(result.removedMessages).toBe(0);
-    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockStreamText).not.toHaveBeenCalled();
+  });
+});
+
+describe('流式进度回调', () => {
+  it('先以 0 报出「请求已发出」,之后按增量报累计字符数', async () => {
+    mockStreamText.mockImplementation(() => streamOf('abc', 'de', 'f'));
+    const seen: number[] = [];
+
+    const result = await compactMessages(toolLoop(10), {} as never, undefined, (chars) =>
+      seen.push(chars),
+    );
+
+    expect(seen).toEqual([0, 3, 5, 6]);
+    expect(result.summaryChars).toBe(6);
+  });
+
+  it('历史太短提前返回时不调用进度回调', async () => {
+    const short: ModelMessage[] = [
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '在' },
+    ];
+    const seen: number[] = [];
+
+    await compactMessages(short, {} as never, undefined, (chars) => seen.push(chars));
+
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('流式错误语义', () => {
+  it('streamText 吞掉的错误被收集并重抛,与 generateText 一致', async () => {
+    // 模拟 AI SDK 的行为:错误不进 textStream(流直接结束),只回调 onError。
+    mockStreamText.mockImplementation(
+      ({ onError }: { onError: (payload: { error: unknown }) => void }) => ({
+        textStream: (async function* () {
+          yield '半截摘';
+          onError({ error: new Error('boom') });
+        })(),
+      }),
+    );
+
+    await expect(compactMessages(toolLoop(10), {} as never)).rejects.toThrow('boom');
   });
 });

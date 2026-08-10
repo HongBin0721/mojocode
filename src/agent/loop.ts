@@ -220,7 +220,9 @@ export class Agent {
 
   private async doCompact(): Promise<void> {
     const generation = this.historyGeneration;
-    const result = await compactMessages(this.messages, this.options.model);
+    const result = await compactMessages(this.messages, this.options.model, undefined, (chars) =>
+      this.options.bus.emit({ type: 'compaction-progress', chars }),
+    );
     if (result.removedMessages === 0) return;
     // 压缩期间历史被换掉了(/new、/clear、恢复会话):这份摘要针对的是
     // 已经不存在的对话,写回去等于让被丢弃的会话复活。
@@ -377,7 +379,9 @@ export class Agent {
 
         if (shouldCompact(this.lastInputTokens, provider.contextWindow, config.compactThreshold)) {
           this.noticeContextNearFull();
-          const compacted = await compactMessages(next, model);
+          const compacted = await compactMessages(next, model, undefined, (chars) =>
+            bus.emit({ type: 'compaction-progress', chars }),
+          );
           if (compacted.removedMessages > 0) {
             this.lastInputTokens = undefined;
             this.historyNeedsCompact = true;

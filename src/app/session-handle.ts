@@ -67,7 +67,10 @@ export interface GateHandle {
 
 export interface StoreHandle {
   readonly id: string;
+  /** 模型历史(压缩后是摘要+尾巴)。回退选择器等"喂给模型什么"的场景用它。 */
   readonly messages: ModelMessage[];
+  /** 完整展示历史(压缩不缩减)。`/resume` 的时间线回放用它。 */
+  readonly displayMessages: ModelMessage[];
   save(messages: ModelMessage[]): Promise<void>;
 }
 

@@ -80,7 +80,15 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
 
   // ---- 镜像状态 ----
   let state = (await fetchJson('/state')) as StateSnapshot;
-  let history = ((await fetchJson('/history')) as { messages: ModelMessage[] }).messages;
+  // 展示历史(压缩不缩减)与模型历史一起镜像;旧 server 没有该字段,
+  // 回退到模型历史(回放会把摘要显示成一行压缩提示,与旧行为一致)。
+  let history: ModelMessage[] = [];
+  let displayHistory: ModelMessage[] = [];
+  const applyHistory = (payload: { messages: ModelMessage[]; displayMessages?: ModelMessage[] }) => {
+    history = payload.messages;
+    displayHistory = payload.displayMessages ?? payload.messages;
+  };
+  applyHistory((await fetchJson('/history')) as { messages: ModelMessage[] });
   let closed = false;
 
   // 乐观运行标志(见文件头注释)。
@@ -121,7 +129,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     try {
       do {
         historyDirty = false;
-        history = ((await fetchJson('/history')) as { messages: ModelMessage[] }).messages;
+        applyHistory((await fetchJson('/history')) as { messages: ModelMessage[] });
       } while (historyDirty);
     } catch {
       // 尽力而为:断线时由 SSE 侧统一报错,这里不重复。
@@ -429,6 +437,12 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       compact: () => callDeferred('compact').then(() => undefined),
       setHistory: (messages) => {
         // 镜像即时更新:回退选择器选完立刻要读 agent.history 重放时间线。
+        // 展示历史同步截尾(rewind 是真删,server 侧的 store 也会这么做);
+        // 随后的 refreshHistory 会用 server 的权威版本覆盖。
+        const removed = history.length - messages.length;
+        if (removed > 0 && removed <= displayHistory.length) {
+          displayHistory = displayHistory.slice(0, displayHistory.length - removed);
+        }
         history = messages;
         void call('setHistory', { messages }).catch(() => {});
       },
@@ -478,11 +492,15 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       get messages() {
         return history;
       },
+      get displayMessages() {
+        return displayHistory;
+      },
       save: (messages) => call('saveHistory', { messages }),
     },
     newSession: async () => {
       const result = await call<{ id: string }>('newSession');
       history = [];
+      displayHistory = [];
       await refreshState();
       return result;
     },

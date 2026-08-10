@@ -122,6 +122,21 @@ describe('流式中断/出错时的收尾', () => {
     await ui.destroy();
   });
 
+  it('无切点的长代码块在流式期间完整可见(动态区并入时间线)', async () => {
+    const { bus, ui } = await setup();
+
+    // 围栏内没有可提交的切点:旧预览模式下只显示尾部 5 行,'代码第0行'
+    // 在 text-end 之前不会出现;并入时间线后整块随粘底滚动完整可见。
+    const block = ['```js', ...Array.from({ length: 12 }, (_, i) => `代码第${i}行`)].join('\n');
+    bus.emit({ type: 'text-delta', id: '0', text: block });
+    await ui.tick();
+
+    const out = ui.frame();
+    expect(out).toContain('代码第0行');
+    expect(out).toContain('代码第11行');
+    await ui.destroy();
+  });
+
   it('正常 text-end 仍照常定稿(回归)', async () => {
     const { bus, ui } = await setup();
 
@@ -134,6 +149,28 @@ describe('流式中断/出错时的收尾', () => {
     // 视口帧里这段文本只出现一次(时间线定稿那一条)。
     const occurrences = ui.frame().split('正常结束的回答').length - 1;
     expect(occurrences).toBe(1);
+    await ui.destroy();
+  });
+});
+
+describe('压缩进度', () => {
+  // 回归:progress 是可选 prop,App 漏传时 typecheck 与 StatusLine 的单测
+  // 都不报错,进度条却在任何路径上都出不来。这里走完整链路:总线事件 →
+  // work 信号 → StatusLine 渲染。
+  it('compaction-progress 事件让状态行画出进度条与百分比', async () => {
+    const { bus, ui } = await setup();
+
+    bus.emit({ type: 'compaction-progress', chars: 1500 });
+    await ui.tick();
+
+    const out = ui.frame();
+    expect(out).toContain('▰');
+    expect(out).toContain('50%');
+
+    // 收尾事件:agent 空闲(isRunning=false),状态行熄灯。
+    bus.emit({ type: 'compaction', removedMessages: 3, summaryChars: 1500 });
+    await ui.tick();
+    expect(ui.frame()).not.toContain('▰');
     await ui.destroy();
   });
 });

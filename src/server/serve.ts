@@ -58,6 +58,9 @@ const STATE_NEUTRAL_EVENTS = new Set([
   'reasoning-start',
   'reasoning-delta',
   'reasoning-end',
+  // 压缩摘要的流式进度与文本增量同性质:isCompacting 的翻转由前后的
+  // 非中性事件(notice / compaction / call ack)带出快照,进度本身不沾。
+  'compaction-progress',
 ]);
 
 /**
@@ -402,7 +405,24 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       }
 
       if (route === 'GET /history') {
-        json(res, 200, { messages: session.agent.history });
+        // 展示历史从 store 取(压缩不缩减它),但它只随落盘前进——轮子跑到
+        // 一半 attach 上来时,内存历史里已有的当轮消息还没持久化,拼上这段
+        // 后缀,时间线回放才和 agent.history 一样"新"。非扩展(压缩进行中
+        // 等瞬态)就退回落盘的展示历史,宁可少一截也不能错。
+        const memory = session.agent.history;
+        const persisted = session.store.messages;
+        const isExtension =
+          memory.length >= persisted.length && persisted.every((m, i) => memory[i] === m);
+        const displayMessages = isExtension
+          ? [...session.store.displayMessages, ...memory.slice(persisted.length)]
+          : session.store.displayMessages;
+        // 从未压缩过的会话里两份历史逐条相同,带上就是把整份记录发两遍——
+        // 而 refreshHistory 挂在 turn-end/aborted/compaction 上,是热路径。
+        // client 侧 `?? messages` 的回退正好接住这个省略(旧 server 同款)。
+        const displayDiffers =
+          displayMessages.length !== memory.length ||
+          !displayMessages.every((m, i) => m === memory[i]);
+        json(res, 200, { messages: memory, ...(displayDiffers ? { displayMessages } : {}) });
         return;
       }
 

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { sessionsDir } from '../config/paths.js';
+import { COMPACT_MARKER } from '../agent/compact.js';
 import type { ApprovalPolicy, SandboxMode } from '../config/schema.js';
 import type { TodoItem } from '../tools/todo.js';
 
@@ -64,6 +65,12 @@ interface SnapshotRecord {
   kind: 'snapshot';
   at: string;
   messages: ModelMessage[];
+  /**
+   * 回放用的完整展示历史,仅在与 messages 不同时写入(压缩把模型历史换成
+   * 摘要,但用户在 `/resume` 里该看到的是原始对话)。缺失时(旧文件)由
+   * open() 按快照形状启发式重建,见 reconcileDisplay。
+   */
+  display?: ModelMessage[];
 }
 
 interface StateRecord {
@@ -97,6 +104,68 @@ interface TaskRecord {
 
 type Record_ = MetaRecord | MessagesRecord | AppendRecord | SnapshotRecord | StateRecord | TaskRecord;
 
+/**
+ * 逐消息记住序列化结果。带 base64 图片的消息单条就有几 MB,而 open() 里
+ * 每条缺 display 字段的快照记录都要比一遍两份历史——不记的话
+ * `--resume` 会在几十 MB 的重复 stringify 上干等。WeakMap:消息对象被丢弃
+ * 时缓存自动跟着走。
+ */
+const serializedMessages = new WeakMap<object, string>();
+function messageKey(message: ModelMessage): string {
+  const cached = serializedMessages.get(message);
+  if (cached !== undefined) return cached;
+  const json = JSON.stringify(message);
+  serializedMessages.set(message, json);
+  return json;
+}
+
+/**
+ * 同一条消息的两次出现:save() 里是同一个对象引用(压缩/回退都从原数组
+ * 切片);open() 里是同一份 JSON 的两次 parse,序列化后逐字节相同
+ * (JSON.parse/stringify 保持键序)。
+ */
+function sameMessage(a: ModelMessage | undefined, b: ModelMessage | undefined): boolean {
+  if (a === b) return a !== undefined;
+  if (!a || !b) return false;
+  return messageKey(a) === messageKey(b);
+}
+
+/**
+ * 模型历史被整体替换(snapshot)时,推导展示历史该怎么走。按新数组相对
+ * 旧模型历史的形状分派:
+ * - **扩展**(写失败后的恢复快照):新增部分照常追加;
+ * - **压缩型**(`[摘要, ...旧历史的尾巴]`):展示历史不动——被摘要吞掉的
+ *   消息正是它存在的意义;
+ * - **前缀型**(rewind):用户真的删了尾部,展示历史截掉同样数量;
+ * - **认不出**(fork 种子、旧格式、手工修改):以快照为准,别自作聪明。
+ */
+function reconcileDisplay(
+  prevModel: ModelMessage[],
+  prevDisplay: ModelMessage[],
+  next: ModelMessage[],
+): ModelMessage[] {
+  if (next.length >= prevModel.length && prevModel.every((m, i) => sameMessage(m, next[i]))) {
+    return [...prevDisplay, ...next.slice(prevModel.length)];
+  }
+
+  const first = next[0];
+  const isCompaction =
+    first !== undefined &&
+    first.role === 'user' &&
+    typeof first.content === 'string' &&
+    first.content.startsWith(COMPACT_MARKER) &&
+    next.length - 1 <= prevModel.length &&
+    next.slice(1).every((m, i) => sameMessage(m, prevModel[prevModel.length - (next.length - 1) + i]));
+  if (isCompaction) return prevDisplay;
+
+  if (next.length < prevModel.length && next.every((m, i) => sameMessage(m, prevModel[i]))) {
+    const removed = prevModel.length - next.length;
+    if (removed <= prevDisplay.length) return prevDisplay.slice(0, prevDisplay.length - removed);
+  }
+
+  return [...next];
+}
+
 /** `open()`/`resolveId()` 找不到会话。消息保持英文(CLI 层负责本地化呈现)。 */
 export class SessionNotFoundError extends Error {
   constructor(readonly query: string) {
@@ -119,12 +188,14 @@ export class AmbiguousSessionError extends Error {
 /**
  * 每个会话一个只追加的 JSONL 文件。
  *
- * 这里写入的是完整的、*未压缩的*历史。压缩只缩减发给模型的内容——磁盘上
- * 的记录保持完整,这样 `--resume` 和事后调试能看到实际发生的一切。
+ * 两份历史,一份文件:`messages` 是喂给模型的(压缩后是摘要+尾巴),
+ * `displayMessages` 是给人看的完整展示历史——压缩绝不缩减它,`/resume`
+ * 的时间线回放与事后调试靠它看到实际发生的一切。
  *
  * 写入策略:正常轮次只追加 `append` 增量记录(文件随消息数线性增长);
- * 压缩或 rewind 把历史换成非扩展的新数组时,落一条 `snapshot` 全量记录。
- * 旁车文件 `<id>.meta.json` 存最新 meta,让 `list()` 不必解析整个 JSONL。
+ * 压缩或 rewind 把历史换成非扩展的新数组时,落一条 `snapshot` 全量记录,
+ * 展示历史与之不同时随记录带出(`display` 字段)。旁车文件 `<id>.meta.json`
+ * 存最新 meta,让 `list()` 不必解析整个 JSONL。
  */
 export class SessionStore {
   /** 所有磁盘写入串行排队:rewind 的 snapshot 与轮末的 append 不允许交错。 */
@@ -144,6 +215,8 @@ export class SessionStore {
     private meta_: SessionMeta,
     /** 已确认落盘的历史——增量判定的基线,只在写成功后前进。 */
     private persisted: ModelMessage[],
+    /** 完整展示历史(压缩不缩减它),与 persisted 同步前进。 */
+    private display: ModelMessage[],
     private state_: SessionState,
   ) {
     this.lastStateJson = JSON.stringify(this.state_);
@@ -157,9 +230,14 @@ export class SessionStore {
     return this.meta_;
   }
 
-  /** 已落盘的历史。恢复会话时读它来回放。 */
+  /** 已落盘的模型历史(压缩后是摘要+尾巴)。恢复会话时喂给 agent。 */
   get messages(): ModelMessage[] {
     return this.persisted;
+  }
+
+  /** 完整展示历史。恢复会话时时间线回放读它,压缩不缩减它。 */
+  get displayMessages(): ModelMessage[] {
+    return this.display;
   }
 
   get state(): SessionState {
@@ -195,7 +273,7 @@ export class SessionStore {
       messageCount: 0,
     };
 
-    const store = new SessionStore(dir, meta, [], structuredClone(EMPTY_STATE));
+    const store = new SessionStore(dir, meta, [], [], structuredClone(EMPTY_STATE));
     store.enqueue(async () => {
       await store.appendRecord({ kind: 'meta', meta });
       await store.writeSidecar();
@@ -218,6 +296,7 @@ export class SessionStore {
 
     let meta: SessionMeta | undefined;
     let messages: ModelMessage[] = [];
+    let display: ModelMessage[] = [];
     let state: SessionState | undefined;
 
     for (const line of raw.split('\n')) {
@@ -229,13 +308,23 @@ export class SessionStore {
         continue; // 末尾的不完整写入不应导致会话无法打开
       }
       if (record.kind === 'meta') meta = record.meta;
-      else if (record.kind === 'messages' || record.kind === 'snapshot') messages = [...record.messages];
-      else if (record.kind === 'append') messages.push(...record.messages);
-      else if (record.kind === 'state') state = record.state;
+      else if (record.kind === 'messages' || record.kind === 'snapshot') {
+        const next = [...record.messages];
+        // 快照随带的展示历史优先;旧文件没有该字段,按形状启发式推导
+        // (压缩型不缩减、rewind 型同步截尾)。
+        display =
+          record.kind === 'snapshot' && record.display
+            ? [...record.display]
+            : reconcileDisplay(messages, display, next);
+        messages = next;
+      } else if (record.kind === 'append') {
+        messages.push(...record.messages);
+        display.push(...record.messages);
+      } else if (record.kind === 'state') state = record.state;
     }
 
     if (!meta) throw new Error(`Session ${id} has no metadata record.`);
-    return new SessionStore(dir_, meta, messages, state ?? structuredClone(EMPTY_STATE));
+    return new SessionStore(dir_, meta, messages, display, state ?? structuredClone(EMPTY_STATE));
   }
 
   /**
@@ -345,11 +434,26 @@ export class SessionStore {
       updatedAt: now,
     };
 
-    const forked = new SessionStore(this.dir, meta, [...this.persisted], structuredClone(this.state_));
+    const forked = new SessionStore(
+      this.dir,
+      meta,
+      [...this.persisted],
+      [...this.display],
+      structuredClone(this.state_),
+    );
     forked.enqueue(async () => {
       await forked.appendRecord({ kind: 'meta', meta });
       if (forked.persisted.length > 0) {
-        await forked.appendRecord({ kind: 'snapshot', at: now, messages: forked.persisted });
+        // 展示历史随种子快照带过去,分叉的会话恢复时同样能看到压缩前的完整对话。
+        const displayDiffers =
+          forked.display.length !== forked.persisted.length ||
+          !forked.display.every((m, i) => m === forked.persisted[i]);
+        await forked.appendRecord({
+          kind: 'snapshot',
+          at: now,
+          messages: forked.persisted,
+          ...(displayDiffers ? { display: forked.display } : {}),
+        });
       }
       await forked.appendRecord({ kind: 'state', at: now, state: forked.state_ });
       await forked.writeSidecar();
@@ -383,12 +487,22 @@ export class SessionStore {
         target.length >= this.persisted.length &&
         this.persisted.every((m, i) => target[i] === m);
       const delta = isExtension ? target.slice(this.persisted.length) : undefined;
+      // 展示历史与模型历史同步推演(压缩不缩减、rewind 截尾)。快照记录只在
+      // 两者真的不同时才带 display 字段——没压缩过的会话不重复写一遍。
+      const nextDisplay = reconcileDisplay(this.persisted, this.display, target);
+      const displayDiffers =
+        nextDisplay.length !== target.length || !nextDisplay.every((m, i) => m === target[i]);
       const payload: Record_ | undefined =
         delta !== undefined
           ? delta.length > 0
             ? { kind: 'append', at, messages: delta }
             : undefined // 无新增消息(如空轮次):只刷新 meta
-          : { kind: 'snapshot', at, messages: target };
+          : {
+              kind: 'snapshot',
+              at,
+              messages: target,
+              ...(displayDiffers ? { display: nextDisplay } : {}),
+            };
 
       try {
         await this.appendRecord({ kind: 'meta', meta });
@@ -399,6 +513,7 @@ export class SessionStore {
         throw err;
       }
       this.persisted = target;
+      this.display = nextDisplay;
       this.needsSnapshot = false;
       await this.writeSidecar(meta);
     });

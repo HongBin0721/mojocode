@@ -139,6 +139,10 @@ export type AgentEvent =
       recentCalls?: Array<{ toolName: string; input: unknown }>;
     }
   | { type: 'step-end'; usage: UsageSnapshot }
+  // 压缩摘要的流式进度:chars=0 表示摘要请求刚发出(首个增量到达前),之后为
+  // 已生成的累计字符数。正常以 compaction 事件收尾;失败时没有终止事件,
+  // 渲染层靠错误 notice 与后续流事件自愈(见 App 的 compaction-progress 分支)。
+  | { type: 'compaction-progress'; chars: number }
   | { type: 'compaction'; removedMessages: number; summaryChars: number }
   | { type: 'turn-end'; usage: UsageSnapshot; finishReason: string }
   | { type: 'aborted' }

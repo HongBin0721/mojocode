@@ -284,6 +284,38 @@ describe('并发防护', () => {
     expect(contents[0]).toBe('摘要');
     expect(contents).toContain('压缩期间的消息');
   });
+
+  it('压缩把流式进度以 compaction-progress 事件发到总线', async () => {
+    mockCompactMessages.mockImplementation(
+      async (
+        _messages: unknown,
+        _model: unknown,
+        _keepRecent: unknown,
+        onProgress?: (chars: number) => void,
+      ) => {
+        onProgress?.(0);
+        onProgress?.(120);
+        onProgress?.(240);
+        return {
+          messages: [{ role: 'user', content: '摘要' }],
+          removedMessages: 3,
+          summaryChars: 240,
+        };
+      },
+    );
+    const { agent, bus } = makeAgent();
+    const progress: number[] = [];
+    const order: string[] = [];
+    bus.on((e) => {
+      if (e.type === 'compaction-progress') progress.push(e.chars);
+      if (e.type === 'compaction-progress' || e.type === 'compaction') order.push(e.type);
+    });
+    await agent.compact();
+
+    expect(progress).toEqual([0, 120, 240]);
+    // 进度在前,收尾事件殿后——渲染层靠 compaction 熄灯/交还状态。
+    expect(order[order.length - 1]).toBe('compaction');
+  });
 });
 
 describe('展示文本分离(/init)', () => {

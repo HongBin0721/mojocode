@@ -1,4 +1,4 @@
-import { generateText, type LanguageModel, type ModelMessage } from 'ai';
+import { streamText, type LanguageModel, type ModelMessage } from 'ai';
 
 const SUMMARY_INSTRUCTION = `Summarise the conversation so far so that another instance of you can
 pick the work up with no other context. Be specific and factual — this replaces the transcript.
@@ -27,6 +27,12 @@ function stripImageParts(message: ModelMessage): ModelMessage {
     ),
   };
 }
+
+/**
+ * 压缩摘要消息的开头标记。渲染层(replay)靠它识别摘要消息,存储层(store)
+ * 靠它识别压缩型 snapshot——这里是唯一的写入方,别处只 import。
+ */
+export const COMPACT_MARKER = '[Earlier conversation, compacted]';
 
 export interface CompactionResult {
   messages: ModelMessage[];
@@ -63,6 +69,12 @@ export async function compactMessages(
   messages: ModelMessage[],
   model: LanguageModel,
   keepRecent = 6,
+  /**
+   * 摘要生成的流式进度:首次以 0 调用(请求已发出、首个增量未到),之后为
+   * 已生成的累计字符数。历史太短等提前返回的分支不会调用它——调用方可以
+   * 据此区分「真的去请求模型了」和「无事发生」。
+   */
+  onProgress?: (chars: number) => void,
 ): Promise<CompactionResult> {
   if (messages.length <= keepRecent + 2) {
     return { messages, removedMessages: 0, summaryChars: 0 };
@@ -77,14 +89,30 @@ export async function compactMessages(
   const toSummarize = messages.slice(0, cut).map(stripImageParts);
   const toKeep = messages.slice(cut);
 
-  const { text } = await generateText({
+  // 用 streamText 而不是 generateText,只为把进度喂给 onProgress。注意
+  // streamText 的流会吞掉错误(textStream 的文档明说错误不进流,要靠
+  // onError 观察),这里收集起来在消费完后重抛,保持与 generateText 一致的
+  // 失败语义——压缩失败必须让调用方看得见。
+  let streamError: unknown;
+  onProgress?.(0);
+  const result = streamText({
     model,
     messages: [...toSummarize, { role: 'user', content: SUMMARY_INSTRUCTION }],
+    onError: ({ error }) => {
+      streamError = error;
+    },
   });
+
+  let text = '';
+  for await (const delta of result.textStream) {
+    text += delta;
+    onProgress?.(text.length);
+  }
+  if (streamError !== undefined) throw streamError;
 
   const summary: ModelMessage = {
     role: 'user',
-    content: `[Earlier conversation, compacted]\n\n${text}\n\n[End of compacted history — continue from here.]`,
+    content: `${COMPACT_MARKER}\n\n${text}\n\n[End of compacted history — continue from here.]`,
   };
 
   return {

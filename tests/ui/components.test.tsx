@@ -235,6 +235,33 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     }
   });
 
+  it('StatusLine:压缩阶段画 ▰▱ 进度条与百分比', async () => {
+    const ui = await renderUi(
+      () => <StatusLine phase="compacting" progress={0.4} since={Date.now()} columns={70} />,
+      { width: 70, height: 3 },
+    );
+    const frame = ui.frame();
+    expect(frame).toContain('▰');
+    expect(frame).toContain('▱');
+    expect(frame).toContain('40%');
+    await ui.destroy();
+  });
+
+  it('StatusLine:窄终端装不下进度条时整条不画,绝不折行', async () => {
+    for (const columns of [14, 22]) {
+      const ui = await renderUi(
+        () => <StatusLine phase="compacting" progress={0.4} since={Date.now()} columns={columns} />,
+        { width: columns, height: 4 },
+      );
+      const lines = ui.frame().split('\n').filter((l) => l.trim());
+      expect(lines.length, `${columns} 列`).toBe(1);
+      for (const line of lines) {
+        expect(stringWidth(line), `${columns} 列: ${line}`).toBeLessThanOrEqual(columns);
+      }
+      await ui.destroy();
+    }
+  });
+
   it('GoalLine:靠右对齐的目标进度行', async () => {
     const ui = await renderUi(
       () => <GoalLine

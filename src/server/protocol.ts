@@ -175,4 +175,9 @@ export function snapshotKey(state: StateSnapshot): string {
 
 export interface HistoryPayload {
   messages: ModelMessage[];
+  /**
+   * 完整展示历史(压缩不缩减,含未落盘的当轮后缀)。可选:旧 server 没有
+   * 该字段,client 侧回退到 messages。
+   */
+  displayMessages?: ModelMessage[];
 }

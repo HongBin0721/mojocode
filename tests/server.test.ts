@@ -54,6 +54,7 @@ function fakeSession() {
   const bus = new EventBus();
   const todos = new TodoStore();
   let history: ModelMessage[] = [{ role: 'user', content: 'hello' }];
+  let displayPrefix: ModelMessage[] = [{ role: 'user', content: 'compacted-away' }];
   const runGate: { resolve?: () => void } = {};
   let running = false;
 
@@ -123,6 +124,11 @@ function fakeSession() {
       get messages() {
         return history;
       },
+      // 展示历史比模型历史多一条被压缩掉的早期消息,镜像测试据此区分两者;
+      // 置空前缀即"从未压缩过的会话",两份历史逐条相同。
+      get displayMessages() {
+        return [...displayPrefix, ...history];
+      },
       save: spies.save,
     },
     newSession: vi.fn(async () => {
@@ -150,6 +156,7 @@ function fakeSession() {
     bus,
     todos,
     setHistory: (m: ModelMessage[]) => (history = m),
+    setDisplayPrefix: (m: ModelMessage[]) => (displayPrefix = m),
     runGate,
     spies,
   };
@@ -203,7 +210,29 @@ describe('server ↔ remote client', () => {
     expect(Object.keys(servers['local']!.env!)).toEqual(['GITHUB_TOKEN']);
     expect(remote.store.id).toBe('session-0001');
     expect(remote.agent.history).toEqual([{ role: 'user', content: 'hello' }]);
+    // 展示历史(压缩不缩减)独立于模型历史过线,`/resume` 回放靠它。
+    expect(remote.store.displayMessages).toEqual([
+      { role: 'user', content: 'compacted-away' },
+      { role: 'user', content: 'hello' },
+    ]);
     expect(remote.mcpStatuses).toHaveLength(1);
+  });
+
+  // /history 挂在 turn-end / aborted / compaction 上,是热路径:没压缩过的
+  // 会话两份历史逐条相同,带上等于把整份记录发两遍。省略靠 client 的
+  // `?? messages` 回退接住(与旧 server 同款路径)。
+  it('两份历史相同时 /history 不重复发一遍展示历史', async () => {
+    const parts = fakeSession();
+    parts.setDisplayPrefix([]);
+    const { server, remote } = await boot(parts);
+
+    const payload = (await (
+      await fetch(`${server.url}/history`, { headers: { authorization: `Bearer ${server.token}` } })
+    ).json()) as { messages: ModelMessage[]; displayMessages?: ModelMessage[] };
+    expect(payload.messages).toEqual([{ role: 'user', content: 'hello' }]);
+    expect('displayMessages' in payload).toBe(false);
+    // client 侧照样拿到可用的展示历史。
+    expect(remote.store.displayMessages).toEqual([{ role: 'user', content: 'hello' }]);
   });
 
   it('AgentEvent 经 SSE 到达 client 总线;error 事件的 Error 被复原', async () => {

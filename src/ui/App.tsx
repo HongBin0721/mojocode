@@ -128,6 +128,13 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'fork', 'init']);
 
 /**
+ * 压缩进度条的预估摘要总长(字符)。摘要提示词要的是分节的事实性散文,
+ * 实测多落在 1500–4000 字符,取中偏上让条的走速与真实耗时大致相称。
+ * 估算只影响观感:偏短=提前贴住 99%,偏长=收尾时从半程直接熄灯。
+ */
+const COMPACT_EXPECTED_SUMMARY_CHARS = 3000;
+
+/**
  * `/goal` 的取消词。它们是**参数**而不是命令别名(命令别名会进补全菜单,
  * 而 `/stop`、`/off` 单独成命令毫无意义),与 Claude Code 对齐。
  */
@@ -154,13 +161,11 @@ const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
 
 /**
  * 流式预览占用的终端行数上限。全屏布局下这不再是防漏帧的硬约束,只是
- * 视觉取舍:预览太高会把时间线挤得只剩一条缝。完整文本在 text-end 时
- * 进入时间线,预览截断不丢内容。
- *
- * 思考不同:定稿只留一行"已思考 8.2s",正文**只在这个预览里出现过一次**,
- * 之后再无回看途径,所以行数给得比正文预览的道理更足——它是唯一的窗口。
+ * 思考尾部的滚动窗口行数。正文的活动条目在时间线里完整生长,不裁剪;
+ * 思考不同——定稿只留一行"已思考 8.2s",正文**只在流式期间出现过一次**,
+ * 之后要 ctrl+r 才展开,而思考动辄几千行,完整摊开会把 scrollbox 内容撑到
+ * 天上、reasoning-end 时又整体塌掉。留一个几行的尾部窗口原地刷新即可。
  */
-const STREAM_PREVIEW_ROWS = 5;
 const REASONING_PREVIEW_ROWS = 5;
 
 
@@ -190,9 +195,13 @@ function sessionBanner(session: SessionHandle): TimelineItem {
 /**
  * 恢复会话时的初始时间线:一条 divider + 完整回放。空会话返回空数组。
  * 调用方负责在最前面补横幅(sessionBanner / bannerItem)。
+ *
+ * 回放读**展示历史**而不是模型历史:压缩把模型历史换成摘要+尾巴,但用户
+ * 恢复会话该看到的是原始对话(与 opencode 一致)。`??` 兜底覆盖没有该字段
+ * 的旧 server 镜像与测试桩——那时退回模型历史,摘要显示成一行压缩提示。
  */
 function buildResumeItems(session: SessionHandle): TimelineItem[] {
-  const messages = session.store.messages;
+  const messages = session.store.displayMessages ?? session.store.messages;
   if (messages.length === 0) return [];
   const replayed: NewTimelineItem[] = [
     {
@@ -457,9 +466,10 @@ export function App(props: Props): JSX.Element {
    */
   const turnTokens = () => (turnStartedAt ? Math.max(0, usage().total - turnStartTokens()) : 0);
 
-  // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段渲染时
-  // 不再带 ● 前缀,只缩进对齐。
-  let textCommitted = false;
+  // 当前流式文本块是否已有段落提前定稿(增量提交):后续片段(含时间线里
+  // 正在生长的活动条目)渲染时不再带 ● 前缀,只缩进对齐。信号而不是裸变量:
+  // 活动条目的前缀表达式要在它翻转时重算,不能指望恰好同批读了 activeText。
+  const [textCommitted, setTextCommitted] = createSignal(false);
 
   // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = new Map<string, unknown>();
@@ -496,8 +506,8 @@ export function App(props: Props): JSX.Element {
       const text = activeText();
       setActiveText('');
       if (text.trim())
-        push({ kind: 'assistant', text: text.trimEnd(), continuation: textCommitted });
-      textCommitted = false;
+        push({ kind: 'assistant', text: text.trimEnd(), continuation: textCommitted() });
+      setTextCommitted(false);
     };
     // 定稿的只是一行"已思考 8.2s":正文在流式期间实时可见,整段进时间线
     // 只会淹没回复和工具记录(见 types.ts 的 reasoning 条目)。
@@ -540,12 +550,14 @@ export function App(props: Props): JSX.Element {
 
           case 'text-delta': {
             const combined = activeText() + event.text;
-            // 段落级增量提交:已被空行收尾的段落立即定稿进时间线,预览只留
-            // 正在生成的尾段。动态区高度天然受控,已生成内容随时可回看。
+            // 段落级增量提交:已被空行收尾的段落立即定稿为不可变条目(<For>
+            // 按引用复用、markdown 走 LRU 缓存),正在生成的尾段作为活动条目
+            // 在时间线尾部原地生长(opencode 式)——可变区始终只有一小段,
+            // 每个 delta 的重渲染成本不随消息变长而膨胀。
             const { committed, rest } = splitCommitted(combined);
             if (committed) {
-              push({ kind: 'assistant', text: committed, continuation: textCommitted });
-              textCommitted = true;
+              push({ kind: 'assistant', text: committed, continuation: textCommitted() });
+              setTextCommitted(true);
               setActiveText(rest);
             } else {
               setActiveText(combined);
@@ -726,6 +738,19 @@ export function App(props: Props): JSX.Element {
             if (!session.agent.isRunning) endWork();
             break;
 
+          // 压缩摘要流式生成中:状态行切到「压缩中」并推进进度条。手动
+          // /compact 时命令侧已乐观置位,这里让条动起来;自动压缩(开轮/
+          // 轮中)则靠这一条把「思考中」换成真实状态。摘要总长事先未知,
+          // 按典型长度估算、封顶 99%——估短了只会让条提前贴住 99%,绝不
+          // 回退;真正的收尾由 compaction 事件兑现,所以条永远不自走满格。
+          case 'compaction-progress':
+            setWork((prev) => ({
+              phase: 'compacting',
+              progress: Math.min(0.99, event.chars / COMPACT_EXPECTED_SUMMARY_CHARS),
+              since: prev?.since ?? Date.now(),
+            }));
+            break;
+
           case 'compaction':
             push({
               kind: 'notice',
@@ -735,6 +760,17 @@ export function App(props: Props): JSX.Element {
                 chars: event.summaryChars,
               }),
             });
+            // 压缩收尾:自动压缩发生在一轮进行中,把状态还给「思考中」;
+            // 手动 /compact(空闲)直接熄灯——命令处理器 await 后的 endWork
+            // 是兜底。压缩失败没有这条事件,状态由错误 notice 之后的流事件
+            // (reasoning/text/tool 的 beginWork)自愈。
+            setWork((prev) =>
+              prev?.phase === 'compacting'
+                ? session.agent.isRunning
+                  ? { phase: 'thinking', since: prev.since }
+                  : undefined
+                : prev,
+            );
             break;
 
           case 'notice':
@@ -942,13 +978,26 @@ export function App(props: Props): JSX.Element {
 
   const handleRewindPick = (entry: RewindEntry) => {
     setRewind(undefined);
+    // 回放用的展示历史必须在 setHistory **之前**算:截掉的是尾部 k 条,而
+    // 压缩后模型历史的尾部与展示历史的尾部是同一批消息(reconcileDisplay 的
+    // rewind 分支同理),所以两边都去掉 k 条。之后再读就不确定了——远程镜像
+    // 的 setHistory 会当场截,本地 store 要等 save 落盘才前进。
+    // 用模型历史重放会把压缩前的原始对话换成一行「已压缩」提示(store 里
+    // 明明还留着,下次 /resume 又会出现)。
+    const removed = session.agent.history.length - entry.index;
+    const display = session.store.displayMessages ?? session.agent.history;
+    const displayAfter =
+      removed > 0 && removed <= display.length
+        ? display.slice(0, display.length - removed)
+        : display;
+
     // 截断到目标消息之前;setHistory 会递增 historyGeneration,顺带作废
     // 任何在途压缩的结果。store.save 的引用前缀比较失败 → 自动落 snapshot。
     session.agent.setHistory(session.agent.history.slice(0, entry.index));
     void session.store.save(session.agent.history).catch((err: Error) => {
       push({ kind: 'notice', level: 'warn', message: t('notice.sessionSaveFailed', { message: err.message }) });
     });
-    const replayed = replayTimeline(session.agent.history).map(
+    const replayed = replayTimeline(displayAfter).map(
       (item) => ({ ...item, key: nextKey() }) as TimelineItem,
     );
     resetTimeline([bannerItem(), ...replayed]);
@@ -1673,12 +1722,23 @@ export function App(props: Props): JSX.Element {
   const todoPanelActive = () => Boolean(work()) && todos().length > 0;
   const todoPanelVisible = () => todoPanelActive() && todoPanelOpen();
 
-  // 预览行数仍要看终端高度:底部固定区(flexShrink 0,见 JSX)在矮终端上
-  // 不能把输入框和权限选项顶出视口。留 12 行给输入框边框、状态栏、footer
-  // 与各处 marginTop,剩余空间双预览均分,最少各 1 行。
-  const previewBudget = () => Math.max(1, Math.floor((size.rows - 12) / 2));
-  const textRows = () => Math.min(STREAM_PREVIEW_ROWS, previewBudget());
-  const reasoningRows = () => Math.min(REASONING_PREVIEW_ROWS, previewBudget());
+  // 思考尾部窗口不再需要按终端高度打预算:活动区已并入时间线 scrollbox,
+  // 矮终端上被压缩的是滚动视口,底部固定区(输入框/状态栏)天然保得住。
+
+  /**
+   * 流式正文的可见尾部。段落提交(splitCommitted)通常把可变区压得很小,
+   * 但**代码围栏里没有切点**——模型写一个 500 行的文件时整块都留在
+   * activeText 里,而 Markdown.tsx 每个 delta 都重建全部行的 `<Text>`
+   * (定稿路径有 md-cache,这里没有),成本 O(已生成行数) → 随块长二次增长,
+   * 还要让整个 scrollbox 重新布局:长代码输出到一半就能明显感到按键延迟。
+   *
+   * 所以给可变区一个**宽松**上限:三屏(至少 60 行)。日常段落与中等代码块
+   * 远在其内,完整可见(这正是并入时间线要的效果);只有超长块会在流式期间
+   * 只显示尾部,text-end 定稿后立刻全量可见。
+   */
+  const streamTailRows = () => Math.max(60, size.rows * 3);
+  const activeStreamText = () =>
+    tailWithinRows(activeText().trimEnd(), streamTailRows(), size.columns - 2 - WIDTH_SAFETY);
 
   // 退出 dump 的数据通道(见 Props.itemsRef)。始终存全量:dump 是留档,
   // 不跟随 /focus 的显示密度。
@@ -1775,25 +1835,25 @@ export function App(props: Props): JSX.Element {
             <TimelineEntry item={item} columns={size.columns} expanded={detailsExpanded()} />
           )}
         </For>
-      </ScrollArea>
 
-      {/* 底部固定区不参与收缩:空间不足时塌缩的是上面的时间线视口,
-          输入框与权限选项永远可见(矮终端保障,替代旧的 RESERVED_ROWS)。 */}
-      <Box flexDirection="column" marginTop={1} flexShrink={0}>
+        {/* 动态区并入时间线(opencode 式):流式思考尾部/正文/进行中的工具行
+            挂在 scrollbox 尾部原地生长,粘底自动跟随,上滚即可回看已生成的
+            部分——正文不再裁剪,长代码块也完整可见。定稿(text-end/段落提交)
+            时活动条目原位换成不可变条目,版式与前缀完全一致,肉眼无跳变。 */}
         <Show when={activeReasoning().trim()}>
           <Box marginTop={1} paddingRight={WIDTH_SAFETY}>
             <Text color={theme.dim} italic>
-              {tailWithinRows(activeReasoning(), reasoningRows(), size.columns - WIDTH_SAFETY)}
+              {tailWithinRows(activeReasoning(), REASONING_PREVIEW_ROWS, size.columns - WIDTH_SAFETY)}
             </Text>
           </Box>
         </Show>
 
         <Show when={activeText().trim()}>
           <Box marginTop={1}>
-            <Text color={theme.assistant}>{glyphs.bullet} </Text>
+            {/* 与定稿的 assistant 条目同构:首段带 ●,增量提交后的续段只缩进。 */}
+            <Text color={theme.assistant}>{textCommitted() ? '  ' : `${glyphs.bullet} `}</Text>
             <Box flexDirection="column" flexGrow={1} paddingRight={WIDTH_SAFETY}>
-              {/* 前缀 ● 占两列,预览宽度相应收窄。 */}
-              <Markdown text={tailWithinRows(activeText(), textRows(), size.columns - 2 - WIDTH_SAFETY)} />
+              <Markdown text={activeStreamText()} />
             </Box>
           </Box>
         </Show>
@@ -1851,12 +1911,17 @@ export function App(props: Props): JSX.Element {
             );
           }}
         </For>
+      </ScrollArea>
 
-        {/* 工作状态行:主流 CLI 的位置——流式内容/工具行之下、输入框之上。 */}
+      {/* 底部固定区不参与收缩:空间不足时塌缩的是上面的时间线视口,
+          输入框与权限选项永远可见(矮终端保障,替代旧的 RESERVED_ROWS)。 */}
+      <Box flexDirection="column" marginTop={1} flexShrink={0}>
+        {/* 工作状态行:主流 CLI 的位置——时间线之下、输入框之上。 */}
         <Show when={work()}>
           <StatusLine
             phase={work()!.phase}
             detail={work()!.detail}
+            progress={work()!.progress}
             since={work()!.since}
             todoHint={todoPanelActive() ? (todoPanelOpen() ? 'hide' : 'show') : undefined}
             tokens={turnTokens()}

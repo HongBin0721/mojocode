@@ -6,9 +6,7 @@ import { unwrapAttachments } from '../app/attachments.js';
 import { isInitPrompt } from '../agent/init.js';
 import { unwrapSkillPrompt } from '../skills/invocation.js';
 import { t } from '../i18n/index.js';
-
-/** 压缩摘要消息的开头标记,与 src/agent/compact.ts 写入的内容保持一致。 */
-const COMPACT_MARKER = '[Earlier conversation, compacted]';
+import { COMPACT_MARKER } from '../agent/compact.js';
 
 /**
  * 把持久化的会话历史还原成时间线条目,供 `--resume`/`/resume` 在 TUI 中回放。
