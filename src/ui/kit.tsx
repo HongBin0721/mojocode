@@ -422,6 +422,10 @@ export async function render(
   });
   const renderer = await createCliRenderer({
     exitOnCtrlC: options.exitOnCtrlC ?? false,
+    // 上游默认 30。这个值只在渲染循环「活着」时生效(平时是按需渲染,
+    // 上限由 maxFps=60 决定),而唯一会请求持续渲染的就是滚动缓动动画
+    // ——30fps 的缓动看得出台阶,60fps 才连贯。opencode 同样设 60。
+    targetFps: 60,
     onDestroy: () => resolveExit(),
   });
   await solidRender(node, renderer);
@@ -581,23 +585,172 @@ export function Text(props: TextProps): JSX.Element {
  */
 const BLOCKED_SCROLL_KEYS = new Set(['up', 'down', 'left', 'right', 'j', 'k', 'h', 'l']);
 
+/** 一次滚轮事件推进的基础行数(上游默认 1 行,长会话里回看要滚几十下)。 */
+const SCROLL_LINES = 3;
+/** 连续快滚的单格行数上限:再快也不越过,否则一甩就飞过整屏找不回位置。 */
+const SCROLL_LINES_MAX = 8;
+/** 相邻两格超过这个间隔就算新手势,速度归零重来。 */
+const SCROLL_STREAK_MS = 80;
+/** 缓动时间常数(ms):每帧补上与目标差距的 1 - e^(-dt/τ)。越小越「硬」。 */
+const SCROLL_EASE_TAU_MS = 55;
+/** 缓动每帧至少推进一行,否则尾巴会以亚行速度磨很久(也让测试可收敛)。 */
+const SCROLL_EASE_MIN_LINES = 1;
+
+/**
+ * 滚轮一格推进几行:慢滚精确、快滚提速。
+ *
+ * 终端每一格滚轮发一个事件且 `ScrollInfo.delta` 恒为 1,所以这里返回的
+ * 「倍率」就等于这一格推进多少行。上游默认 `LinearScrollAccel`(恒 1)
+ * 细读够用,但回看几屏之前要滚几十下;`MacOSScrollAccel` 也不是替代品
+ * ——它基准仍是 1,只解决「滚得久」,不解决「滚一下太少」。
+ *
+ * 3 行起步(与 opencode 的默认 scroll_speed 一致),连击每格再加 1 行、
+ * 封顶 8 行。注意这是**目标位移**,不是画面跳变:实际位移由下面的缓动
+ * 分帧走完,所以提速不会变成「一格跳半屏」。
+ */
+export class StreakScrollAccel {
+  private lastTick = 0;
+  private streak = 0;
+
+  tick(now: number = Date.now()): number {
+    const dt = now - this.lastTick;
+    this.lastTick = now;
+    // 首次 tick 时 lastTick 为 0,dt 必然远超阈值,自然落到「新手势」分支。
+    this.streak = dt <= SCROLL_STREAK_MS ? this.streak + 1 : 0;
+    return Math.min(SCROLL_LINES + this.streak, SCROLL_LINES_MAX);
+  }
+
+  reset(): void {
+    this.lastTick = 0;
+    this.streak = 0;
+  }
+}
+
+/**
+ * 平滑滚动:把滚轮事件从「立刻跳 N 行」改成「向目标缓动」。
+ *
+ * 上游 ScrollBox 的滚轮处理是瞬时的——一格来了就 `scrollTop += N`。
+ * N=1 时看着还算连续,一旦把步长调到 3 行以上,每一格就是一次可见的
+ * 跳变,快滚更是一跳半屏:这正是「不丝滑」的来源,opencode 也一样跳,
+ * 只是它默认不加速所以跳得小。这里接管滚轮:事件只累加**目标**位置,
+ * 真正的 scrollTop 由帧回调按指数缓动追上去,于是一格 3 行会分几帧走完,
+ * 连滚时目标不断累加、画面持续流动而不是一格一顿。
+ *
+ * 动画期间才 `requestLive()`(让渲染循环持续跑),落定即 `dropLive()`
+ * ——平时仍是按需渲染,不会白烧 CPU。
+ *
+ * 每帧最少推进一行:纯比例缓动的尾巴会以亚行速度磨很久,而终端最小
+ * 单位就是一行,磨出来的只有空转帧。
+ *
+ * 与粘底的关系:写 `scrollTop` 走的是上游 setter,它自己会
+ * `updateStickyState()`,所以上滚解粘、回到底部重新粘住的语义不变。
+ * 反过来,流式输出把视图粘到底部时 scrollTop 会被上游改动,这里检测到
+ * 「不是我写进去的值」就放弃动画重新对齐,避免和粘底互相拉扯。
+ */
+function attachSmoothScroll(renderer: CliRenderer, box: ScrollBoxRenderable): () => void {
+  // onMouseEvent 是 protected(上游只给子类用),这里和 handleKeyPress
+  // 一样按实例覆写——kit 本来就是「上游 0.x 破坏性变更收敛到一个文件」。
+  const mouse = box as unknown as { onMouseEvent(event: OtuiMouseEvent): void };
+  const inheritedMouse = mouse.onMouseEvent.bind(box);
+  const inheritedKey = box.handleKeyPress.bind(box);
+  const accel = new StreakScrollAccel();
+  let position = box.scrollTop;
+  let target = position;
+  let written = position;
+  let running = false;
+
+  const maxTop = (): number => Math.max(0, box.scrollHeight - box.viewport.height);
+  const write = (value: number): void => {
+    written = Math.round(value);
+    box.scrollTop = written;
+  };
+  /** 以容器当前位置为准重置动画状态(粘底、Page 键都会在背后改它)。 */
+  const syncFromBox = (): void => {
+    position = box.scrollTop;
+    target = position;
+    written = position;
+  };
+
+  const frame = async (deltaMs: number): Promise<void> => {
+    if (box.scrollTop !== written) {
+      // 外部改动(粘底跟随新内容、PageUp/Home 等)优先,动画让位。
+      stop();
+      return;
+    }
+    target = Math.min(Math.max(target, 0), maxTop());
+    const diff = target - position;
+    if (Math.abs(diff) < 1) {
+      position = target;
+      write(target);
+      stop();
+      return;
+    }
+    const eased = Math.abs(diff) * (1 - Math.exp(-deltaMs / SCROLL_EASE_TAU_MS));
+    const step = Math.min(Math.abs(diff), Math.max(SCROLL_EASE_MIN_LINES, eased));
+    position += Math.sign(diff) * step;
+    write(position);
+  };
+
+  function stop(): void {
+    if (!running) return;
+    running = false;
+    renderer.removeFrameCallback(frame);
+    renderer.dropLive();
+    // 下一次手势重新以实际位置为起点(期间可能被粘底改过)。
+    syncFromBox();
+  }
+
+  const start = (): void => {
+    if (running) return;
+    running = true;
+    renderer.setFrameCallback(frame);
+    renderer.requestLive();
+  };
+
+  mouse.onMouseEvent = (event: OtuiMouseEvent): void => {
+    const direction = event.scroll?.direction;
+    // 只接管垂直滚轮;shift+滚轮(上游转成水平)与拖动/抬起原样交回。
+    if (event.type !== 'scroll' || event.modifiers.shift || (direction !== 'up' && direction !== 'down')) {
+      inheritedMouse(event);
+      return;
+    }
+    // 非动画期间 scrollTop 归上游(粘底跟随流式输出),手势起点以它为准。
+    if (!running) syncFromBox();
+    const lines = accel.tick();
+    target = Math.min(Math.max(target + (direction === 'up' ? -lines : lines), 0), maxTop());
+    start();
+  };
+
+  box.handleKeyPress = (key: KeyEvent): boolean => {
+    if (BLOCKED_SCROLL_KEYS.has(key.name ?? '')) return false;
+    // Page/Home/End 仍归上游(瞬时),但先停掉缓动,否则两边抢 scrollTop。
+    stop();
+    return inheritedKey(key);
+  };
+
+  return () => {
+    stop();
+    mouse.onMouseEvent = inheritedMouse;
+    box.handleKeyPress = inheritedKey;
+  };
+}
+
 /**
  * 时间线滚动容器:粘底跟随流式输出,用户上滚自动解粘、回到底部重新粘住
- * (OpenTUI stickyScroll 语义);滚轮/PageUp/PageDown 可用。
+ * (OpenTUI stickyScroll 语义);滚轮(缓动)/PageUp/PageDown 可用。
  *
  * flex 四件套是实测的必要参数(T0 探针②):Yoga 的 flexShrink 裸默认是 0,
  * 内容超高时 scrollbox 会把兄弟节点(底部输入区)挤出屏幕外并与之重叠;
  * grow 1 + shrink 1 + basis 0 + minHeight 0 才是「占满剩余空间」的正确写法。
  */
 export function ScrollArea(props: { children?: JSX.Element }): JSX.Element {
-  const blockSingleKeyScroll = (box: ScrollBoxRenderable): void => {
-    const inherited = box.handleKeyPress.bind(box);
-    box.handleKeyPress = (key: KeyEvent): boolean =>
-      BLOCKED_SCROLL_KEYS.has(key.name ?? '') ? false : inherited(key);
+  const renderer = useRenderer();
+  const setup = (box: ScrollBoxRenderable): void => {
+    onCleanup(attachSmoothScroll(renderer, box));
   };
   return (
     <scrollbox
-      ref={blockSingleKeyScroll}
+      ref={setup}
       stickyScroll={true}
       stickyStart="bottom"
       flexGrow={1}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createSignal } from 'solid-js';
-import { Box, ScrollArea, Text, useInput, useTerminalSize } from '../../src/ui/kit.js';
+import { Box, ScrollArea, StreakScrollAccel, Text, useInput, useTerminalSize } from '../../src/ui/kit.js';
 import { renderUi } from '../support/otui.js';
 
 /**
@@ -124,5 +124,103 @@ describe('kit(Solid)', () => {
     await ui.press('pagedown');
     expect(ui.frame()).toBe(stuckToBottom);
     await ui.destroy();
+  });
+
+  it('ScrollArea 滚轮一格滚 3 行,且分帧缓动而不是一帧跳到位', async () => {
+    const ui = await renderUi(
+      () => (
+        <Box flexDirection="column" width="100%" height="100%">
+          <ScrollArea>
+            {Array.from({ length: 60 }, (_, i) => (
+              <Text>line-{String(i)}</Text>
+            ))}
+          </ScrollArea>
+          <Box flexShrink={0}>
+            <Text>BOTTOM-BAR</Text>
+          </Box>
+        </Box>
+      ),
+      { width: 30, height: 10 },
+    );
+    // 帧里第一个 line-N 就是可视区顶行。
+    const topLine = (): number => Number(/line-(\d+)/.exec(ui.frame())?.[1]);
+    /** 一直出帧到位置不再变(缓动落定)。 */
+    const settle = async (): Promise<number> => {
+      let last = topLine();
+      for (let i = 0; i < 40; i += 1) {
+        await ui.tick();
+        const now = topLine();
+        if (now === last) return now;
+        last = now;
+      }
+      return last;
+    };
+    const before = topLine();
+    await ui.scroll(2, 2, 'up');
+    // 首帧只走了一部分——这就是「缓动」而非瞬时跳变的行为契约。
+    expect(topLine()).toBeGreaterThan(before - 3);
+    expect(topLine()).toBeLessThan(before);
+    // 落定后正好是一格 3 行。
+    expect(await settle()).toBe(before - 3);
+    await ui.destroy();
+  });
+
+  it('滚轮缓动不破坏粘底:上滚后新内容不拉回底部,回到底部又重新跟随', async () => {
+    const [count, setCount] = createSignal(40);
+    const ui = await renderUi(
+      () => (
+        <Box flexDirection="column" width="100%" height="100%">
+          <ScrollArea>
+            {Array.from({ length: count() }, (_, i) => (
+              <Text>line-{String(i)}</Text>
+            ))}
+          </ScrollArea>
+          <Box flexShrink={0}>
+            <Text>BOTTOM-BAR</Text>
+          </Box>
+        </Box>
+      ),
+      { width: 30, height: 10 },
+    );
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 40; i += 1) await ui.tick();
+    };
+    // 粘底:尾行可见。
+    expect(ui.frame()).toContain('line-39');
+    // 上滚解粘,再追加内容,视图不应被拉回底部。
+    for (let i = 0; i < 4; i += 1) await ui.scroll(2, 2, 'up');
+    await settle();
+    const topLine = (): number => Number(/line-(\d+)/.exec(ui.frame())?.[1]);
+    const detachedTop = topLine();
+    expect(ui.frame()).not.toContain('line-39');
+    setCount(50);
+    await settle();
+    // 只比内容位置:滚动条滑块会随内容变长而变化,那不是回归。
+    expect(topLine()).toBe(detachedTop);
+    // 滚回底部后重新粘住,新内容继续跟随。
+    for (let i = 0; i < 30; i += 1) await ui.scroll(2, 2, 'down');
+    await settle();
+    expect(ui.frame()).toContain('line-49');
+    setCount(60);
+    await settle();
+    expect(ui.frame()).toContain('line-59');
+    await ui.destroy();
+  });
+
+  it('StreakScrollAccel:连击提速并封顶,手势间隔超时后归零', () => {
+    const accel = new StreakScrollAccel();
+    // 首格永远是基础步长。
+    expect(accel.tick(1000)).toBe(3);
+    // 连击(间隔 ≤ 80ms)每格加一行。
+    expect(accel.tick(1030)).toBe(4);
+    expect(accel.tick(1060)).toBe(5);
+    // 封顶 8,再快也不越过。
+    for (let t = 1090; t <= 1500; t += 10) accel.tick(t);
+    expect(accel.tick(1510)).toBe(8);
+    // 停手后再滚,回到基础步长。
+    expect(accel.tick(2000)).toBe(3);
+    accel.tick(2030);
+    accel.reset();
+    expect(accel.tick(2060)).toBe(3);
   });
 });
