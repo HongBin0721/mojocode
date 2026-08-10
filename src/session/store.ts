@@ -230,6 +230,17 @@ export class SessionStore {
     return this.meta_;
   }
 
+  /**
+   * 记下这个会话当前在用的 provider/model。恢复会话不再切回记录里的模型,
+   * meta 的这两个字段因此只剩展示用途(选择器与 `mojocode sessions` 的行),
+   * 停在创建时的值会让列表持续显示一个早就换掉的模型。只改内存,由下一次
+   * `save` 顺带落盘——它每轮都会重写 meta 记录和旁车文件。
+   */
+  setModel(provider: string, model: string): void {
+    this.meta_.provider = provider;
+    this.meta_.model = model;
+  }
+
   /** 已落盘的模型历史(压缩后是摘要+尾巴)。恢复会话时喂给 agent。 */
   get messages(): ModelMessage[] {
     return this.persisted;

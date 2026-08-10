@@ -5,7 +5,7 @@ const { mockStreamText } = vi.hoisted(() => ({ mockStreamText: vi.fn() }));
 
 vi.mock('ai', () => ({ streamText: mockStreamText }));
 
-import { compactMessages } from '../src/agent/compact.js';
+import { compactMessages, estimateTokens } from '../src/agent/compact.js';
 
 /** 模拟 streamText 的返回:按 chunks 逐段吐出 textStream。 */
 function streamOf(...chunks: string[]) {
@@ -158,5 +158,44 @@ describe('流式错误语义', () => {
     );
 
     await expect(compactMessages(toolLoop(10), {} as never)).rejects.toThrow('boom');
+  });
+});
+
+describe('estimateTokens 粗估', () => {
+  // 只用来*触发*压缩,不用来判断"不需要压缩":所以只断言量级和方向,
+  // 不去追一个精确值——追精确正是 shouldCompact 拒绝本地估算的原因。
+  it('CJK 按 1 token,ASCII 按 1/4', () => {
+    expect(estimateTokens([{ role: 'user', content: '你好世界' }])).toBe(4);
+    expect(estimateTokens([{ role: 'user', content: 'abcdefgh' }])).toBe(2);
+  });
+
+  it('空白不计,多条消息累加', () => {
+    expect(
+      estimateTokens([
+        { role: 'user', content: '你 好\n世 界' },
+        { role: 'assistant', content: '好 的' },
+      ]),
+    ).toBe(6);
+  });
+
+  it('工具调用/结果这类结构化内容按序列化后的文本算', () => {
+    const withTool = estimateTokens(toolLoop(1));
+    expect(withTool).toBeGreaterThan(0);
+    // 步数翻倍,估算随之增长——长工具循环不会被算成 0。
+    expect(estimateTokens(toolLoop(4))).toBeGreaterThan(withTool);
+  });
+
+  it('图片按 [image omitted] 计,base64 体积不进估算', () => {
+    const blob = 'A'.repeat(100_000);
+    const withImage = estimateTokens([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '看图' },
+          { type: 'file', mediaType: 'image/png', data: blob, filename: 'shot.png' },
+        ],
+      } as never,
+    ]);
+    expect(withImage).toBeLessThan(100);
   });
 });

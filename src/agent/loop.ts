@@ -12,7 +12,7 @@ import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { mergeProviderOptions, providerOptionsKey, reasoningMapping } from '../model/reasoning.js';
-import { compactMessages, shouldCompact } from './compact.js';
+import { compactMessages, estimateTokens, shouldCompact } from './compact.js';
 import { PermissionDeniedError } from '../permissions/gate.js';
 import { t } from '../i18n/index.js';
 
@@ -140,13 +140,22 @@ export class Agent {
    * "不用压缩",第一轮就撑爆窗口;偏大(回退截断)则会拿一段刚刚变短的历史
    * 去跑一次真实的摘要调用,把用户刚回退到的对话又揉成摘要。
    *
+   * 但"作废"不等于"当作装得下":两者都清空后 shouldCompact 恒为 false,
+   * 而恢复会话已经不再切回记录里的模型,一段长历史恢复到小窗口模型上,
+   * 第一轮就会超窗,且 lastInputTokens 仍是 undefined,重试多少次都同样
+   * 失败。所以这里用 estimateTokens 粗估一次新历史:超过阈值就置位
+   * historyNeedsCompact,让下一轮开轮先压缩。估算只用来*触发*压缩,不用来
+   * 判断"不需要压缩"——低估退回原行为,高估最多多跑一次摘要。
+   *
    * 累计用量只在换成*另一个会话*时清零(`resetSpend`):同会话内的截断
    * (esc-esc 回退)不清,那些 token 确实花掉了。
    */
   setHistory(messages: ModelMessage[], options?: { resetSpend?: boolean }): void {
+    const { provider, config } = this.options;
     this.messages = messages;
     this.lastInputTokens = undefined;
-    this.historyNeedsCompact = false;
+    this.historyNeedsCompact =
+      estimateTokens(messages) > provider.contextWindow * config.compactThreshold;
     if (options?.resetSpend) this.cumulativeTokens = 0;
     this.historyGeneration++;
   }

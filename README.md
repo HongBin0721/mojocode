@@ -218,8 +218,9 @@ mojocode sessions            # 列出本目录的历史会话
 mojocode sessions --all      # 所有目录的
 ```
 
-恢复会话时会完整回放时间线,并还原当时的模型、两轴权限、任务列表与本会话
-批准过的规则(CLI 参数可覆盖,如 `--provider`)。会话完整记录(未压缩)保存
+恢复会话时会完整回放时间线,并还原当时的两轴权限、任务列表与本会话批准过
+的规则(CLI 参数可覆盖);模型不还原,始终沿用当前配置的 provider/model。
+会话完整记录(未压缩)保存
 在 `~/.mojocode/sessions/*.jsonl`,超过 `cleanupPeriodDays`(默认 30 天)未活动的
 会话在启动时自动清理。
 

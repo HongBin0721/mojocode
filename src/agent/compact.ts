@@ -57,6 +57,41 @@ export function shouldCompact(
 }
 
 /**
+ * 本地粗估一段历史的 token 数。**只在没有 provider 上报数可用时兜底**——
+ * 换掉整段历史(恢复会话、回退截断)之后,`lastInputTokens` 必然作废,
+ * 而 `shouldCompact(undefined, …)` 恒为 false,于是第一轮会把整段历史原样
+ * 发出去。以前这不出事:恢复会切回记录里的模型,历史必定装得下;现在恢复
+ * 沿用当前模型,一段长会话恢复到小窗口模型上,第一轮就会 400,且因为
+ * lastInputTokens 仍是 undefined,重试多少次都同样失败。
+ *
+ * 估算规则:CJK 字符按 1 token,其余按 1/4 token(空白不计)。分词器差异
+ * 正是 shouldCompact 不用本地估算的原因,所以这里的结果只用来*触发*一次
+ * 压缩,永远不用来判断"不需要压缩"——高估最多多跑一次摘要,低估则退回
+ * 到原来的行为,两个方向都不会比现状更糟。
+ */
+export function estimateTokens(messages: ModelMessage[]): number {
+  let cjk = 0;
+  let other = 0;
+  for (const message of messages) {
+    // 图片按 stripImageParts 的口径剔除:base64 blob 的字符数与它的 token
+    // 成本毫无关系,算进去能把估算抬高几个数量级。
+    const content = stripImageParts(message).content;
+    const text = typeof content === 'string' ? content : JSON.stringify(content);
+    for (const char of text) {
+      if (WHITESPACE.test(char)) continue;
+      if (CJK.test(char)) cjk++;
+      else other++;
+    }
+  }
+  return cjk + Math.ceil(other / 4);
+}
+
+// CJK 统一表意文字 + 假名 + 谚文 + 全角标点。提到循环外只为省去重复编译;
+// 不能带 /g——lastIndex 会在调用之间残留,让每隔一个字符就漏判一次。
+const CJK = /[\u3000-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/;
+const WHITESPACE = /\s/;
+
+/**
  * 用摘要替换历史中较早的部分,最近的几轮对话原样保留。
  *
  * 切分点向后跳过工具结果:工具结果必须和产生它的 assistant 调用留在同一

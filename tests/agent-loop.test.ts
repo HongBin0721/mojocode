@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../src/core/events.js';
 
-const { mockStreamText, mockCompactMessages, mockShouldCompact } = vi.hoisted(() => ({
-  mockStreamText: vi.fn(),
-  mockCompactMessages: vi.fn(),
-  mockShouldCompact: vi.fn(),
-}));
+const { mockStreamText, mockCompactMessages, mockShouldCompact, mockEstimateTokens } =
+  vi.hoisted(() => ({
+    mockStreamText: vi.fn(),
+    mockCompactMessages: vi.fn(),
+    mockShouldCompact: vi.fn(),
+    mockEstimateTokens: vi.fn(),
+  }));
 
 vi.mock('ai', () => ({
   streamText: mockStreamText,
@@ -15,6 +17,7 @@ vi.mock('ai', () => ({
 vi.mock('../src/agent/compact.js', () => ({
   compactMessages: mockCompactMessages,
   shouldCompact: mockShouldCompact,
+  estimateTokens: mockEstimateTokens,
 }));
 
 import { Agent, wrapGuidance } from '../src/agent/loop.js';
@@ -67,6 +70,7 @@ beforeEach(() => {
   mockStreamText.mockReset();
   mockCompactMessages.mockReset();
   mockShouldCompact.mockReset().mockReturnValue(false);
+  mockEstimateTokens.mockReset().mockReturnValue(0);
   sent.length = 0;
   onStream = undefined;
 });
@@ -573,6 +577,38 @@ describe('轮内压缩', () => {
     await agent.run('第二轮');
     // 持久历史从未被轮内压缩瘦身,靠 historyNeedsCompact 标记强制补压。
     expect(mockCompactMessages).toHaveBeenCalledTimes(2);
+  });
+
+  // 恢复会话已经不再切回记录里的模型,所以换进来的历史可能本来就装不下当前
+  // 窗口。provider 上报数在 setHistory 里必然作废,靠本地粗估补上这一刀。
+  it('setHistory 换进一段粗估超阈值的历史:下一轮开轮强制压缩', async () => {
+    mockEstimateTokens.mockReturnValue(90_000); // > 100_000 * 0.8
+    mockCompactMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: '摘要' }],
+      removedMessages: 3,
+      summaryChars: 2,
+    });
+    const { agent } = makeAgent();
+    agent.setHistory([{ role: 'user', content: '很长的历史' }], { resetSpend: true });
+
+    await agent.run('恢复后的第一轮');
+    // shouldCompact 全程返回 false(lastInputTokens 是 undefined),压缩只可能
+    // 由 setHistory 置位的标记触发。
+    expect(mockShouldCompact).not.toHaveReturnedWith(true);
+    expect(mockCompactMessages).toHaveBeenCalledTimes(1);
+
+    // 标记是一次性的:压缩过后不再重复。
+    await agent.run('第二轮');
+    expect(mockCompactMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('setHistory 换进一段粗估装得下的历史:不触发压缩', async () => {
+    mockEstimateTokens.mockReturnValue(1_000);
+    const { agent } = makeAgent();
+    agent.setHistory([{ role: 'user', content: '短历史' }], { resetSpend: true });
+
+    await agent.run('恢复后的第一轮');
+    expect(mockCompactMessages).not.toHaveBeenCalled();
   });
 });
 

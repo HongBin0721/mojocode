@@ -106,8 +106,10 @@ export interface Session {
 }
 
 /**
- * `resumeSession` 里"历史已恢复但 provider/model 切换失败"的标记错误:
- * 调用方据此提示降级信息,而不是把整次恢复当作失败。
+ * 旧版 server 的 `resumeSession` 会尝试切回会话记录的 provider/model,失败时
+ * 抛出这个标记错误("历史已恢复,只是没切成模型")。现在恢复不再动模型,
+ * 本进程不会再抛它;类保留是为了 `--attach` 到旧版 server 时 wire 上的
+ * ProviderSwitchError 仍能复原类型、走降级提示而不是整次恢复报失败。
  */
 export class ProviderSwitchError extends Error {
   constructor(cause: Error) {
@@ -416,10 +418,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   if (options.resume && options.fork) {
     // fork:eager 拷贝进新文件,源会话从此不再被写。
     store = await options.resume.fork({ provider: provider.id, model: provider.model });
+  } else if (options.resume) {
+    store = options.resume;
+    // 恢复不切模型(见 resumeOverrides),所以反过来把 meta 对齐到当前模型:
+    // 那两个字段只喂会话列表,留着旧值就成了一句不会兑现的话。
+    store.setModel(provider.id, provider.model);
   } else {
-    store =
-      options.resume ??
-      (await SessionStore.create({ root, provider: provider.id, model: provider.model }));
+    store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
   }
 
   const agent = new Agent({
@@ -485,6 +490,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     config.model = next.model;
     provider = next;
     agent.updateModel(createModel(next), next);
+    // meta 的 provider/model 现在纯粹是给会话列表看的("这段对话用的什么
+    // 模型"),不跟着切就会一直停在创建时的值。
+    store.setModel(next.id, next.model);
     return next;
   };
 
@@ -616,15 +624,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       if (opened.state.sandbox && opened.state.approval) {
         setPermissions({ sandbox: opened.state.sandbox, approval: opened.state.approval });
       }
-      // 会话身份包含它当时的 provider/model;不同则尽力切换。失败(缺 key、
-      // provider 已删)以标记错误抛给调用方,但历史已载入。
-      if (opened.meta.provider !== provider.id || opened.meta.model !== provider.model) {
-        try {
-          switchProvider({ provider: opened.meta.provider, model: opened.meta.model });
-        } catch (err) {
-          throw new ProviderSwitchError(err as Error);
-        }
-      }
+      // 刻意不切回会话记录的 provider/model:恢复的是对话内容,模型始终
+      // 沿用当前正在用的那一个。反过来把 meta 更新成当前模型,列表里那一行
+      // 才不会继续宣称一个这段对话往后都不会再用的模型。
+      opened.setModel(provider.id, provider.model);
       return opened;
     },
     forkSession: async () => {

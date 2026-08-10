@@ -1501,7 +1501,8 @@ export function App(props: Props): JSX.Element {
           await session.resumeSession(arg);
         } catch (err) {
           if (err instanceof ProviderSwitchError) {
-            // 历史已恢复,只是没切到会话记录的 provider/model。
+            // 仅旧版 server(--attach)会抛:历史已恢复,只是没切到会话
+            // 记录的 provider/model。新版恢复不再动模型。
             providerWarn = err.message;
           } else {
             push({
@@ -1512,11 +1513,12 @@ export function App(props: Props): JSX.Element {
             break;
           }
         }
-        // 横幅取 session 值而非 state 镜像:resumeSession 可能刚改写了
-        // provider/model/权限,镜像要到下面的 set 之后才追上。
+        // 横幅取 session 值而非 state 镜像:resumeSession 可能刚改写了权限,
+        // 镜像要到下面的 set 之后才追上。provider/model 不会被恢复改写
+        //(始终沿用当前模型),但旧版 server 仍可能切,照样同步一遍。
         resetTimeline([sessionBanner(session), ...buildResumeItems(session)]);
-        // 同步 UI 状态:权限/provider/model 可能都被恢复改写;上下文用量
-        // 归零,下一轮 step-end 会带回真实值。todos 由订阅自动更新。
+        // 同步 UI 状态:权限可能被恢复改写;上下文用量归零,下一轮
+        // step-end 会带回真实值。todos 由订阅自动更新。
         setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
         setPlanActive(session.config.plan);
         setProviderLabel(session.provider.label);

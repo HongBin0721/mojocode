@@ -440,8 +440,7 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
   const flagPerms = permissionsFromFlags(globals);
   const overrides: PartialConfig = {
     ...(resume
-      ? resumeOverrides(resume.meta, resume.state, {
-          ...globals,
+      ? resumeOverrides(resume.state, {
           permissions:
             flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
         })
@@ -546,8 +545,9 @@ async function runMain(flags: MainFlags): Promise<void> {
     if (!tui) return;
   }
 
-  // 恢复要在 loadConfig 之前解析:会话 meta/state 会并入配置层
-  //(优先级:CLI flags > 会话身份 > env/配置文件)。
+  // 恢复要在 loadConfig 之前解析:会话 state 的两轴权限会并入配置层
+  //(优先级:CLI flags > 会话 state > env/配置文件)。provider/model 不还原,
+  // 始终用当前配置解析出的模型。
   let resume: SessionStore | undefined;
   try {
     resume = await resolveResume(flags, root, tui);
@@ -565,8 +565,7 @@ async function runMain(flags: MainFlags): Promise<void> {
   const flagPerms = permissionsFromFlags(flags);
   const overrides: PartialConfig = {
     ...(resume
-      ? resumeOverrides(resume.meta, resume.state, {
-          ...flags,
+      ? resumeOverrides(resume.state, {
           permissions:
             flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
         })
