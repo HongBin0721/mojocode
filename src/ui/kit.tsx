@@ -30,6 +30,7 @@ import {
   type CliRenderer,
   type KeyEvent,
   type MouseEvent as OtuiMouseEvent,
+  type ScrollBoxRenderable,
 } from '@opentui/core';
 import {
   render as solidRender,
@@ -570,6 +571,17 @@ export function Text(props: TextProps): JSX.Element {
 // ---------------------------------------------------------------------------
 
 /**
+ * 上游 ScrollBar 的单键滚动绑定,在这里必须屏蔽。
+ *
+ * scrollbox 是 focusable 的,renderer.autoFocus 会在时间线上任何一次
+ * 鼠标左键按下(点击、拖选复制)时把焦点交给它;此后它自己的
+ * handleKeyPress 也会收到每个按键,于是 ↑/↓ 既被输入框用来翻历史/移动
+ * 光标,又顺带滚动时间线。这些键在输入框语境里另有含义,滚动交给滚轮和
+ * PageUp/PageDown/Home/End(那几个键到不了输入框,继续由 scrollbox 处理)。
+ */
+const BLOCKED_SCROLL_KEYS = new Set(['up', 'down', 'left', 'right', 'j', 'k', 'h', 'l']);
+
+/**
  * 时间线滚动容器:粘底跟随流式输出,用户上滚自动解粘、回到底部重新粘住
  * (OpenTUI stickyScroll 语义);滚轮/PageUp/PageDown 可用。
  *
@@ -578,8 +590,14 @@ export function Text(props: TextProps): JSX.Element {
  * grow 1 + shrink 1 + basis 0 + minHeight 0 才是「占满剩余空间」的正确写法。
  */
 export function ScrollArea(props: { children?: JSX.Element }): JSX.Element {
+  const blockSingleKeyScroll = (box: ScrollBoxRenderable): void => {
+    const inherited = box.handleKeyPress.bind(box);
+    box.handleKeyPress = (key: KeyEvent): boolean =>
+      BLOCKED_SCROLL_KEYS.has(key.name ?? '') ? false : inherited(key);
+  };
   return (
     <scrollbox
+      ref={blockSingleKeyScroll}
       stickyScroll={true}
       stickyStart="bottom"
       flexGrow={1}

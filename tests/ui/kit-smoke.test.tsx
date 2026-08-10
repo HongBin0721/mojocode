@@ -93,4 +93,36 @@ describe('kit(Solid)', () => {
     expect(frame).not.toContain('line-0');
     await ui.destroy();
   });
+
+  it('ScrollArea 拿到焦点后:↑/↓ 不滚动内容,PageUp/PageDown 仍然可以', async () => {
+    const ui = await renderUi(
+      () => (
+        <Box flexDirection="column" width="100%" height="100%">
+          <ScrollArea>
+            {Array.from({ length: 40 }, (_, i) => (
+              <Text>line-{String(i)}</Text>
+            ))}
+          </ScrollArea>
+          <Box flexShrink={0}>
+            <Text>BOTTOM-BAR</Text>
+          </Box>
+        </Box>
+      ),
+      { width: 30, height: 8 },
+    );
+    // 时间线上的一次点击就会让 scrollbox 拿到键盘焦点(renderer.autoFocus)。
+    await ui.click(2, 2);
+    const stuckToBottom = ui.frame();
+    // ↑/↓ 属输入框(翻历史/移光标),不得穿透成滚动。
+    await ui.press('up');
+    expect(ui.frame()).toBe(stuckToBottom);
+    await ui.press('down');
+    expect(ui.frame()).toBe(stuckToBottom);
+    // Page 键到不了输入框,仍归 scrollbox。
+    await ui.press('pageup');
+    expect(ui.frame()).not.toBe(stuckToBottom);
+    await ui.press('pagedown');
+    expect(ui.frame()).toBe(stuckToBottom);
+    await ui.destroy();
+  });
 });
