@@ -36,7 +36,9 @@ jobs:
           test "$version" = "$(node -p "require('./package.json').version")"
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # 直接发布不留 draft:install.sh 的 releases/latest 只认已发布 release,
+          # 留草稿意味着每次都要人工点 Publish,忘了点就装不到新版。
+          draft: false
           generate_release_notes: true
           files: |
             dist/bin/*.tar.gz
