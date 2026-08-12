@@ -7,6 +7,7 @@ import { StatusLine } from '../../src/ui/StatusLine.js';
 import { GoalLine } from '../../src/ui/GoalLine.js';
 import { renderPixelLogo } from '../../src/ui/logo.js';
 import { APP_NAME } from '../../src/config/paths.js';
+import { packageVersion } from '../../src/config/version.js';
 import { renderUi } from '../support/otui.js';
 
 describe('叶子组件在 OpenTUI 下渲染', () => {
@@ -27,6 +28,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     // 宽度够时画像素字,行首不再重复写名字。
     expect(frame).toContain(renderPixelLogo(APP_NAME)[0]!.join(''));
     expect(frame).not.toContain(APP_NAME);
+    expect(frame).toContain(`v${packageVersion()}`);
     expect(frame).toContain('DeepSeek');
     expect(frame).toContain('deepseek-chat');
     expect(frame).toContain('╭');
@@ -49,6 +51,28 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     );
     const frame = ui.frame();
     expect(frame).toContain(APP_NAME);
+    // 36 列内放不下「名字+版本号+信息段」:版本号整段丢弃,而不是让 flex 压缩挤碎整行。
+    expect(frame).not.toContain(`v${packageVersion()}`);
+    expect(frame).not.toContain('▀');
+    await ui.destroy();
+  });
+
+  it('Header:放不下 logo 但放得下版本号时,版本号跟在名字后', async () => {
+    const ui = await renderUi(
+      () => (
+        <Header
+          providerLabel="DeepSeek"
+          model="deepseek-chat"
+          root="/tmp/proj"
+          mode="ask"
+          columns={46}
+        />
+      ),
+      { width: 46, height: 20 },
+    );
+    const frame = ui.frame();
+    expect(frame).toContain(APP_NAME);
+    expect(frame).toContain(`v${packageVersion()}`);
     expect(frame).not.toContain('▀');
     await ui.destroy();
   });

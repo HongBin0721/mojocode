@@ -3,6 +3,7 @@ import { Box, Text, type JSX } from './kit.js';
 import { theme, modeColor, shortenHome } from './theme.js';
 import { logoGradient, pixelLogoWidth, renderPixelLogo } from './logo.js';
 import { APP_NAME } from '../config/paths.js';
+import { packageVersion } from '../config/version.js';
 import { t } from '../i18n/index.js';
 
 interface Props {
@@ -23,10 +24,28 @@ const LOGO_COLORS = logoGradient([...APP_NAME].length);
 /** 圆角边框 2 列 + paddingX 各 1 列。 */
 const FRAME_COLS = 4;
 
+const VERSION = `v${packageVersion()}`;
+
 export function Header(props: Props): JSX.Element {
   // 宽度不够就不画:像素字一旦折行,半块字符会碎成一片噪点,比没有更难看。
   // columns 缺省时按能画处理(叶子组件单测/非 Timeline 调用点不传宽度)。
   const fitsLogo = (): boolean => (props.columns ?? Infinity) - FRAME_COLS >= LOGO_WIDTH;
+
+  // 版本号先量后画:单行信息行一旦溢出,flex 会压缩子项并吞掉分隔符两侧的空格
+  // (Footer.fitParts 防的同一问题),所以放不下就整段不显示,标题行保持原样。
+  const showVersion = (): boolean => {
+    const inner = (props.columns ?? Infinity) - FRAME_COLS;
+    const modeCols = props.mode !== 'ask' ? 3 + props.mode.length : 0;
+    const base =
+      (fitsLogo() ? 0 : APP_NAME.length + 3) +
+      props.providerLabel.length +
+      3 +
+      props.model.length +
+      modeCols;
+    // logo 模式下版本号自带 " · " 分隔;纯文字模式复用名字后原有的分隔,只多出一个空格。
+    const versionCols = VERSION.length + (fitsLogo() ? 3 : 1);
+    return inner >= base + versionCols;
+  };
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
@@ -50,6 +69,12 @@ export function Header(props: Props): JSX.Element {
           <Text bold color={theme.accent}>
             {APP_NAME}
           </Text>
+        </Show>
+        {/* 版本号补在名字的位置:画 logo 时名字不重复出现,版本号就是这一行的开头。 */}
+        <Show when={showVersion()}>
+          <Text color={theme.dim}>{fitsLogo() ? '' : ' '}{VERSION}</Text>
+        </Show>
+        <Show when={!fitsLogo() || showVersion()}>
           <Text color={theme.dim}> · </Text>
         </Show>
         <Text>{props.providerLabel}</Text>
