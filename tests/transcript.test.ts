@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { formatTranscript } from '../src/ui/transcript.js';
+import { setLocale } from '../src/i18n/index.js';
 import type { TimelineItem } from '../src/ui/types.js';
 
 // eslint-disable-next-line no-control-regex
@@ -77,4 +78,28 @@ describe('formatTranscript 保真度(退出 dump 是唯一留档)', () => {
     expect(out).toContain('✗ 崩了');
     expect(out).toContain('── 已恢复 ──');
   });
+
+  it('收尾行带缓存命中段;provider 不报或分母为 0 时不画', () => {
+    setLocale('en');
+    const turn = (over: Partial<Extract<TimelineItem, { kind: 'turn' }>>): TimelineItem => ({
+      key: 't',
+      kind: 'turn',
+      model: 'glm-5.2',
+      durationMs: 12_000,
+      tokens: 3_000,
+      ...over,
+    });
+    const hit = plain(formatTranscript([turn({ inputTokens: 45_600, cachedTokens: 12_300 })], 80));
+    expect(hit).toContain('cache hit 12k/46k (27%)');
+    // 0% 也照画:压缩后的全量 miss 正是用户要看的事实。
+    const miss = plain(formatTranscript([turn({ inputTokens: 45_600, cachedTokens: 0 })], 80));
+    expect(miss).toContain('cache hit 0/46k (0%)');
+    // 缺分母(provider 不报、回放旧会话)或分母为 0:整段不出现。
+    const absent = plain(formatTranscript([turn({ cachedTokens: 100 })], 80));
+    expect(absent).not.toContain('cache hit');
+    const zeroDenominator = plain(formatTranscript([turn({ inputTokens: 0, cachedTokens: 0 })], 80));
+    expect(zeroDenominator).not.toContain('cache hit');
+  });
 });
+
+afterEach(() => setLocale('en'));

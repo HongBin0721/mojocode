@@ -396,6 +396,107 @@ describe('providerOptions 组装', () => {
 });
 
 describe('轮末事件', () => {
+  it('缓存量从 usage 明细透传到 step-end/turn-end', async () => {
+    // AI SDK 把 provider 的缓存命中报在 inputTokenDetails.cacheReadTokens;
+    // 多步流上 totalUsage 会把各步累加。这里一步就够:验证字段没被
+    // usageSnapshot 的窄类型丢掉。
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'finish-step',
+          usage: {
+            inputTokens: 45_600,
+            outputTokens: 800,
+            inputTokenDetails: { cacheReadTokens: 12_300 },
+          },
+        };
+        yield {
+          type: 'finish',
+          totalUsage: {
+            inputTokens: 45_600,
+            outputTokens: 800,
+            inputTokenDetails: { cacheReadTokens: 12_300 },
+          },
+          finishReason: 'stop',
+        };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    const { agent, bus } = makeAgent();
+    const snapshots: Array<{ input?: number; cached?: number }> = [];
+    bus.on((e) => {
+      if (e.type === 'step-end' || e.type === 'turn-end') {
+        snapshots.push({ input: e.usage.inputTokens, cached: e.usage.cachedInputTokens });
+      }
+    });
+    await agent.run('你好');
+
+    expect(snapshots).toEqual([
+      { input: 45_600, cached: 12_300 },
+      { input: 45_600, cached: 12_300 },
+    ]);
+  });
+
+  it('provider 不报缓存时 cachedInputTokens 缺省——与实测 0% 区分开', async () => {
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'finish-step', usage: { inputTokens: 1000, outputTokens: 500 } };
+        yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    const { agent, bus } = makeAgent();
+    const cached: Array<number | undefined> = [];
+    bus.on((e) => {
+      if (e.type === 'turn-end') cached.push(e.usage.cachedInputTokens);
+    });
+    await agent.run('你好');
+
+    expect(cached).toEqual([undefined]);
+  });
+
+  it('引导续跑的轮,turn-end 用量是各流之和而非最后一个流', async () => {
+    // 两个流各带一段缓存命中;若只取最后一个流,续跑轮的输入与命中
+    // 都会被低估(命中率随之失真)。
+    let agentRef!: Agent;
+    mockStreamText.mockImplementation((opts: { messages: Array<{ content: unknown }> }) => {
+      sent.push(opts.messages.map((m) => String(m.content)));
+      const call = sent.length;
+      return {
+        fullStream: (async function* () {
+          await onStream?.(call);
+          yield {
+            type: 'finish',
+            totalUsage: {
+              inputTokens: 40_000,
+              outputTokens: 200,
+              inputTokenDetails: { cacheReadTokens: 10_000 },
+            },
+            finishReason: 'stop',
+          };
+        })(),
+        responseMessages: Promise.resolve([]),
+        finishReason: Promise.resolve('stop'),
+      };
+    });
+    const { agent, bus } = makeAgent();
+    agentRef = agent;
+    onStream = (call) => {
+      if (call === 1) agentRef.inject('末步后的引导');
+    };
+    const turnEnd: Array<{ input?: number; cached?: number }> = [];
+    bus.on((e) => {
+      if (e.type === 'turn-end') {
+        turnEnd.push({ input: e.usage.inputTokens, cached: e.usage.cachedInputTokens });
+      }
+    });
+    await agent.run('你好');
+
+    expect(turnEnd).toEqual([{ input: 80_000, cached: 20_000 }]);
+  });
+
   it('引导续跑不会多发一次 turn-end(状态行不会中途消失)', async () => {
     installDefaultStream();
     const { agent, events } = makeAgent();

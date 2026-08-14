@@ -687,6 +687,10 @@ export function App(props: Props): JSX.Element {
                 model: model(),
                 durationMs: Date.now() - turnStartedAt,
                 tokens: Math.max(0, event.usage.cumulativeTotalTokens - turnStartTokens()),
+                // 命中率只在有可比的分母时才有意义:inputTokens 是本轮各步
+                // 输入的累加(每步都重发全量上下文),分母恒正。
+                inputTokens: event.usage.inputTokens,
+                cachedTokens: event.usage.cachedInputTokens,
               });
               // 基准一次性消费:下一轮的 turn-start 会重新落桩,漏收的那轮
               // 不该借用上一轮的起点。

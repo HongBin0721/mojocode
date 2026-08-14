@@ -66,6 +66,12 @@ export interface UsageSnapshot {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /**
+   * 本轮命中前缀缓存的输入 token。它是 inputTokens 的子集,两者之比即缓存
+   * 命中率。可选:provider 不报缓存明细时保持缺省(与实测的 0% 区分),
+   * 消费端也要容忍缺省(旧序列化事件)。
+   */
+  cachedInputTokens?: number;
   /** 整个会话的累计总量,而不只是本轮。 */
   cumulativeTotalTokens: number;
   contextWindow: number;

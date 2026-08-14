@@ -451,6 +451,23 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
   });
 
+  // 轮末把本轮真实用量随会话落盘(kind: 'usage',恢复回放不读、旧版本安全
+  // 跳过)。缓存命中率与成本核算都靠逐轮数据,而消息流里无从还原。取当下的
+  // provider:/model 换过之后统计要记到实际服务的那个模型头上。尽力而为,
+  // 失败只静默——统计缺一轮远好过打断一次会话。
+  bus.on((event) => {
+    if (event.type !== 'turn-end') return;
+    void store
+      .saveUsage({
+        provider: provider.id,
+        model: provider.model,
+        inputTokens: event.usage.inputTokens,
+        outputTokens: event.usage.outputTokens,
+        cachedInputTokens: event.usage.cachedInputTokens,
+      })
+      .catch(() => {});
+  });
+
   const goal = new GoalController({
     agent,
     bus,

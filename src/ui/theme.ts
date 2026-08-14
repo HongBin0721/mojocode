@@ -168,6 +168,21 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+/**
+ * 轮末收尾行的缓存命中段(如「缓存命中 12.3k/45.6k (27%)」)。
+ * cached 是 input 中命中前缀缓存的部分;分母缺失或为 0 时返回空串——
+ * provider 不报缓存、或回放旧会话没有这个字段,都不画这一段。
+ * 0% 也照常返回:压缩后那一轮的全量 miss 正是用户想看到的事实。
+ */
+export function formatCacheHit(cached: number | undefined, input: number | undefined): string {
+  if (cached === undefined || !input) return '';
+  return t('ui.turnCache', {
+    cached: formatTokens(cached),
+    total: formatTokens(input),
+    pct: Math.round((cached / input) * 100),
+  });
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;

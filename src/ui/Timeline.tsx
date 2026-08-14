@@ -6,6 +6,7 @@ import { renderMarkdownCached } from './md-cache.js';
 import {
   theme,
   glyphs,
+  formatCacheHit,
   formatDuration,
   formatTokens,
   formatToolInput,
@@ -97,11 +98,16 @@ export function TimelineEntry(props: {
     case 'turn':
       // 一轮的收尾行:模型 · 耗时 · 本轮 token。底栏给的是"此刻"的累计值,
       // 回看历史时无从知道某一轮花了多少——这一行补的正是这个。
+      // 缓存命中段由 formatCacheHit 自行决定画不画(provider 不报则缺省)。
       return (
         <Box marginTop={1}>
           <Text color={theme.dim}>
             {glyphs.turn} {item.model} · {formatDuration(item.durationMs)} ·{' '}
             {t('ui.turnTokens', { n: formatTokens(item.tokens) })}
+            {(() => {
+              const cache = formatCacheHit(item.cachedTokens, item.inputTokens);
+              return cache ? ` · ${cache}` : '';
+            })()}
           </Text>
         </Box>
       );

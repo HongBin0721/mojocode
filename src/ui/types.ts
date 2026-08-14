@@ -26,9 +26,19 @@ export type TimelineItem =
   /**
    * 一轮的收尾行(模型 · 耗时 · 本轮 token)。只在正常收尾(turn-end)时落,
    * 中断与出错各有自己的一行,不重复画。tokens 取会话累计量在本轮的增量,
-   * 因此含工具与子 agent 折进来的开销。
+   * 因此含工具与子 agent 折进来的开销。inputTokens/cachedTokens 是本轮主对话
+   * 自己的输入量与其中命中前缀缓存的部分,两者之比即命中率;provider 不报
+   * 缓存或回放旧会话时缺省,不画缓存段。
    */
-  | { key: string; kind: 'turn'; model: string; durationMs: number; tokens: number }
+  | {
+      key: string;
+      kind: 'turn';
+      model: string;
+      durationMs: number;
+      tokens: number;
+      inputTokens?: number;
+      cachedTokens?: number;
+    }
   | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string }

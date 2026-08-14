@@ -2,7 +2,7 @@ import type { AgentEvent, PermissionAsker, PermissionDecision } from '../core/ev
 import { permissionsLabel, type Permissions } from '../config/schema.js';
 import type { Session } from './bootstrap.js';
 import { t } from '../i18n/index.js';
-import { formatToolInput, toolDisplayName, truncateWidth } from '../ui/theme.js';
+import { formatCacheHit, formatToolInput, toolDisplayName, truncateWidth } from '../ui/theme.js';
 
 export interface HeadlessOptions {
   /** 输出以换行分隔的 JSON 事件,而不是普通文本。 */
@@ -58,14 +58,17 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
       case 'aborted':
         errStream.write(`  ! ${t('headless.interrupted')}\n`);
         break;
-      case 'turn-end':
+      case 'turn-end': {
+        // 缓存命中段与 TUI 收尾行同一份格式化(provider 不报则不画)。
+        const cache = formatCacheHit(event.usage.cachedInputTokens, event.usage.inputTokens);
         errStream.write(
           `  · ${t('headless.turnEnd', {
             tokens: event.usage.cumulativeTotalTokens,
             reason: event.finishReason,
-          })}\n`,
+          })}${cache ? ` · ${cache}` : ''}\n`,
         );
         break;
+      }
       default:
         break;
     }

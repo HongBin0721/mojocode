@@ -102,7 +102,35 @@ interface TaskRecord {
   task: SessionTaskRecord;
 }
 
-type Record_ = MetaRecord | MessagesRecord | AppendRecord | SnapshotRecord | StateRecord | TaskRecord;
+/**
+ * 一轮的用量统计。与 task 记录同理:恢复回放不读它(它不属于对话历史),
+ * 旧版本读到未知 kind 会静默跳过。存在它是为了事后可查——缓存命中率、
+ * 成本核算都需要逐轮的真实数据,而消息流里无从还原。
+ */
+export interface SessionUsageRecord {
+  provider: string;
+  model: string;
+  /** 本轮各步输入 token 之和(每步都重发全量上下文)。 */
+  inputTokens: number;
+  outputTokens: number;
+  /** inputTokens 中命中前缀缓存的部分;provider 不报缓存时缺省。 */
+  cachedInputTokens?: number;
+}
+
+interface UsageRecord {
+  kind: 'usage';
+  at: string;
+  usage: SessionUsageRecord;
+}
+
+type Record_ =
+  | MetaRecord
+  | MessagesRecord
+  | AppendRecord
+  | SnapshotRecord
+  | StateRecord
+  | TaskRecord
+  | UsageRecord;
 
 /**
  * 逐消息记住序列化结果。带 base64 图片的消息单条就有几 MB,而 open() 里
@@ -538,6 +566,41 @@ export class SessionStore {
       await this.appendRecord(record);
     });
     await this.flush();
+  }
+
+  /** 追加一条轮末用量记录。尽力而为:统计写不进去不值得打扰一次会话。 */
+  async saveUsage(usage: SessionUsageRecord): Promise<void> {
+    const record: UsageRecord = { kind: 'usage', at: new Date().toISOString(), usage };
+    this.enqueue(async () => {
+      await this.appendRecord(record);
+    });
+    await this.flush();
+  }
+
+  /** 读出一个会话文件里的逐轮用量(时间顺序)。事后统计/测试用,不常驻内存。 */
+  static async readUsage(
+    id: string,
+    dir?: string,
+  ): Promise<Array<SessionUsageRecord & { at: string }>> {
+    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new SessionNotFoundError(id);
+      throw err;
+    }
+    const usage: Array<SessionUsageRecord & { at: string }> = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as Record_;
+        if (record.kind === 'usage') usage.push({ ...record.usage, at: record.at });
+      } catch {
+        // 末尾的不完整写入照旧忽略
+      }
+    }
+    return usage;
   }
 
   /** 读出一个会话文件里的全部子任务过程(时间顺序)。回查/测试用,不常驻内存。 */

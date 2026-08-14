@@ -536,3 +536,28 @@ describe('子任务过程记录(kind: task)', () => {
     expect(reopened.messages.map((m) => m.content)).toEqual(['hi']);
   });
 });
+
+describe('轮末用量记录(kind: usage)', () => {
+  it('saveUsage / readUsage 往返;open() 恢复回放不受影响', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'glm-coding', model: 'glm-5.2', dir });
+    await store.save([msg('user', '你好'), msg('assistant', '在')]);
+    await store.saveUsage({
+      provider: 'glm-coding',
+      model: 'glm-5.2',
+      inputTokens: 45_600,
+      outputTokens: 800,
+      cachedInputTokens: 12_300,
+    });
+    await store.save([msg('user', '你好'), msg('assistant', '在'), msg('user', '继续')]);
+
+    const usage = await SessionStore.readUsage(store.id, dir);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ provider: 'glm-coding', cachedInputTokens: 12_300 });
+    // 命中率可以由记录直接算出(记录里显式给了值,非缺省)。
+    expect(usage[0]!.cachedInputTokens! / usage[0]!.inputTokens).toBeCloseTo(0.2697, 3);
+
+    // 恢复回放只看主对话,usage 记录不混进历史。
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.messages.map((m) => m.content)).toEqual(['你好', '在', '继续']);
+  });
+});

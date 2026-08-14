@@ -1,6 +1,7 @@
 import { renderMarkdownAnsi } from './markdown-ansi.js';
 import { extractDiff, extractPlan, extractTodos } from './timeline-data.js';
 import {
+  formatCacheHit,
   formatDuration,
   formatTokens,
   formatToolInput,
@@ -99,15 +100,19 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         }
         break;
       }
-      case 'turn':
+      case 'turn': {
+        // 缓存命中段与时间线同一份逻辑(provider 不报则不画,见 formatCacheHit)。
+        const cache = formatCacheHit(item.cachedTokens, item.inputTokens);
         out.push(
           '',
           DIM(
             `${glyphs.turn} ${item.model} · ${formatDuration(item.durationMs)} · ` +
-              t('ui.turnTokens', { n: formatTokens(item.tokens) }),
+              t('ui.turnTokens', { n: formatTokens(item.tokens) }) +
+              (cache ? ` · ${cache}` : ''),
           ),
         );
         break;
+      }
       case 'notice':
         out.push('', item.level === 'warn' ? YELLOW(`! ${item.message}`) : DIM(`· ${item.message}`));
         break;

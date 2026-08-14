@@ -81,6 +81,7 @@ export const en = {
 
   'ui.outputLines': '{n} lines of output',
   'ui.turnTokens': '{n} tokens',
+  'ui.turnCache': 'cache hit {cached}/{total} ({pct}%)',
   'ui.moreLines': '… {n} more lines',
   'ui.moreDiffLines': '… {n} more diff lines',
   'ui.truncated': '… (truncated)',

@@ -75,6 +75,7 @@ export const zhCN: Record<keyof typeof en, string> = {
 
   'ui.outputLines': '{n} 行输出',
   'ui.turnTokens': '{n} tokens',
+  'ui.turnCache': '缓存命中 {cached}/{total} ({pct}%)',
   'ui.moreLines': '… 还有 {n} 行',
   'ui.moreDiffLines': '… 还有 {n} 行 diff',
   'ui.truncated': '…（已截断）',

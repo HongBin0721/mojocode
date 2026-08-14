@@ -284,9 +284,16 @@ export class Agent {
 
       // 末步开始之后注入的引导等不到下一个 prepareStep——立即作为新的
       // 用户消息续跑,否则 UI 已回显"引导已排队"而消息被静默丢弃。
+      // 各流的 totalUsage 只覆盖自己那些步:整轮的用量必须逐流累加,
+      // 只取最后一个流会把续跑轮的输入(与缓存命中)低估成零头。
       while (this.pendingGuidance.length > 0 && !this.controller.signal.aborted) {
         this.messages.push(...this.pendingGuidance.splice(0).map(guidanceMessage));
-        finish = (await this.stream()) ?? finish;
+        const next = await this.stream();
+        if (next) {
+          finish = finish
+            ? { usage: mergeUsage(finish.usage, next.usage), finishReason: next.finishReason }
+            : next;
+        }
       }
 
       // 整轮(含所有续跑的流)结束后才发一次。中断/出错走不到这里,
@@ -537,15 +544,43 @@ export class Agent {
     inputTokens: number | undefined;
     outputTokens: number | undefined;
     totalTokens: number | undefined;
+    /** AI SDK 的用量明细;部分 provider 不报,字段按可选取。 */
+    inputTokenDetails?: {
+      cacheReadTokens?: number | undefined;
+      cacheWriteTokens?: number | undefined;
+      noCacheTokens?: number | undefined;
+    };
   }): UsageSnapshot {
     return {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
       totalTokens: usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+      // 不强制归 0:provider 没报缓存明细时保持缺省,渲染端据此不画命中率
+      // 段——实测的 0%(压缩后的全量 miss)与"没量过"必须区分开。
+      cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens,
       cumulativeTotalTokens: this.cumulativeTokens,
       contextWindow: this.options.provider.contextWindow,
     };
   }
+}
+
+/**
+ * 合并同一轮内多个流(引导续跑)的收尾用量:输入/输出/缓存逐流相加,
+ * 累计量与窗口取最新的——它们描述的是"此刻"的会话状态,不是增量。
+ * 缓存是唯一例外:任一流没报缓存明细,和就无从谈起,保持缺省。
+ */
+function mergeUsage(a: UsageSnapshot, b: UsageSnapshot): UsageSnapshot {
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+    cachedInputTokens:
+      a.cachedInputTokens !== undefined && b.cachedInputTokens !== undefined
+        ? a.cachedInputTokens + b.cachedInputTokens
+        : undefined,
+    cumulativeTotalTokens: b.cumulativeTotalTokens,
+    contextWindow: b.contextWindow,
+  };
 }
 
 function errorMessage(error: unknown): string {
