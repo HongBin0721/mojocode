@@ -222,12 +222,15 @@ program
   .action(async () => {
     // 密钥可能来自环境变量,也可能是 `auth` 向导写进配置文件的——两处都认,
     // 与运行时的实际解析一致;配置读不了(损坏等)时降级为只看环境变量。
-    const configured: Record<string, { apiKey?: string } | undefined> = await loadConfig({
-      root: process.cwd(),
-      overrides: {},
-    })
-      .then(({ config }) => config.providers)
-      .catch(() => ({}));
+    // 必须用 loadRawConfig:loadConfig 会顺带解析默认厂商,默认厂商缺 key 时
+    // 抛 MissingKeyError,catch 把整张 providers 表(含自定义条目)一起丢掉。
+    const configured: Record<string, { apiKey?: string; baseURL?: string; apiKeyEnv?: string }> =
+      await loadRawConfig({
+        root: process.cwd(),
+        overrides: {},
+      })
+        .then(({ config }) => config.providers)
+        .catch(() => ({}));
     for (const [id, preset] of Object.entries(PROVIDER_PRESETS)) {
       const hasKey =
         preset.apiKeyEnv.some((name) => process.env[name]) || Boolean(configured[id]?.apiKey);
@@ -235,6 +238,18 @@ program
         `${hasKey ? '✓' : ' '} ${id.padEnd(12)} ${preset.label}\n` +
           `    ${preset.baseURL}\n` +
           `    key: ${preset.apiKeyEnv.join(' | ')}${hasKey ? '' : t('cli.keyNotSet')}\n`,
+      );
+      delete configured[id];
+    }
+    // 内置之外剩下的就是自定义条目(auth 向导的"其他"入口或手写配置)。
+    for (const [id, def] of Object.entries(configured)) {
+      if (!def.baseURL) continue;
+      const hasKey =
+        Boolean(def.apiKey) ||
+        (def.apiKeyEnv ? Boolean(process.env[def.apiKeyEnv]) : false);
+      process.stdout.write(
+        `${hasKey ? '✓' : ' '} ${id.padEnd(12)} ${def.baseURL}\n` +
+          `    key: ${def.apiKeyEnv ?? 'providers.' + id + '.apiKey'}${hasKey ? '' : t('cli.keyNotSet')}\n`,
       );
     }
   });

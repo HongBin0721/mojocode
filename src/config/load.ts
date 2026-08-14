@@ -196,7 +196,8 @@ export interface ResolvedProvider {
   id: string;
   label: string;
   baseURL: string;
-  apiKey: string;
+  /** 无凭据的本地端点(Ollama/vLLM)允许为空。 */
+  apiKey: string | undefined;
   model: string;
   headers: Record<string, string>;
   contextWindow: number;
@@ -234,7 +235,9 @@ export function resolveProvider(
     override.apiKey ??
     (override.apiKeyEnv ? apiKeyFromEnv([override.apiKeyEnv], env) : undefined) ??
     apiKeyFromEnv(preset?.apiKeyEnv ?? [], env);
-  if (!apiKey) {
+  // 无 key 只对内置厂商(有预设)和声明了 apiKeyEnv 的自定义条目是错误——
+  // 自定义本地端点(Ollama/vLLM)本来就不需要凭据,不该被拦在启动向导上。
+  if (!apiKey && (preset !== undefined || override.apiKeyEnv !== undefined)) {
     const hint = override.apiKeyEnv ?? preset?.apiKeyEnv.join(' or ') ?? `providers.${id}.apiKey`;
     throw new MissingKeyError(
       `No API key for provider "${id}". Run \`mojocode auth\`, or set ${hint}, or providers.${id}.apiKey.`,

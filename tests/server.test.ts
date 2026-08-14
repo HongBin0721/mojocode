@@ -282,6 +282,16 @@ describe('server ↔ remote client', () => {
     expect(next.apiKey).toBe('');
   });
 
+  it('switch 携带的 apiKey(选择器就地输入的新 key)原样过线', async () => {
+    const { parts, remote } = await boot();
+    await remote.switch({ provider: 'glm', apiKey: 'fresh-key' });
+    expect(parts.spies.switch).toHaveBeenCalledWith({
+      provider: 'glm',
+      model: undefined,
+      apiKey: 'fresh-key',
+    });
+  });
+
   it('长任务:run 先 ack(乐观 isRunning),完成回执经 SSE 兑现 promise', async () => {
     const { parts, remote } = await boot();
     const done = vi.fn();
@@ -532,3 +542,17 @@ function minimalState(): StateSnapshot {
     sentAt: Date.now(),
   };
 }
+
+describe('isTrustedTransport(凭据过线的传输门槛)', () => {
+  it('loopback 与 https 可信;明文远端与畸形 URL 一律拒绝', async () => {
+    const { isTrustedTransport } = await import('../src/client/remote.js');
+    expect(isTrustedTransport('http://127.0.0.1:7777')).toBe(true);
+    expect(isTrustedTransport('http://localhost:7777')).toBe(true);
+    expect(isTrustedTransport('http://[::1]:7777')).toBe(true);
+    expect(isTrustedTransport('https://box.example.com')).toBe(true);
+    // `serve --host` + `--attach` 的明文 HTTP:key 发出去等于广播。
+    expect(isTrustedTransport('http://192.168.1.5:7777')).toBe(false);
+    expect(isTrustedTransport('http://box.example.com:7777')).toBe(false);
+    expect(isTrustedTransport('not-a-url')).toBe(false);
+  });
+});

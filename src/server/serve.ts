@@ -264,6 +264,9 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
           await session.switch({
             provider: args['provider'] as string | undefined,
             model: args['model'] as string | undefined,
+            // 刚在 TUI 就地输入的 key 随调用过线(loopback + Bearer token,与
+            // 环境变量注入 server 的凭据同一信任域),server 并入内存配置。
+            apiKey: args['apiKey'] as string | undefined,
           }),
         );
       case 'newSession':

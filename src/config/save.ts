@@ -176,3 +176,28 @@ export async function saveApiKey(
     if (options.setDefault) config.provider = providerId;
   }, options.file);
 }
+
+/**
+ * 保存自定义(非内置)provider 的定义:baseURL 必有,apiKey 可省——本地端点
+ * (Ollama/vLLM/LM Studio)不需要凭据。与 saveApiKey 一样合并写,不覆盖该 id
+ * 已有的 model 等字段;重跑向导配同一个地址会自然更新同一条目。
+ */
+export async function saveCustomProvider(
+  providerId: string,
+  definition: { baseURL: string; apiKey?: string },
+  file?: string,
+): Promise<string> {
+  return updateGlobalConfig((config) => {
+    const providers =
+      typeof config.providers === 'object' && config.providers !== null
+        ? (config.providers as Record<string, Record<string, unknown>>)
+        : {};
+    const existing = providers[providerId] ?? {};
+    providers[providerId] = {
+      ...existing,
+      baseURL: definition.baseURL,
+      ...(definition.apiKey ? { apiKey: definition.apiKey } : {}),
+    };
+    config.providers = providers;
+  }, file);
+}

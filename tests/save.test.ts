@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { saveApiKey, savePermissions, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
+import { saveApiKey, saveCustomProvider, savePermissions, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
 import { presetById } from '../src/config/schema.js';
 
 let dir: string;
@@ -64,6 +64,45 @@ describe('saveApiKey', () => {
   it('can set the default provider in the same call', async () => {
     await saveApiKey('deepseek', 'd1', { file, setDefault: true });
     expect((await readConfig()).provider).toBe('deepseek');
+  });
+});
+
+describe('saveCustomProvider', () => {
+  it('writes baseURL and key, preserving an existing model choice', async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      JSON.stringify({ providers: { 'custom-openrouter-ai': { model: 'qwen3-coder' } } }),
+    );
+
+    await saveCustomProvider(
+      'custom-openrouter-ai',
+      { baseURL: 'https://openrouter.ai/api/v1', apiKey: 'or-1' },
+      file,
+    );
+
+    expect(await readConfig()).toEqual({
+      providers: {
+        'custom-openrouter-ai': { model: 'qwen3-coder', baseURL: 'https://openrouter.ai/api/v1', apiKey: 'or-1' },
+      },
+    });
+  });
+
+  it('omits the apiKey field for keyless local endpoints', async () => {
+    await saveCustomProvider('custom-ollama', { baseURL: 'http://127.0.0.1:11434/v1' }, file);
+    const config = await readConfig();
+    expect(config).toEqual({
+      providers: { 'custom-ollama': { baseURL: 'http://127.0.0.1:11434/v1' } },
+    });
+    // 再配一次带 key 的同地址:apiKey 字段补上,baseURL 不重复。
+    await saveCustomProvider(
+      'custom-ollama',
+      { baseURL: 'http://127.0.0.1:11434/v1', apiKey: 'k' },
+      file,
+    );
+    expect(await readConfig()).toEqual({
+      providers: { 'custom-ollama': { baseURL: 'http://127.0.0.1:11434/v1', apiKey: 'k' } },
+    });
   });
 });
 

@@ -94,7 +94,8 @@ export async function probeModels(
   try {
     res = await doFetch(url, {
       headers: {
-        Authorization: `Bearer ${provider.apiKey}`,
+        // 无凭据的本地端点不发 Authorization(空 Bearer 会被部分服务端拒掉)。
+        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
         ...provider.headers,
       },
       ...(options.signal ? { signal: options.signal } : {}),

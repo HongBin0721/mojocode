@@ -52,6 +52,20 @@ import { t } from '../i18n/index.js';
 const RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_MS = 300;
 
+/**
+ * 凭据是否允许经这条连接发出:https 或 loopback(受管子进程/本机 serve)。
+ * 解析失败按不可信处理——发 key 这件事宁可误拒。导出仅为测试。
+ */
+export function isTrustedTransport(serverUrl: string): boolean {
+  try {
+    const parsed = new URL(serverUrl);
+    if (parsed.protocol === 'https:') return true;
+    return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export interface RemoteOptions {
   url: string;
   token: string;
@@ -515,6 +529,12 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     },
     forkSession: () => call<{ id: string }>('forkSession'),
     switch: async (change) => {
+      // 刚就地输入的 key 只允许在可信传输上过线:loopback(受管子进程的默认
+      // 形态)或 https。`serve --host` + `--attach` 是明文 HTTP,把 key 发出去
+      // 等于广播——宁可拒绝并让用户在 server 侧配置。
+      if (change.apiKey !== undefined && !isTrustedTransport(url)) {
+        throw new Error(t('remote.keyRefusedInsecure'));
+      }
       const next = await call<ResolvedProvider>('switch', change);
       await refreshState();
       return next;

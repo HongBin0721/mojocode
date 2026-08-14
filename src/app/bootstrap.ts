@@ -64,10 +64,11 @@ export interface Session {
    */
   forkSession: () => Promise<SessionStore>;
   /**
-   * 会话中途切换模型和/或 provider;返回新解析的 provider。
+   * 会话中途切换模型和/或 provider;返回新解析的 provider。apiKey 只在
+   * "TUI 就地输入了新 key"的切换里出现,由实现并入配置后再解析。
    * 远程会话(client-server 模式)下是异步的,调用方一律 await。
    */
-  switch: (change: { provider?: string; model?: string }) => ResolvedProvider | Promise<ResolvedProvider>;
+  switch: (change: { provider?: string; model?: string; apiKey?: string }) => ResolvedProvider | Promise<ResolvedProvider>;
   /**
    * 调整当前 provider 的思考档位(`/think`)。直接改 provider/config 字段的
    * 老写法在 client-server 模式下改的只是本地镜像,必须收进 Session 契约
@@ -478,7 +479,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     restoreState(options.resume.state);
   }
 
-  const switchProvider = (change: { provider?: string; model?: string }): ResolvedProvider => {
+  const switchProvider = (change: {
+    provider?: string;
+    model?: string;
+    apiKey?: string;
+  }): ResolvedProvider => {
+    if (change.provider && change.apiKey) {
+      // 刚在 TUI 里输入的 key:client 侧已落盘,但本进程的配置是启动时加载的
+      // 快照,不合并的话 resolveProvider 会按"缺 key"拒绝切换。
+      config.providers[change.provider] = {
+        ...config.providers[change.provider],
+        apiKey: change.apiKey,
+      };
+    }
     const next = resolveProvider({
       ...config,
       provider: change.provider ?? config.provider,

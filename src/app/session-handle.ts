@@ -89,7 +89,8 @@ export interface SessionHandle {
   newSession(): Promise<unknown>;
   resumeSession(idOrPrefix: string): Promise<unknown>;
   forkSession(): Promise<{ id: string }>;
-  switch(change: { provider?: string; model?: string }): ResolvedProvider | Promise<ResolvedProvider>;
+  /** apiKey 仅在"刚就地输入了 key"的切换里出现:server 把它并入内存配置后解析。 */
+  switch(change: { provider?: string; model?: string; apiKey?: string }): ResolvedProvider | Promise<ResolvedProvider>;
   setPermissions(permissions: Permissions): void;
   setPlan(active: boolean): void;
   setReasoningEffort(level: ReasoningEffort): void | Promise<void>;

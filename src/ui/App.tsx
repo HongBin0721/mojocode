@@ -61,7 +61,11 @@ import {
   type StatusSegment,
   type TimelineMode,
 } from '../config/schema.js';
-import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
+import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider, type BuiltinProviderId } from '../config/providers.js';
+import { ModelPicker, contextNote, type ModelOption } from './ModelPicker.js';
+import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
+import { listModels } from '../model/registry.js';
+import { saveApiKey } from '../config/save.js';
 import {
   saveLanguage,
   savePermissions,
@@ -314,18 +318,28 @@ export function App(props: Props): JSX.Element {
   const [copyFlash, setCopyFlash] = createSignal<number | undefined>(undefined);
   let copyFlashTimer: NodeJS.Timeout | undefined;
   const [rewind, setRewind] = createSignal<RewindEntry[] | undefined>(undefined);
+  // /model 与 /provider 的选择器(互斥渲染,同回退选择器)。models 为空数组
+  // 时 ModelPicker 只剩手动输入行——端点不提供列表时的形态。
+  const [modelPicker, setModelPicker] = createSignal<{ models: ModelOption[] } | undefined>(undefined);
+  const [providerPicker, setProviderPicker] = createSignal<ProviderRow[] | undefined>(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
   const [prefill, setPrefill] = createSignal<{ text: string } | undefined>(undefined);
   const clearPrefill = () => setPrefill(undefined);
 
   /**
-   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、档位选项框、设置面板
-   * 四选一(见下方渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已
-   * 卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
+   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、档位选项框、设置面板、
+   * 模型/厂商选择器取第一个成立的(见下方渲染处的 <Switch>)。它们渲染期间
+   * Input 与 Footer 都已卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要
+   * 拿它挡一下。
    */
   const overlayOpen = () =>
-    permission() !== undefined || rewind() !== undefined || settingsOpen() || modePickerOpen();
+    permission() !== undefined ||
+    rewind() !== undefined ||
+    settingsOpen() ||
+    modePickerOpen() ||
+    modelPicker() !== undefined ||
+    providerPicker() !== undefined;
 
   /**
    * 把两轴档位写进本工作区的 `.mojocode/config.json`(底栏选项框与 /approvals
@@ -432,17 +446,19 @@ export function App(props: Props): JSX.Element {
   /**
    * 弹出授权确认框,并关掉被它抢占的那些覆盖层。
    *
-   * 确认框在 <Switch> 里优先级最高,底下三个只是渲染不出来、信号还开着——
+   * 确认框在 <Switch> 里优先级最高,底下几个只是渲染不出来、信号还开着——
    * 不就地关掉的话,用户决定完确认框它们就"复活"盖在输入框上,那时一个下意识
-   * 的回车按到的是它们的确认动作(改权限档位 / 回退到某条消息 / 进设置分区),
-   * 而不是提交消息。回退那一支尤其严重:它会截断历史。
+   * 的回车按到的是它们的确认动作(改权限档位 / 回退到某条消息 / 进设置分区 /
+   * 切模型或厂商),而不是提交消息。回退那一支尤其严重:它会截断历史。
    *
-   * 关掉等价于按 esc:三者都只有游标和草稿这类本地状态,丢弃即可。
+   * 关掉等价于按 esc:它们都只有游标和草稿这类本地状态,丢弃即可。
    */
   const showPermission = (request: PermissionRequest) => {
     setModePickerOpen(false);
     setSettingsOpen(false);
     setRewind(undefined);
+    setModelPicker(undefined);
+    setProviderPicker(undefined);
     setPermission(request);
   };
 
@@ -1039,6 +1055,115 @@ export function App(props: Props): JSX.Element {
     });
   };
 
+  /** `/model <id>` 与模型选择器共用的切换落地:换模型、刷新镜像、落盘。 */
+  const applyModelSwitch = async (modelId: string): Promise<void> => {
+    try {
+      const next = await session.switch({ model: modelId });
+      setModel(next.model);
+      setThink(next.reasoningEffort);
+      setUsage((prev) => ({ ...prev, window: next.contextWindow }));
+      push({ kind: 'divider', label: t('divider.modelNow', { model: next.model }) });
+      await saveModelChoice(next.id, next.model).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
+      });
+    } catch (err) {
+      push({ kind: 'error', message: (err as Error).message });
+    }
+  };
+
+  /**
+   * `/provider <id>` 与厂商选择器共用的切换落地。apiKey 只在"选择器里就地
+   * 输入并验证(或强行保存)了新 key"时出现:先落盘,再随 switch 送到真正
+   * 跑模型的进程(远程模式下 server 的内存配置看不到刚写进文件里的 key)。
+   */
+  const applyProviderSwitch = async (id: string, apiKey?: string): Promise<void> => {
+    try {
+      if (apiKey) {
+        await saveApiKey(id, apiKey).catch((err: Error) => {
+          push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
+        });
+      }
+      const next = await session.switch(apiKey ? { provider: id, apiKey } : { provider: id });
+      setProviderLabel(next.label);
+      setModel(next.model);
+      setThink(next.reasoningEffort);
+      setUsage((prev) => ({ ...prev, window: next.contextWindow }));
+      push({ kind: 'divider', label: t('divider.switched', { label: next.label, model: next.model }) });
+      await saveProviderChoice(next.id).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
+      });
+    } catch (err) {
+      push({ kind: 'error', message: (err as Error).message });
+    }
+  };
+
+  /**
+   * 厂商选择器的行数据:内置预设 + 配置文件里的自定义条目,标 ✓ 与有无 key。
+   *
+   * key 的有无一律按**字段存在**判断而不是真值:默认 client-server 模式下
+   * session.config 是 redactConfig 过的镜像,配置文件里的 apiKey 被抹成 ''
+   * (字段保留)——按真值判会把向导配好的每个厂商都标成 no key 逼用户重输。
+   */
+  const providerRows = (): ProviderRow[] => {
+    const configured = session.config.providers;
+    const rows: ProviderRow[] = BUILTIN_PROVIDER_IDS.map((id) => {
+      const preset = PROVIDER_PRESETS[id];
+      return {
+        id,
+        label: preset.label,
+        baseURL: preset.baseURL,
+        keyUrl: preset.keyUrl,
+        hasKey:
+          apiKeyFromEnv(preset.apiKeyEnv) !== undefined || configured[id]?.apiKey !== undefined,
+        current: id === session.provider.id,
+      };
+    });
+    for (const [id, def] of Object.entries(configured)) {
+      if (isBuiltinProvider(id) || !def.baseURL) continue;
+      rows.push({
+        id,
+        label: def.label ?? id,
+        baseURL: def.baseURL,
+        hasKey:
+          def.apiKey !== undefined ||
+          (def.apiKeyEnv ? apiKeyFromEnv([def.apiKeyEnv]) !== undefined : false),
+        current: id === session.provider.id,
+        // 自定义端点默认允许无凭据(本地服务);声明了 apiKeyEnv 的除外。
+        keyOptional: def.apiKeyEnv === undefined,
+      });
+    }
+    return rows;
+  };
+
+  /**
+   * 厂商选择器的 key 探针:在本进程直接打 /models(纯 HTTP,不经会话)。
+   * 抛错即验证失败,由 ProviderPicker 展示并给出重试/强存;signal 让
+   * 验证中按 esc 能真正掐断挂起的请求。
+   */
+  const probeProviderKey = (id: string, key: string, signal?: AbortSignal): Promise<number> => {
+    const preset = isBuiltinProvider(id) ? PROVIDER_PRESETS[id as BuiltinProviderId] : undefined;
+    const override = session.config.providers[id];
+    // override 优先——与 resolveProvider 同序:用户给内置厂商配了代理 baseURL
+    // 时,拿代理签发的 key 去打官方端点必然 401,验证会拒掉一把好 key。
+    const baseURL = override?.baseURL ?? preset?.baseURL;
+    if (!baseURL) return Promise.reject(new Error(`Unknown provider "${id}"`));
+    return listModels(
+      {
+        id,
+        label: preset?.label ?? override?.label ?? id,
+        baseURL,
+        apiKey: key,
+        model: preset?.defaultModel ?? 'custom',
+        headers: override?.headers ?? {},
+        contextWindow: preset?.defaultContextWindow ?? 128_000,
+        parallelToolCalls: true,
+        reasoningEffort: 'auto',
+        sdk: 'openai-compatible',
+      },
+      signal ? { signal } : {},
+    ).then((models) => models.length);
+  };
+
   const runCommand = async (raw: string) => {
     const [name, ...rest] = raw.slice(1).trim().split(/\s+/);
     const arg = rest.join(' ');
@@ -1328,62 +1453,40 @@ export function App(props: Props): JSX.Element {
 
       case 'provider': {
         if (!arg) {
-          push({
-            kind: 'notice',
-            level: 'info',
-            message: t('notice.providers', {
-              list: BUILTIN_PROVIDER_IDS.join(', '),
-              current: session.provider.id,
-            }),
-          });
+          // 无参数:打开厂商选择器——已配 key 的 ✓ 即切,未配的就地输入验证。
+          setProviderPicker(providerRows());
           break;
         }
-        try {
-          const next = await session.switch({ provider: arg });
-          setProviderLabel(next.label);
-          setModel(next.model);
-          setThink(next.reasoningEffort);
-          setUsage((prev) => ({ ...prev, window: next.contextWindow }));
-          push({ kind: 'divider', label: t('divider.switched', { label: next.label, model: next.model }) });
-          await saveProviderChoice(next.id).catch((err: Error) => {
-            push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
-          });
-        } catch (err) {
-          push({ kind: 'error', message: (err as Error).message });
-        }
+        await applyProviderSwitch(arg);
         break;
       }
 
       case 'model': {
         if (!arg) {
+          // 无参数:拉线上模型列表打开选择器;拉不到就退回预设已知模型,
+          // 无论如何手动输入行都在(部分订阅端点不提供列表)。
           setWork({ phase: 'listingModels', since: Date.now() });
+          const preset = isBuiltinProvider(session.provider.id)
+            ? PROVIDER_PRESETS[session.provider.id as BuiltinProviderId]
+            : undefined;
+          const windows = preset?.contextWindows;
+          let ids: string[];
           try {
-            const models = await session.listModels();
-            push({
-              kind: 'notice',
-              level: 'info',
-              message: `${t('notice.modelsOn', { label: session.provider.label })}\n${models
-                .map((m) => `  ${m.id}`)
-                .join('\n')}`,
-            });
-          } catch (err) {
-            push({ kind: 'error', message: (err as Error).message });
+            ids = (await session.listModels()).map((m) => m.id);
+          } catch {
+            push({ kind: 'notice', level: 'warn', message: t('notice.modelListFailed') });
+            ids = preset ? Object.keys(preset.contextWindows) : [];
           }
           endWork();
+          setModelPicker({
+            models: ids.map((id) => ({
+              id,
+              note: contextNote(windows ? windows[id as keyof typeof windows] : undefined),
+            })),
+          });
           break;
         }
-        try {
-          const next = await session.switch({ model: arg });
-          setModel(next.model);
-          setThink(next.reasoningEffort);
-          setUsage((prev) => ({ ...prev, window: next.contextWindow }));
-          push({ kind: 'divider', label: t('divider.modelNow', { model: next.model }) });
-          await saveModelChoice(next.id, next.model).catch((err: Error) => {
-            push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
-          });
-        } catch (err) {
-          push({ kind: 'error', message: (err as Error).message });
-        }
+        await applyModelSwitch(arg);
         break;
       }
 
@@ -1935,9 +2038,9 @@ export function App(props: Props): JSX.Element {
         </Show>
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
-            授权确认框 > 回退选择器 > 档位选项框 > 设置面板 > 常态输入框,按这个
-            优先级取第一个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者
-            每加一个覆盖层就多一级缩进,还得改上一个人的那一支。 */}
+            授权确认框 > 回退选择器 > 档位选项框 > 设置面板 > 模型/厂商选择器
+            > 常态输入框,按这个优先级取第一个成立的。用 Switch 而不是层层嵌套的
+            Show/fallback——后者每加一个覆盖层就多一级缩进,还得改上一个人的那支。 */}
         <Switch fallback={<InputArea />}>
           <Match when={permission()} keyed>
             {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
@@ -1966,6 +2069,34 @@ export function App(props: Props): JSX.Element {
               onStatusBar={applyStatusBar}
               onClose={() => setSettingsOpen(false)}
             />
+          </Match>
+          <Match when={modelPicker()} keyed>
+            {(state: { models: ModelOption[] }) => (
+              <ModelPicker
+                title={t('modelpicker.title', { label: providerLabel() })}
+                models={state.models}
+                current={model()}
+                allowManual={true}
+                onPick={(id) => {
+                  setModelPicker(undefined);
+                  void applyModelSwitch(id);
+                }}
+                onCancel={() => setModelPicker(undefined)}
+              />
+            )}
+          </Match>
+          <Match when={providerPicker()} keyed>
+            {(rows: ProviderRow[]) => (
+              <ProviderPicker
+                rows={rows}
+                probe={probeProviderKey}
+                onSwitch={(id, apiKey) => {
+                  setProviderPicker(undefined);
+                  void applyProviderSwitch(id, apiKey);
+                }}
+                onCancel={() => setProviderPicker(undefined)}
+              />
+            )}
           </Match>
         </Switch>
       </Box>

@@ -72,6 +72,29 @@ describe('resolveProvider', () => {
     expect(provider.model).toBe('qwen');
   });
 
+  it('allows a keyless custom provider (local endpoints)', () => {
+    const provider = resolveProvider(
+      makeConfig({
+        provider: 'custom-ollama',
+        providers: { 'custom-ollama': { baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen3' } },
+      }),
+    );
+    expect(provider.apiKey).toBeUndefined();
+    expect(provider.baseURL).toBe('http://127.0.0.1:11434/v1');
+  });
+
+  it('still requires a key when a custom provider declares apiKeyEnv', () => {
+    expect(() =>
+      resolveProvider(
+        makeConfig({
+          provider: 'myproxy',
+          providers: { myproxy: { baseURL: 'https://proxy.example/v1', apiKeyEnv: 'MYPROXY_KEY' } },
+        }),
+        {},
+      ),
+    ).toThrow(/MYPROXY_KEY/);
+  });
+
   it('explains what to set when the key is missing', () => {
     expect(() => resolveProvider(makeConfig({ provider: 'deepseek' }), {})).toThrow(ConfigError);
     expect(() => resolveProvider(makeConfig({ provider: 'deepseek' }), {})).toThrow(
