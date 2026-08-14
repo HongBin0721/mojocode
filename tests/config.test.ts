@@ -18,8 +18,8 @@ describe('resolveProvider', () => {
   it('fills in the preset baseURL, model and context window', () => {
     const provider = resolveProvider(makeConfig({ provider: 'glm' }), { ZHIPU_API_KEY: 'k' });
     expect(provider.baseURL).toBe('https://open.bigmodel.cn/api/paas/v4');
-    expect(provider.model).toBe('glm-4.6');
-    expect(provider.contextWindow).toBe(200_000);
+    expect(provider.model).toBe('glm-5.3');
+    expect(provider.contextWindow).toBe(1_000_000);
   });
 
   it('never appends /v1 to the GLM base URL', () => {
@@ -40,11 +40,11 @@ describe('resolveProvider', () => {
   });
 
   it('lets top-level model win over the provider default', () => {
-    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'glm-5' }), {
+    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'glm-5.2' }), {
       ZHIPU_API_KEY: 'k',
     });
-    expect(provider.model).toBe('glm-5');
-    expect(provider.contextWindow).toBe(200_000);
+    expect(provider.model).toBe('glm-5.2');
+    expect(provider.contextWindow).toBe(1_000_000);
   });
 
   it('falls back to the provider default window for unknown models', () => {
