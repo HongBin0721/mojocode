@@ -202,8 +202,11 @@ program
   .option('--provider <id>', t('cli.opt.provider', { list: BUILTIN_PROVIDER_IDS.join(', ') }))
   .action(async (opts: { provider?: string }) => {
     const root = process.cwd();
+    // 根命令也声明了 --provider,commander 会把它吞给根(同 doctor 的 -C/--json
+    // 坑):子命令自己的 opts 拿不到时从 program.opts() 兜底。
+    const providerId = opts.provider ?? (program.opts() as { provider?: string }).provider;
     try {
-      const { config } = await loadConfig({ root, overrides: opts.provider ? { provider: opts.provider } : {} });
+      const { config } = await loadConfig({ root, overrides: providerId ? { provider: providerId } : {} });
       const provider = resolveProvider(config);
       const models = await listModels(provider);
       process.stdout.write(`${provider.label} (${provider.baseURL})\n`);

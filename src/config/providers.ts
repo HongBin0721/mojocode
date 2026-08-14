@@ -104,6 +104,7 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'glm-4.6',
     contextWindows: {
+      'glm-5.3': 1_000_000,
       'glm-5.2': 1_000_000,
       'glm-5.1': 200_000,
       'glm-5': 200_000,
@@ -126,6 +127,7 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'glm-4.6',
     contextWindows: {
+      'glm-5.3': 1_000_000,
       'glm-5.2': 1_000_000,
       'glm-5': 200_000,
       'glm-4.7': 200_000,
@@ -141,6 +143,7 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://z.ai/manage-apikey/apikey-list',
     defaultModel: 'glm-4.6',
     contextWindows: {
+      'glm-5.3': 1_000_000,
       'glm-5': 200_000,
       'glm-4.6': 200_000,
     },
