@@ -413,9 +413,12 @@ export class Agent {
       messages: this.messages,
       tools,
       // maxSteps 未设 = 无步数上限(Claude Code 同款:交互场景的刹车是 esc,
-      // 上下文失控由 prepareStep 的轮内压缩兜底)。stopWhen 传 undefined 与
-      // 省略等价,流跑到模型自己出最终回复为止。
-      stopWhen: config.maxSteps !== undefined ? stepCountIs(config.maxSteps) : undefined,
+      // 上下文失控由 prepareStep 的轮内压缩兜底)。注意"无上限"必须显式传
+      // 空数组,不能传 undefined:AI SDK 对省略的 stopWhen 自带缺省
+      // isStepCount(1),传 undefined 等于把每轮钳死在一步——工具结果喂不回
+      // 模型,任务无声中断。空数组 = 零个停止条件,流跑到模型自己出最终
+      // 回复为止。
+      stopWhen: config.maxSteps !== undefined ? stepCountIs(config.maxSteps) : [],
       // 每步开始前做两件事:
       // 1. 注入运行中用户发来的引导消息。SDK 会把 prepareStep 返回的消息
       //    带入后续步骤(stepMessagesForNextStep),已注入的引导已经在

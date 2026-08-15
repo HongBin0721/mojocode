@@ -586,7 +586,8 @@ describe('轮末事件', () => {
     expect(notices[0]!.level).toBe('warn');
     // 两种语言目录都插值 makeAgent 的 maxSteps=24。
     expect(notices[0]!.message).toContain('24');
-    // 设了上限才传 stopWhen,且上限就是配置值(与下面"无上限不传"的测试配对)。
+    // 设了上限才传 stepCountIs,且上限就是配置值(与下面"无上限传空数组"
+    // 的测试配对)。
     expect(mockStreamText.mock.calls[0]![0].stopWhen).toEqual({ stepCountIs: 24 });
 
     // 对照:正常收尾('stop')不发这条提示。
@@ -596,7 +597,7 @@ describe('轮末事件', () => {
   });
 
   it('maxSteps 未设(默认无上限)时,tool-calls 收尾不发步数预算提示', async () => {
-    // 无上限时不传 stopWhen,SDK 端根本不会产出 tool-calls 截停;这条测试守的是
+    // 无上限时 stopWhen 传空数组,SDK 不会产出 tool-calls 截停;这条测试守的是
     // loop 侧的第二道闸:即使 finishReason 真是 'tool-calls'(模型自己末步
     // 只发了工具调用就停),没设上限也不该提示"发消息可继续"。
     mockStreamText.mockImplementation(() => ({
@@ -613,8 +614,10 @@ describe('轮末事件', () => {
     });
     await agent.run('你好');
     expect(notices).toHaveLength(0);
-    // 与设了上限的那条测试配对:无上限时 stopWhen 压根不传。
-    expect(mockStreamText.mock.calls[0]![0].stopWhen).toBeUndefined();
+    // 与设了上限的那条测试配对:无上限时 stopWhen 传空数组。不能传 undefined
+    // 回归守卫:AI SDK 对省略的 stopWhen 缺省 isStepCount(1),undefined 会把
+    // 每轮钳死在一步(工具结果喂不回模型,任务无声中断)。
+    expect(mockStreamText.mock.calls[0]![0].stopWhen).toEqual([]);
   });
 
   it('引导续跑被中断的轮,不发上个流遗留的步数预算提示', async () => {
