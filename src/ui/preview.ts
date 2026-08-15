@@ -4,81 +4,103 @@ const FENCE_RE = /^\s*```/;
 const HR_RE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
 
 /**
- * 取文本末尾,使其经 Markdown.tsx 渲染、在 `columns` 宽的终端里折行后
- * 不超过 `maxRows` 行。目前只有流式思考的尾部窗口在用:思考动辄几千行、
- * 定稿又收成一行,完整摊进时间线只会撑爆再塌掉,留个小窗口原地刷新即可
- * (正文的活动条目已随时间线完整生长,不裁剪)。
+ * 取文本末尾,使其在 `columns` 宽的终端里渲染后**恰好**占 `maxRows` 行
+ * (内容不足时从头生长)。两个调用方:流式正文的活动条目(经 Markdown.tsx
+ * 渲染,超长代码块只显示尾部)和流式思考的尾部窗口(纯 `<Text>` 渲染,
+ * 思考动辄几千行、定稿又收成一行,留个小窗口原地刷新)。
  *
  * 按 `\n` 数逻辑行是不够的——一个没有换行的长段落会折成几十个终端行,
  * 窗口照样超出行数预算。
  *
- * 行高估算必须镜像 Markdown.tsx 的两处加宽变换——代码块行加 2 列缩进、
- * 分隔线展开为 30 个 `─`——否则实际渲染高度会超过估算。折行交给
- * wrap-ansi:与 markdown-ansi.ts 的硬折行同一套显示宽度测量,行数估算
- * 与实际渲染一致,而且正确处理 CJK 宽度、emoji 和 ANSI 转义序列。
+ * **高度必须钉死而不是不超过**:窗口挂在粘底的 scrollbox 尾部,高度每变
+ * 一行,上方整条时间线就跟着上下跳一行。按整行取舍时,一个折成多行的长
+ * 段落(中文思考的常态)会让窗口高度随行滑动在几个值之间来回摆——流式
+ * 期间最刺眼的抖动。所以装不下的首行要**拦腰截断**,只保留它折行后的
+ * 最后几行,窗口高度就此恒定。
+ *
+ * 行高估算必须与实际渲染一致:markdown 渲染镜像 Markdown.tsx 的变换
+ * (围栏行不渲染、代码块行加 2 列缩进、分隔线展开为 30 个 `─`);纯文本
+ * 渲染(`markdown: false`)不做任何变换,围栏行就是普通一行。折行交给
+ * wrap-ansi:与 markdown-ansi.ts 的硬折行同一套显示宽度测量,而且正确
+ * 处理 CJK 宽度、emoji 和 ANSI 转义序列。
  */
-export function tailWithinRows(text: string, maxRows: number, columns: number): string {
+export function tailWithinRows(
+  text: string,
+  maxRows: number,
+  columns: number,
+  opts?: { markdown?: boolean },
+): string {
+  const markdown = opts?.markdown !== false;
   const width = Math.max(20, columns);
   const lines = text.trimEnd().split('\n');
+  const wrapRows = (s: string, w: number) => wrapAnsi(s, w, { hard: true, trim: false }).split('\n').length;
 
   // 每一行渲染前的代码围栏状态(前向扫描;围栏行自身 before 为其闭合前状态)。
-  const before: boolean[] = [];
-  let fence = false;
-  for (const line of lines) {
-    before.push(fence);
-    if (FENCE_RE.test(line)) fence = !fence;
+  // 纯文本渲染不认围栏,跳过整趟扫描——思考动辄几千行,每个 delta 都要过一遍。
+  const before: boolean[] | undefined = markdown ? [] : undefined;
+  if (before) {
+    let fence = false;
+    for (const line of lines) {
+      before.push(fence);
+      if (FENCE_RE.test(line)) fence = !fence;
+    }
   }
-  const inCode = (i: number) => before[i]! && !FENCE_RE.test(lines[i]!);
 
-  // 该行按 Markdown.tsx 渲染后占用的终端行数。围栏行实际不渲染(0 行),
-  // 这里仍按 1 行计——只会高估,方向安全。
+  // 该行渲染后占用的终端行数。markdown 变换:围栏行不渲染(0 行——也按
+  // 0 计,否则窗口含围栏行时实际高度比预算矮一行,围栏滑过窗口又是一跳);
+  // 栏内行补 2 列缩进后折行;栏外分隔线展开为 30 个 ─。
   const renderedRows = (i: number): number => {
-    let rendered = lines[i]!;
-    if (inCode(i)) rendered = `  ${rendered}`;
-    else if (!before[i] && HR_RE.test(rendered)) rendered = '─'.repeat(30);
-    return wrapAnsi(rendered, width, { hard: true, trim: false }).split('\n').length;
+    const line = lines[i]!;
+    if (before) {
+      if (FENCE_RE.test(line)) return 0;
+      if (before[i]) return wrapRows(`  ${line}`, width);
+      if (HR_RE.test(line)) return wrapRows('─'.repeat(30), width);
+    }
+    return wrapRows(line, width);
   };
 
-  let start = lines.length - 1;
+  // 从尾部累加整行,装不下的那一行截断,只留它折行后的最后 keep 行。
+  // 截断按该行的**渲染形态**折行(与 renderedRows 同一套变换):分隔线截出
+  // 的短行不再是 HR,按普通行渲染;代码行例外——截原始行、按 width-2 折,
+  // 渲染时补上 2 列缩进后恰好不超宽(把缩进烤进截断结果会被再缩进一次)。
+  const sliceTail = (i: number, keep: number): string => {
+    let source = lines[i]!;
+    let w = width;
+    if (before?.[i]) {
+      w = width - 2;
+    } else if (before && !before[i] && HR_RE.test(lines[i]!)) {
+      source = '─'.repeat(30);
+    }
+    return wrapAnsi(source, w, { hard: true, trim: false }).split('\n').slice(-keep).join('\n');
+  };
+
+  let start = lines.length; // 窗口里第一条**完整**行的下标
   let rows = 0;
-  let partial: string | undefined;
+  let prefix: string | undefined; // 被截断的首行(保留其尾部折行行)
   for (let i = lines.length - 1; i >= 0; i--) {
     const n = renderedRows(i);
-    if (rows + n > maxRows) {
-      if (rows === 0) {
-        // 单独一行就超过预算 → 只保留它折行后的最后几行。代码行按
-        // width-2 折,渲染时补上 2 列缩进后仍不超宽。
-        const w = inCode(i) ? width - 2 : width;
-        partial = wrapAnsi(lines[i]!, w, { hard: true, trim: false })
-          .split('\n')
-          .slice(-maxRows)
-          .join('\n');
-        start = i;
-        rows = maxRows;
-      }
-      break;
+    if (rows + n <= maxRows) {
+      rows += n;
+      start = i;
+      continue;
     }
-    rows += n;
-    start = i;
+    const keep = maxRows - rows;
+    if (keep > 0) {
+      prefix = sliceTail(i, keep);
+      start = i + 1;
+    }
+    break;
   }
+
+  const body = lines.slice(start).join('\n');
+  let out = prefix === undefined ? body : prefix + (body ? `\n${body}` : '');
 
   // 截断落在代码块中间(首行前围栏未闭合)时,预览缺少开栏行,Markdown.tsx
-  // 的栏内/栏外状态会整体反转。补一个 ``` 开栏,并让出一行预算。
-  if (before[start] && maxRows >= 2) {
-    if (partial !== undefined) {
-      const keptRows = partial.split('\n');
-      if (keptRows.length + 1 > maxRows) partial = keptRows.slice(-(maxRows - 1)).join('\n');
-      return '```\n' + partial;
-    }
-    while (rows + 1 > maxRows && start < lines.length - 1) {
-      rows -= renderedRows(start);
-      start++;
-    }
-    // 让出预算后起点可能已越过闭栏,重查一次再补。
-    if (before[start]) return '```\n' + lines.slice(start).join('\n');
-  }
+  // 的栏内/栏外状态会整体反转。补一个 ``` 开栏;它自身不渲染,不占预算。
+  const firstIdx = prefix === undefined ? start : start - 1;
+  if (before?.[firstIdx]) out = '```\n' + out;
 
-  return partial ?? lines.slice(start).join('\n');
+  return out;
 }
 
 /** 列表项标记,或列表项的缩进续行。 */

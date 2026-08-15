@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import stringWidth from 'string-width';
+import wrapAnsi from 'wrap-ansi';
 import { splitCommitted, tailWithinRows } from '../src/ui/preview.js';
+
+/** 一行在 columns 宽终端里硬折行后的物理行数(与 preview.ts 同一套测量)。 */
+function renderedRows(line: string, columns: number): number {
+  return wrapAnsi(line, columns, { hard: true, trim: false }).split('\n').length;
+}
 
 /** 文本在 `columns` 宽终端里实际占用的行数(输出已按该宽度预折行)。 */
 function rows(text: string, columns: number): number {
@@ -85,6 +91,48 @@ describe('tailWithinRows', () => {
     const out = tailWithinRows(text, 3, 80);
     expect(out.startsWith('```\n')).toBe(true);
     expect(renderedHeight(out, 80)).toBeLessThanOrEqual(3);
+  });
+
+  it('稳态窗口高度精确钉在预算上,不随行滑动摆动(抖动回归)', () => {
+    // 逐 delta 喂入折成多行的长中文段落(思考的典型形态)。内容填满预算后,
+    // 窗口渲染高度必须恒等于 maxRows:按整行丢弃时,高度会随行滑动在几个
+    // 值之间来回摆,粘底 scrollbox 里上方时间线整条跟着上下跳。
+    const paras = Array.from(
+      { length: 12 },
+      (_, i) => `第${i}段:` + '这是一段模拟思考的长内容,没有任何换行符,会按终端宽度折成多个物理行。'.repeat(2),
+    );
+    const full = paras.join('\n\n');
+    let acc = '';
+    const heights: number[] = [];
+    for (let i = 0; i < full.length; i += 3) {
+      acc += full.slice(i, i + 3);
+      // 纯 Text 渲染的行数 = 每行按宽度折行后的行数之和(输出里只有被截断
+      // 的首行是预折行的,完整行仍靠渲染时折)。
+      const out = tailWithinRows(acc, 5, 80, { markdown: false });
+      heights.push(out.split('\n').reduce((n, line) => n + renderedRows(line, 80), 0));
+    }
+    const firstFull = heights.indexOf(5);
+    expect(firstFull).toBeGreaterThan(0);
+    for (const h of heights.slice(firstFull)) expect(h).toBe(5);
+  });
+
+  it('markdown 模式围栏行按 0 行计,围栏滑过窗口高度不塌', () => {
+    // 流式代码块:闭栏滑进窗口时,若围栏按 1 行计,窗口会瞬时矮一行。
+    const full = '```\n' + Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n');
+    let acc = '';
+    const heights: number[] = [];
+    for (let i = 0; i < full.length; i += 2) {
+      acc += full.slice(i, i + 2);
+      heights.push(renderedHeight(tailWithinRows(acc, 5, 80), 80));
+    }
+    const firstFull = heights.indexOf(5);
+    expect(firstFull).toBeGreaterThan(0);
+    for (const h of heights.slice(firstFull)) expect(h).toBe(5);
+  });
+
+  it('markdown: false 不镜像 Markdown 变换:围栏行按普通行计,不补开栏', () => {
+    const out = tailWithinRows('```\ncode line\n```', 2, 80, { markdown: false });
+    expect(out).toBe('code line\n```');
   });
 });
 

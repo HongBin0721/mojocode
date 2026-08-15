@@ -2282,8 +2282,13 @@ export function App(props: Props): JSX.Element {
             时活动条目原位换成不可变条目,版式与前缀完全一致,肉眼无跳变。 */}
         <Show when={activeReasoning().trim()}>
           <Box marginTop={1} paddingRight={WIDTH_SAFETY}>
+            {/* markdown: false——这里是纯 <Text> 渲染,按 Markdown.tsx 的变换
+                估算会系统性高估,窗口高度随之来回摆。窗口高度被钉死在
+                REASONING_PREVIEW_ROWS 行,上方时间线在整段思考期间纹丝不动。 */}
             <Text color={theme.dim} italic>
-              {tailWithinRows(activeReasoning(), REASONING_PREVIEW_ROWS, size.columns - WIDTH_SAFETY)}
+              {tailWithinRows(activeReasoning(), REASONING_PREVIEW_ROWS, size.columns - WIDTH_SAFETY, {
+                markdown: false,
+              })}
             </Text>
           </Box>
         </Show>
