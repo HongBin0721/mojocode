@@ -11,7 +11,8 @@ const { mockStreamText, mockCompactMessages, mockShouldCompact, mockEstimateToke
 
 vi.mock('ai', () => ({
   streamText: mockStreamText,
-  stepCountIs: () => undefined,
+  // 返回带步数的标记对象:loop 是否传 stopWhen、传的上限是多少,断言才看得见。
+  stepCountIs: (n: number) => ({ stepCountIs: n }),
 }));
 
 vi.mock('../src/agent/compact.js', () => ({
@@ -42,7 +43,10 @@ function installDefaultStream() {
   });
 }
 
-function makeAgent(providerOverrides: Record<string, unknown> = {}) {
+function makeAgent(
+  providerOverrides: Record<string, unknown> = {},
+  configOverrides: Record<string, unknown> = {},
+) {
   const bus = new EventBus();
   const events: string[] = [];
   bus.on((e) => events.push(e.type));
@@ -58,7 +62,7 @@ function makeAgent(providerOverrides: Record<string, unknown> = {}) {
       reasoningEffort: 'auto',
       ...providerOverrides,
     } as never,
-    config: { maxSteps: 24, temperature: 0, compactThreshold: 0.8 } as never,
+    config: { maxSteps: 24, temperature: 0, compactThreshold: 0.8, ...configOverrides } as never,
     systemPrompt: 'sys',
     tools: {},
     bus,
@@ -582,11 +586,35 @@ describe('轮末事件', () => {
     expect(notices[0]!.level).toBe('warn');
     // 两种语言目录都插值 makeAgent 的 maxSteps=24。
     expect(notices[0]!.message).toContain('24');
+    // 设了上限才传 stopWhen,且上限就是配置值(与下面"无上限不传"的测试配对)。
+    expect(mockStreamText.mock.calls[0]![0].stopWhen).toEqual({ stepCountIs: 24 });
 
     // 对照:正常收尾('stop')不发这条提示。
     installDefaultStream();
     await agent.run('再来');
     expect(notices).toHaveLength(1);
+  });
+
+  it('maxSteps 未设(默认无上限)时,tool-calls 收尾不发步数预算提示', async () => {
+    // 无上限时不传 stopWhen,SDK 端根本不会产出 tool-calls 截停;这条测试守的是
+    // loop 侧的第二道闸:即使 finishReason 真是 'tool-calls'(模型自己末步
+    // 只发了工具调用就停),没设上限也不该提示"发消息可继续"。
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('tool-calls'),
+    }));
+    const { agent, bus } = makeAgent({}, { maxSteps: undefined });
+    const notices: Array<{ level: string; message: string }> = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push({ level: e.level, message: e.message });
+    });
+    await agent.run('你好');
+    expect(notices).toHaveLength(0);
+    // 与设了上限的那条测试配对:无上限时 stopWhen 压根不传。
+    expect(mockStreamText.mock.calls[0]![0].stopWhen).toBeUndefined();
   });
 
   it('引导续跑被中断的轮,不发上个流遗留的步数预算提示', async () => {

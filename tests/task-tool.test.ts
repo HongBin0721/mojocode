@@ -327,6 +327,20 @@ describe('taskMaxSteps / explore / 过程落盘 / 并行', () => {
     expect(out.incomplete).toContain('(3 steps)');
   });
 
+  it('两个步数键都没设时子任务兜底 50——不随 maxSteps 的"默认无上限"走', async () => {
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield finishStep(10, 5);
+        yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
+      })(),
+      responseMessages: Promise.resolve([{ role: 'assistant', content: '刚开了个头' }]),
+      finishReason: Promise.resolve('tool-calls'),
+    }));
+    const { deps } = makeDeps({ maxSteps: undefined });
+    const out = await executeOf(deps)({ description: 'd', prompt: 'p' }, { toolCallId: 't' });
+    expect(out.incomplete).toContain('(50 steps)');
+  });
+
   it('mode 透传给工具集与系统提示词', async () => {
     installStream([finish], [{ role: 'assistant', content: 'ok' }]);
     const { deps } = makeDeps();

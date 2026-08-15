@@ -209,6 +209,8 @@ mojocode -p "/init" --full-auto                 # 生成 AGENTS.md
 
 `-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--full-auto` 或 `--dangerously-bypass-approvals-and-sandbox`。
 
+单轮步数默认**不设上限**（对齐 Claude Code 的取向：交互场景有人盯着，`esc` 就是刹车，上下文失控由轮内自动压缩兜底）。无人值守想加保险丝就用 `--max-steps <n>`（或配置 `maxSteps`）：撞上会截停当前轮并提示，续发一条消息即从断点接着干（新轮重新计步）。
+
 ### 会话管理
 
 ```bash
@@ -596,7 +598,7 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `taskModel` | 会话当前模型 | 子 agent 用的模型 id（与会话同一个服务商）。调研型子任务换个便宜的模型很划算。也可用 `MOJOCODE_TASK_MODEL` 覆盖 |
-| `taskMaxSteps` | 同 `maxSteps`（50） | 子 agent 单次任务的步数上限。调研型子任务给更小的值能更早止损 |
+| `taskMaxSteps` | `50` | 子 agent 单次任务的步数上限。独立默认——不随 `maxSteps` 的「默认无上限」走，子任务无人值守、报告会被当定论，必须有界；显式设了 `maxSteps` 则沿用它。调研型子任务给更小的值能更早止损 |
 
 与模式无关、始终生效的硬约束：
 

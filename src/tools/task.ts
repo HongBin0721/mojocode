@@ -79,6 +79,13 @@ export const EXPLORE_PROMPT = `## Explore mode
 This task is read-only research. You only have read/search/web tools — no write, edit or bash.
 Do not attempt changes and do not ask for permission to make them; investigate and report.`;
 
+/**
+ * 子任务步数上限的独立缺省。主循环的 maxSteps 默认无上限(Claude Code 同款
+ * 取向),但子任务无人值守、报告会被当定论,不跟着无限制走——见 schema.ts
+ * taskMaxSteps 的注释。
+ */
+const TASK_MAX_STEPS_DEFAULT = 50;
+
 export interface RunTaskOptions {
   description: string;
   prompt: string;
@@ -104,9 +111,11 @@ export async function runTaskSubagent(deps: TaskToolDeps, opts: RunTaskOptions):
   if (abortSignal?.aborted) throw new Error('Task was interrupted before it started.');
 
   const innerBus = new EventBus();
-  // 子任务用自己的步数上限(taskMaxSteps),缺省沿用 maxSteps。克隆 config
-  // 只为改这一个值;子任务是有界的,轮中 /think 之类的就地修改赶不上它。
-  const maxSteps = deps.config.taskMaxSteps ?? deps.config.maxSteps;
+  // 子任务用自己的步数上限(taskMaxSteps),缺省 50、显式设了 maxSteps 则沿用。
+  // 不能跟着 maxSteps 的"默认无上限"走:子任务无人值守,结论会被主对话当
+  // 定论引用,必须有界。克隆 config 只为改这一个值;子任务是有界的,轮中
+  // /think 之类的就地修改赶不上它。
+  const maxSteps = deps.config.taskMaxSteps ?? deps.config.maxSteps ?? TASK_MAX_STEPS_DEFAULT;
   const agent = new Agent({
     model: deps.model(),
     provider: deps.provider(),

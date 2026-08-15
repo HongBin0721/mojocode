@@ -73,12 +73,12 @@ describe('层文件缺省键不产生幻影默认值', () => {
     expect(config.provider).toBe('deepseek');
   });
 
-  it('幻影默认不覆盖其他带默认值的标量字段(maxSteps/reasoningEffort)', async () => {
-    await writeGlobal({ maxSteps: 10, reasoningEffort: 'max' });
+  it('幻影默认不覆盖其他带默认值的标量字段(goalMaxTurns/reasoningEffort)', async () => {
+    await writeGlobal({ goalMaxTurns: 5, reasoningEffort: 'max' });
     await writeProject({ approval: 'never' });
 
     const { config } = await loadRawConfig({ root, env: {} });
-    expect(config.maxSteps).toBe(10);
+    expect(config.goalMaxTurns).toBe(5);
     expect(config.reasoningEffort).toBe('max');
   });
 

@@ -299,8 +299,13 @@ export const configSchema = z.object({
   search: searchConfigSchema.default({ backend: 'auto' }),
   /** LSP 诊断回喂,见 src/lsp/。 */
   lsp: lspConfigSchema.default({ enabled: true, timeoutMs: 3000, servers: {} }),
-  /** 每轮用户输入内 agent 循环步数的硬上限——防失控的兜底措施。 */
-  maxSteps: z.number().int().positive().default(50),
+  /**
+   * 每轮用户输入内 agent 循环步数的硬上限。默认不设(Claude Code 同款取向:
+   * 交互场景有人盯着,esc 就是刹车,失控防护交给轮内压缩与 compactThreshold;
+   * 步数上限是无人值守跑法的保险丝)。`--max-steps` 与本键显式设置时生效,
+   * 撞上会截停并提示发消息续跑(新轮重新计步)。
+   */
+  maxSteps: z.number().int().positive().optional(),
   /**
    * `/goal` 评估器用的模型 id(与会话同一个 provider)。不填则复用会话当前
    * 模型。评估只是判一次"条件达成没有",用便宜的小模型足够,但绝不预置任何
@@ -320,8 +325,9 @@ export const configSchema = z.object({
    */
   taskModel: z.string().optional(),
   /**
-   * 子 agent 单次任务的步数上限,缺省沿用 maxSteps。撞上限时报告会被标记
-   * 不完整——调研型子任务给更小的值能更早止损。
+   * 子 agent 单次任务的步数上限,缺省 50(不随 maxSteps 的"默认无上限"走:
+   * 子任务无人值守、结论会被当定论引用,必须有界);显式设了 maxSteps 则
+   * 沿用它。撞上限时报告会被标记不完整——调研型子任务给更小的值能更早止损。
    */
   taskMaxSteps: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),

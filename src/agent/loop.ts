@@ -322,7 +322,11 @@ export class Agent {
         // (完成过至少一步的流,SDK 会正常兑现收尾 Promise 而不 reject),
         // finish 还留着上一个流的 'tool-calls'——对刚亲手停下的用户再提示
         // "发消息可继续"是误导。controller 每轮新建,signal 如实反映本轮状态。
-        if (finish.finishReason === 'tool-calls' && !this.controller.signal.aborted) {
+        if (
+          finish.finishReason === 'tool-calls' &&
+          this.options.config.maxSteps !== undefined &&
+          !this.controller.signal.aborted
+        ) {
           bus.emit({
             type: 'notice',
             level: 'warn',
@@ -408,7 +412,10 @@ export class Agent {
       system: systemPrompt,
       messages: this.messages,
       tools,
-      stopWhen: stepCountIs(config.maxSteps),
+      // maxSteps 未设 = 无步数上限(Claude Code 同款:交互场景的刹车是 esc,
+      // 上下文失控由 prepareStep 的轮内压缩兜底)。stopWhen 传 undefined 与
+      // 省略等价,流跑到模型自己出最终回复为止。
+      stopWhen: config.maxSteps !== undefined ? stepCountIs(config.maxSteps) : undefined,
       // 每步开始前做两件事:
       // 1. 注入运行中用户发来的引导消息。SDK 会把 prepareStep 返回的消息
       //    带入后续步骤(stepMessagesForNextStep),已注入的引导已经在

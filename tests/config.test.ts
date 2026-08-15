@@ -121,7 +121,7 @@ describe('configSchema', () => {
     const config = makeConfig();
     expect(config.sandbox).toBe('workspace-write');
     expect(config.approval).toBe('untrusted');
-    expect(config.maxSteps).toBe(50);
+    expect(config.maxSteps).toBeUndefined();
     expect(config.compactThreshold).toBe(0.8);
     expect(config.permissions.allowBash).toEqual([]);
   });

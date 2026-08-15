@@ -104,7 +104,7 @@ async function readLayer(file: string, warnings: string[]): Promise<PartialConfi
     throw new ConfigError(`${file} has invalid settings:\n${issues}`);
   }
   // zod 4 的 .partial() 不摘 .default():文件里没写的键会被幻影默认值填充
-  // (provider→deepseek、timeline→full、maxSteps→50……)。层合并按层优先级
+  // (provider→deepseek、timeline→full、compactThreshold→0.8……)。层合并按层优先级
   // 覆盖,于是项目层只要存在(/approvals 落盘就会写它),一个不相干的键就
   // 足以把全局保存的 provider/model、/focus 偏好在每次启动时静默重置。
   // schema.ts 只对 search/lsp/timeline 三个嵌套字段手动 extend 成裸 optional;
