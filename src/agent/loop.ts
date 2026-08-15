@@ -299,6 +299,22 @@ export class Agent {
       // 整轮(含所有续跑的流)结束后才发一次。中断/出错走不到这里,
       // 由 aborted/error 事件收尾,与之前一致。
       if (finish) {
+        // 'tool-calls' 收尾 = 末步还想调工具,被 stopWhen 的步数预算截停。
+        // 不出声的话任务就是"无解释地突然中断"——工具循环改到一半停下,
+        // 用户只能自己猜(子 agent 在 task.ts 对同一信号标记 incomplete)。
+        // 放在整轮级而非 stream() 里:引导续跑会换一个流接着跑,那不是截停,
+        // 而且每个流都发会在一轮里刷多条。
+        // 已中止的轮不发:引导续跑的流被 esc 打断时,它安静地返回 undefined
+        // (完成过至少一步的流,SDK 会正常兑现收尾 Promise 而不 reject),
+        // finish 还留着上一个流的 'tool-calls'——对刚亲手停下的用户再提示
+        // "发消息可继续"是误导。controller 每轮新建,signal 如实反映本轮状态。
+        if (finish.finishReason === 'tool-calls' && !this.controller.signal.aborted) {
+          bus.emit({
+            type: 'notice',
+            level: 'warn',
+            message: t('notice.stepBudget', { steps: this.options.config.maxSteps }),
+          });
+        }
         bus.emit({ type: 'turn-end', usage: finish.usage, finishReason: finish.finishReason });
       }
     } catch (error) {

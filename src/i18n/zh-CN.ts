@@ -252,6 +252,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.costTranscript': '会话记录：{path}',
   'notice.contextNearFull': '上下文即将占满 — 正在压缩对话。',
   'notice.outputLimit': '模型输出达到长度上限被截断，可以让它继续。',
+  'notice.stepBudget': '已达到单轮步数上限（{steps} 步），任务被截停。发一条消息可让它接着完成。',
   'notice.sessionSaveFailed': '会话保存失败：{message}',
   'notice.ruleSaveFailed': '规则写入 .mojocode/config.json 失败：{message}',
   'notice.reviewUsage': '用法：/review <uncommitted | base <分支> | commit <sha> | custom <焦点>>',

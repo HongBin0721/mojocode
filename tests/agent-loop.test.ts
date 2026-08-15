@@ -559,6 +559,75 @@ describe('轮末事件', () => {
     await agent.run('再来');
     expect(events.filter((e) => e === 'aborted')).toHaveLength(2);
   });
+
+  it('步数预算截停(tool-calls 收尾)发 warn 提示,正常收尾不发', async () => {
+    // 末步还想调工具、被 stopWhen 的步数预算截停时,顶层 finishReason 是
+    // 'tool-calls'(task.ts 对子 agent 的同一信号标记 incomplete)。主对话
+    // 不提示的话,任务看起来就是无解释地突然中断。
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
+      })(),
+      responseMessages: Promise.resolve([]),
+      finishReason: Promise.resolve('tool-calls'),
+    }));
+    const { agent, bus } = makeAgent();
+    const notices: Array<{ level: string; message: string }> = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push({ level: e.level, message: e.message });
+    });
+    await agent.run('你好');
+
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.level).toBe('warn');
+    // 两种语言目录都插值 makeAgent 的 maxSteps=24。
+    expect(notices[0]!.message).toContain('24');
+
+    // 对照:正常收尾('stop')不发这条提示。
+    installDefaultStream();
+    await agent.run('再来');
+    expect(notices).toHaveLength(1);
+  });
+
+  it('引导续跑被中断的轮,不发上个流遗留的步数预算提示', async () => {
+    // 流 1 撞预算('tool-calls' 收尾)且末步后有引导排队 → 续跑流 2;用户在
+    // 流 2 中途 esc。SDK 对"完成过至少一步后中断"的流会正常兑现收尾
+    // Promise(fullStream 以 abort part 干净收束,无 finish part),stream()
+    // 安静地返回 undefined——finish 仍是流 1 的 'tool-calls'。不拦的话
+    // aborted 之后紧跟一条"发消息可继续",对刚亲手按停的用户是误导。
+    let agentRef!: Agent;
+    let call = 0;
+    mockStreamText.mockImplementation(() => {
+      call += 1;
+      const aborted = call > 1;
+      return {
+        fullStream: (async function* () {
+          if (aborted) {
+            agentRef.abort();
+            yield { type: 'abort' };
+            return;
+          }
+          // 末步之后注入引导,逼出续跑的流 2。
+          agentRef.inject('续跑指引');
+          yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
+        })(),
+        responseMessages: Promise.resolve([]),
+        finishReason: Promise.resolve(aborted ? 'other' : 'tool-calls'),
+      };
+    });
+    const { agent, bus } = makeAgent();
+    agentRef = agent;
+    const events: string[] = [];
+    const notices: string[] = [];
+    bus.on((e) => {
+      events.push(e.type);
+      if (e.type === 'notice') notices.push(e.message);
+    });
+    await agent.run('你好');
+
+    expect(events).toContain('aborted');
+    expect(notices).toHaveLength(0);
+  });
 });
 
 describe('会话清空', () => {

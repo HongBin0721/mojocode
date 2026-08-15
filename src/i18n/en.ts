@@ -267,6 +267,8 @@ export const en = {
   'notice.costTranscript': 'Transcript: {path}',
   'notice.contextNearFull': 'Context is nearly full — compacting the conversation.',
   'notice.outputLimit': 'The model hit its output limit mid-answer. Ask it to continue.',
+  'notice.stepBudget':
+    'The turn hit its step limit ({steps} steps) and was cut off mid-task. Send a message to let it continue.',
   'notice.sessionSaveFailed': 'Could not save session: {message}',
   'notice.ruleSaveFailed': 'Could not save the rule to .mojocode/config.json: {message}',
   'notice.reviewUsage': 'Usage: /review <uncommitted | base <branch> | commit <sha> | custom <focus>>',
