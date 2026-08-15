@@ -750,6 +750,12 @@ function attachSmoothScroll(renderer: CliRenderer, box: ScrollBoxRenderable): ()
 export function ScrollArea(props: { children?: JSX.Element }): JSX.Element {
   const renderer = useRenderer();
   const setup = (box: ScrollBoxRenderable): void => {
+    // 不显示滚动条:这里走 visible setter(置 _manualVisibility),内容
+    // 尺寸变化时上游 recalculateVisibility() 不会再把它翻回来;基类同时
+    // setDisplay(None),滚动条那列布局让给正文。滚动本身不受影响——
+    // 滚轮/缓动、PageUp/PageDown/Home/End 都不走滚动条的可见性。
+    box.verticalScrollBar.visible = false;
+    box.horizontalScrollBar.visible = false;
     onCleanup(attachSmoothScroll(renderer, box));
   };
   return (
