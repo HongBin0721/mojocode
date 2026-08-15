@@ -141,7 +141,9 @@ function fakeSession() {
     setPermissions: spies.setPermissions,
     setPlan: spies.setPlan,
     setReasoningEffort: spies.setReasoningEffort,
-    listModels: vi.fn(async () => [{ id: 'kimi-k2' }, { id: 'kimi-next' }]),
+    listProviderModels: vi.fn(async () => [
+      { providerId: 'kimi', label: 'Kimi', models: [{ id: 'kimi-k2' }, { id: 'kimi-next' }] },
+    ]),
     doctor: vi.fn(async () => ({ healthy: true, sections: [] })),
     refreshEnvironment: vi.fn(async () => {}),
     skills: [{ name: 'demo', description: 'demo skill' }],
@@ -280,6 +282,27 @@ describe('server ↔ remote client', () => {
     expect(parts.spies.switch).toHaveBeenCalledWith({ provider: undefined, model: 'kimi-next' });
     expect(next.model).toBe('kimi-next');
     expect(next.apiKey).toBe('');
+  });
+
+  it('即时调用:listProviderModels 在 server 侧取分组并原样返回', async () => {
+    const { parts, remote } = await boot();
+    const groups = await remote.listProviderModels();
+    expect(parts.session.listProviderModels).toHaveBeenCalledOnce();
+    expect(groups[0]?.providerId).toBe('kimi');
+    expect(groups[0]?.models.map((m) => m.id)).toEqual(['kimi-k2', 'kimi-next']);
+  });
+
+  it('兼容垫片:旧客户端的 listModels 仍可用,返回首组(当前厂商)模型', async () => {
+    const { parts, server } = await boot();
+    const res = await fetch(`${server.url}/call`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'legacy-1', method: 'listModels' }),
+    });
+    const payload = (await res.json()) as { ok: boolean; value: Array<{ id: string }> };
+    expect(parts.session.listProviderModels).toHaveBeenCalledOnce();
+    expect(payload.ok).toBe(true);
+    expect(payload.value.map((m) => m.id)).toEqual(['kimi-k2', 'kimi-next']);
   });
 
   it('switch 携带的 apiKey(选择器就地输入的新 key)原样过线', async () => {

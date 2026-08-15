@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ModelPicker } from '../../src/ui/ModelPicker.js';
+import { ModelsPicker } from '../../src/ui/ModelsPicker.js';
 import { ProviderPicker } from '../../src/ui/ProviderPicker.js';
 import { AuthWizard } from '../../src/ui/AuthWizard.js';
 import { renderUi } from '../support/otui.js';
@@ -26,8 +27,269 @@ function fakeModelsFetch(ids: string[]): typeof fetch {
     new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), { status: 200 })) as typeof fetch;
 }
 
+/** /models 分组选择器的两组假数据:kimi 带上下文窗口,glm 只有列表。 */
+const pickerGroups = [
+  {
+    providerId: 'kimi',
+    label: 'Kimi',
+    contextWindows: { 'kimi-k3': 1_000_000 },
+    models: [{ id: 'kimi-k3' }, { id: 'kimi-k2.6' }],
+  },
+  {
+    providerId: 'glm',
+    label: 'GLM',
+    models: [{ id: 'glm-5.3' }, { id: 'glm-5.2' }],
+  },
+];
+
+describe('ModelsPicker', () => {
+  it('按厂商分组展示;回车选中的是当前模型,跨厂商分组可切换', async () => {
+    const picked: Array<[string, string]> = [];
+    let cancelled = false;
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={(pid, mid) => picked.push([pid, mid])}
+          onCancel={() => (cancelled = true)}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    const frame = ui.frame();
+    // 组头:厂商名 + 模型计数,当前厂商带 ✓;模型行缩进在组头之下。
+    expect(frame).toContain('Kimi');
+    expect(frame).toContain('GLM');
+    expect(frame).toContain('kimi-k3');
+    expect(frame).toContain('context 1.0M');
+    expect(frame).toContain('kimi-k2.6 ✓ current');
+
+    // 光标初值在当前的 kimi-k2.6 上,直接回车即选定。
+    await ui.press('return');
+    expect(picked).toEqual([['kimi', 'kimi-k2.6']]);
+    expect(cancelled).toBe(false);
+    await ui.destroy();
+  });
+
+  it('输入即搜索:命中模型 id 时只留匹配行,回车跨厂商选定', async () => {
+    const picked: Array<[string, string]> = [];
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={(pid, mid) => picked.push([pid, mid])}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    await ui.type('glm-5.3');
+    const frame = ui.frame();
+    expect(frame).toContain('glm-5.3');
+    expect(frame).not.toContain('kimi-k3');
+    expect(frame).not.toContain('glm-5.2');
+
+    // 光标跳到首个匹配行,回车即选 glm 组的模型。
+    await ui.press('return');
+    expect(picked).toEqual([['glm', 'glm-5.3']]);
+    await ui.destroy();
+  });
+
+  it('搜索命中厂商名时整组保留;无匹配时给提示', async () => {
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={() => {}}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    await ui.type('kimi');
+    expect(ui.frame()).toContain('kimi-k3');
+    expect(ui.frame()).toContain('kimi-k2.6');
+    expect(ui.frame()).not.toContain('glm-5.3');
+
+    // 清词重搜:没有匹配时提示,esc 先清搜索再关闭。
+    await ui.press('backspace');
+    await ui.press('backspace');
+    await ui.press('backspace');
+    await ui.press('backspace');
+    await ui.type('zzz');
+    expect(ui.frame()).toContain('no matching models');
+
+    let cancelled = false;
+    // 第一次 esc 只清词,第二次才取消。
+    const ui2 = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={() => {}}
+          onCancel={() => (cancelled = true)}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    await ui2.type('zzz');
+    await ui2.press('escape');
+    expect(ui2.frame()).toContain('type to search');
+    expect(cancelled).toBe(false);
+    await ui2.press('escape');
+    expect(cancelled).toBe(true);
+    await ui.destroy();
+    await ui2.destroy();
+  });
+
+  it('组头回车折叠/展开该分组', async () => {
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={() => {}}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    // 光标在 kimi-k2.6(序号 2);下移一次到 GLM 组头(序号 3)。
+    await ui.press('down');
+    expect(ui.frame()).toContain('glm-5.3');
+    await ui.press('return');
+    // 折叠后 GLM 组只留组头,模型行消失。
+    expect(ui.frame()).not.toContain('glm-5.3');
+    await ui.press('return');
+    expect(ui.frame()).toContain('glm-5.3');
+    await ui.destroy();
+  });
+
+  it('搜索中回车组头不改折叠集合(清词后不凭空少组)', async () => {
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={() => {}}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    // 厂商名命中 → GLM 整组保留;光标跳到首个模型行,上移一格到组头。
+    await ui.type('glm');
+    await ui.press('up');
+    // 搜索中行集忽略 collapsed,这一下若生效只会改到看不见的集合。
+    await ui.press('return');
+    // esc 清词后 GLM 组的模型行必须还在——搜索中的折叠切换被忽略。
+    await ui.press('escape');
+    expect(ui.frame()).toContain('glm-5.3');
+    await ui.destroy();
+  });
+
+  it('手动输入行:选中后内嵌输入,回车以当前厂商提交', async () => {
+    const picked: Array<[string, string]> = [];
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={pickerGroups}
+          currentProvider="kimi"
+          currentModel="kimi-k2.6"
+          onPick={(pid, mid) => picked.push([pid, mid])}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    expect(ui.frame()).toContain('Type a model id for Kimi');
+    // 光标序号 2 → 下移到垫底的手动行(序号 6)。
+    for (let i = 0; i < 4; i++) await ui.press('down');
+    await ui.press('return');
+    await ui.type('glm-5.3-air');
+    await ui.press('return');
+    expect(picked).toEqual([['kimi', 'glm-5.3-air']]);
+    await ui.destroy();
+  });
+
+  it('高亮只落在光标行:光标扫过的行不残留旧色', async () => {
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={[
+            { providerId: 'kimi', label: 'Kimi', models: [{ id: 'm-1' }, { id: 'm-2' }, { id: 'm-3' }] },
+          ]}
+          currentProvider="kimi"
+          currentModel="m-1"
+          onPick={() => {}}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 16 },
+    );
+    // accent 是 cyan (r 低、g/b 高);默认前景是白 (255,255,255) 不会命中。
+    const highlighted = () => {
+      const captured = ui.spans() as {
+        lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
+      };
+      return captured.lines
+        .flatMap((l) => l.spans)
+        .filter(
+          (s) =>
+            // 活动行的 ❯ 前缀与 id 同 span("❯   m-1"),非活动行是裸 id。
+            /^❯\s*m-\d$|^m-\d$/.test(s.text.trim()) &&
+            s.fg !== undefined &&
+            (s.fg.buffer[0] ?? 0) < 100 &&
+            (s.fg.buffer[1] ?? 0) > 180 &&
+            (s.fg.buffer[2] ?? 0) > 180,
+        )
+        .map((s) => s.text.trim().replace(/^❯\s*/, ''));
+    };
+    expect(highlighted()).toEqual(['m-1']);
+    await ui.press('down');
+    expect(highlighted()).toEqual(['m-2']);
+    await ui.press('down');
+    expect(highlighted()).toEqual(['m-3']);
+    await ui.press('up');
+    expect(highlighted()).toEqual(['m-2']);
+    await ui.destroy();
+  });
+
+  it('长列表窗口化:more-below 计数包含组头行', async () => {
+    const models = Array.from({ length: 12 }, (_, i) => ({ id: `model-${i + 1}` }));
+    const ui = await renderUi(
+      () => (
+        <ModelsPicker
+          groups={[{ providerId: 'kimi', label: 'Kimi', models }]}
+          currentProvider="kimi"
+          currentModel="model-12"
+          onPick={() => {}}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 18 },
+    );
+    // 渲染行 = 组头 + 12 模型 + 手动行 = 14,窗口 8。光标落在当前模型
+    // model-12 上,窗口围绕它居中:首屏 model-6..model-12 + 手动行,上方 6 行。
+    expect(ui.frame()).toContain('model-6');
+    expect(ui.frame()).toContain('model-12 ✓ current');
+    expect(ui.frame()).not.toContain('model-5');
+    expect(ui.frame()).toContain('6 more above');
+    await ui.destroy();
+  });
+});
+
 describe('ModelPicker', () => {
-  it('lists models with the current marker; enter picks, esc cancels', async () => {
+  it('lists models; cursor starts on initial, enter picks, esc cancels', async () => {
     const picked: string[] = [];
     let cancelled = false;
     const ui = await renderUi(
@@ -38,7 +300,7 @@ describe('ModelPicker', () => {
             { id: 'kimi-k3', note: 'context 1.0M' },
             { id: 'kimi-k2.6' },
           ]}
-          current="kimi-k2.6"
+          initial="kimi-k2.6"
           onPick={(id) => picked.push(id)}
           onCancel={() => (cancelled = true)}
         />
@@ -48,10 +310,9 @@ describe('ModelPicker', () => {
     const frame = ui.frame();
     expect(frame).toContain('Models on Kimi');
     expect(frame).toContain('kimi-k3');
-    // 光标初值落在当前模型上,带 ✓ current 标记。
-    expect(frame).toContain('kimi-k2.6 ✓ current');
     expect(frame).toContain('context 1.0M');
 
+    // 光标初值落在 initial 指定的模型上,回车即选它。
     await ui.press('return');
     expect(picked).toEqual(['kimi-k2.6']);
 

@@ -160,7 +160,7 @@ export class Agent {
     this.historyGeneration++;
   }
 
-  /** 会话中途切换模型(`/model`、`/provider`)。历史会保留。 */
+  /** 会话中途切换模型(`/models`、`/provider`)。历史会保留。 */
   updateModel(model: LanguageModel, provider: ResolvedProvider): void {
     this.options.model = model;
     this.options.provider = provider;

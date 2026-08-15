@@ -3,6 +3,7 @@ import { Box, Text, useInput, type JSX } from './kit.js';
 import type { RewindEntry } from '../session/replay.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
+import { centeredWindowStart } from './picker-utils.js';
 
 const WINDOW = 8;
 
@@ -39,9 +40,7 @@ export function RewindPicker(props: Props): JSX.Element {
     }
   });
 
-  const windowStart = createMemo(() =>
-    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), props.entries.length - WINDOW)),
-  );
+  const windowStart = createMemo(() => centeredWindowStart(cursor(), props.entries.length, WINDOW));
   const visible = createMemo(() => props.entries.slice(windowStart(), windowStart() + WINDOW));
 
   return (

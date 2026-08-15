@@ -98,6 +98,42 @@ describe('Input 斜杠命令菜单', () => {
     expect(submitted).toEqual(['/clear']);
     await ui.destroy();
   });
+
+  it('高亮只落在光标行:命令名不再整列统一高亮', async () => {
+    // 回归:命令名曾是嵌套 span 且无条件 accent——每行的 /name 都是高亮色,
+    // 观感是"统一高亮"。改为直接子字符串继承行色后,只有光标行 accent。
+    const { ui: p } = setup([
+      { name: 'alpha', description: 'x' },
+      { name: 'beta', description: 'x' },
+      { name: 'gamma', description: 'x' },
+    ]);
+    const ui = await p;
+    await ui.type('/');
+    const highlighted = () => {
+      const captured = ui.spans() as {
+        lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
+      };
+      // accent 是 cyan(r 低、g/b 高);只认命令行 span(❯ 前缀 + /name)。
+      return captured.lines
+        .flatMap((l) => l.spans)
+        .filter(
+          (s) =>
+            /\/(alpha|beta|gamma)/.test(s.text) &&
+            s.fg !== undefined &&
+            (s.fg.buffer[0] ?? 0) < 100 &&
+            (s.fg.buffer[1] ?? 0) > 180 &&
+            (s.fg.buffer[2] ?? 0) > 180,
+        )
+        .map((s) => s.text.trim().replace(/^❯\s*/, ''));
+    };
+    expect(highlighted()).toEqual(['/alpha']);
+    await ui.press('down');
+    expect(highlighted()).toEqual(['/beta']);
+    await ui.press('down');
+    await ui.press('down');
+    expect(highlighted()).toEqual(['/alpha']); // 环绕回第一项,旧的 beta 不残留
+    await ui.destroy();
+  });
 });
 
 describe('Input esc 分发', () => {

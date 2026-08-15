@@ -1,7 +1,9 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import type { LanguageModel } from 'ai';
-import type { ResolvedProvider } from '../config/load.js';
+import { resolveProvider, type ResolvedProvider } from '../config/load.js';
+import { apiKeyFromEnv, isBuiltinProvider, PROVIDER_PRESETS } from '../config/providers.js';
+import type { Config } from '../config/schema.js';
 
 /**
  * 为解析后的 provider 构建 AI SDK 语言模型。
@@ -142,6 +144,18 @@ export async function probeModels(
 }
 
 /**
+ * 线上 `/models` 列表可能滞后于实际可用的模型(智谱 Coding Plan 上线初期
+ * 列表里没有最新的 glm,但对话端点已可用)。预设的 defaultModel 是发布时
+ * 确认存在的起点,列表里缺它就并入——默认模型必须永远可选。
+ */
+export function ensurePresetDefault(models: ModelInfo[], providerId: string): ModelInfo[] {
+  if (!isBuiltinProvider(providerId)) return models;
+  const preset = PROVIDER_PRESETS[providerId];
+  if (models.some((m) => m.id === preset.defaultModel)) return models;
+  return [...models, { id: preset.defaultModel }].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
  * 请求 `GET {baseURL}/models`。供 `mojocode models` 使用,让用户能查到自己的
  * key 实际拥有的模型 id,而不是去猜那些变化频繁的名字。
  */
@@ -151,5 +165,147 @@ export async function listModels(
 ): Promise<ModelInfo[]> {
   const probe = await probeModels(provider, options);
   if (!probe.ok) throw new Error(probe.error);
-  return probe.models ?? [];
+  return ensurePresetDefault(probe.models ?? [], provider.id);
+}
+
+/** `/models` 分组选择器里一个厂商的数据。凭据一律不随组外带。 */
+export interface ProviderModels {
+  providerId: string;
+  label: string;
+  /** 已知模型的上下文窗口(内置预设才有),UI 换算成行尾标注。 */
+  contextWindows?: Record<string, number>;
+  models: ModelInfo[];
+  /** 列表拉取失败时的一行原因(models 可能是预设已知模型的兜底)。 */
+  error?: string;
+}
+
+export interface ListProviderModelsOptions extends ProbeOptions {
+  /** 注入用,便于测试;默认 process.env。 */
+  env?: NodeJS.ProcessEnv;
+  /** 单个探测的兜底超时(毫秒),默认 PROBE_TIMEOUT_MS;与调用方 signal 并联。 */
+  timeoutMs?: number;
+}
+
+/**
+ * 单个 `/models` 探测的兜底超时。黑洞 TCP(下线的本地端点、被防火墙丢包的
+ * IP)会让 fetch 挂到 undici 的 ~300s 才断,而 listProviderModels 是客户端
+ * 串行 RPC 队列上的**即时**调用——一个死端点挂住的不只是选择器,还有排在
+ * 它后面的所有 RPC(包括用户放弃后提交的那条消息)。
+ */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * 枚举**已配置**的厂商(内置预设凭 env/配置文件里的 key 判定,自定义条目
+ * 有 baseURL 即算)并**并发**探测各自的 `/models`。单个厂商失败不抛错——
+ * 就地带回原因,内置预设退回 `contextWindows` 里已知的老模型,让选择器
+ * 依旧可用(手动输入行是最终兜底)。
+ *
+ * 当前 provider 永远排第一组,其余按预设顺序 + 自定义条目顺序;解析不出
+ * (缺 key、自定义条目没 model)的条目直接跳过——它们本来也无法被切换过去。
+ */
+export async function listProviderModels(
+  config: Config,
+  options: ListProviderModelsOptions = {},
+): Promise<ProviderModels[]> {
+  const env = options.env ?? process.env;
+  const ids: string[] = [config.provider];
+  const seen = new Set(ids);
+  // 显式配置(当前厂商 / 配置文件条目)与"仅凭预设 env 变量扫进来"的组
+  // 待遇不同:后者的 key 是共享变量顺带命中的,探测被拒时整组丢弃
+  // (见结果映射处的说明)。
+  const explicit = new Set(ids);
+  const tryAdd = (id: string, configured: boolean): void => {
+    if (seen.has(id)) return;
+    // key 的有无按"存在"而不是真值判断:内置厂商在配置文件里存过 key 就算
+    // 已配置(值为空串也可能是占位,探测会给出真实答案)。
+    if (isBuiltinProvider(id)) {
+      if (
+        configured ||
+        apiKeyFromEnv(PROVIDER_PRESETS[id].apiKeyEnv, env) !== undefined
+      ) {
+        seen.add(id);
+        ids.push(id);
+        if (configured) explicit.add(id);
+      }
+      return;
+    }
+    // 自定义条目:用户写了 baseURL 就是明确配置过(本地端点不需要凭据)。
+    if (configured) {
+      seen.add(id);
+      ids.push(id);
+      explicit.add(id);
+    }
+  };
+  for (const [id, override] of Object.entries(config.providers)) {
+    if (!override) continue;
+    // 内置厂商"已配置"的三种形态:文件里存过 key、或指了自定义 env 变量且
+    // 该变量有值——与 resolveProvider 的 key 解析链一致,只配 apiKeyEnv 的
+    // 厂商能切过去,就必须能在选择器里被列出来。
+    tryAdd(
+      id,
+      isBuiltinProvider(id)
+        ? override.apiKey !== undefined ||
+            (override.apiKeyEnv !== undefined && apiKeyFromEnv([override.apiKeyEnv], env) !== undefined)
+        : override.baseURL !== undefined,
+    );
+  }
+  for (const id of Object.keys(PROVIDER_PRESETS)) tryAdd(id, false);
+
+  // 显式标注 U:catch 分支的 `[]` 会让 flatMap 的类型推断退化成 unknown。
+  const resolved: ResolvedProvider[] = ids.flatMap<ResolvedProvider>((id) => {
+    try {
+      // model 置空:逐组解析只关心 baseURL/key,模型回退到该厂商自己的
+      // override/预设默认值,顶层 model 覆盖属于(可能是另一个)厂商。
+      // probe 模式下缺 key、缺 model 都放行(探测不读 model,缺 key 让端点
+      // 用 401 回答),字段回退顺序与真正对话的 resolveProvider 是同一份。
+      return [resolveProvider({ ...config, provider: id, model: undefined }, env, { probe: true })];
+    } catch {
+      // probe 模式下只剩"连 baseURL 都没有"会抛——条目无从探测,跳过。
+      return [];
+    }
+  });
+
+  const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const probes = await Promise.all(
+    resolved.map((provider) => {
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+      return probeModels(provider, { ...options, signal });
+    }),
+  );
+
+  return resolved.flatMap<ProviderModels>((provider, i) => {
+    const probe = probes[i]!;
+    const preset = isBuiltinProvider(provider.id) ? PROVIDER_PRESETS[provider.id] : undefined;
+    const windows = preset ? { ...preset.contextWindows } : undefined;
+    if (probe.ok) {
+      // 线上列表滞后时并入预设默认模型(见 ensurePresetDefault 的说明)。
+      return [
+        {
+          providerId: provider.id,
+          label: provider.label,
+          contextWindows: windows,
+          models: ensurePresetDefault(probe.models ?? [], provider.id),
+        },
+      ];
+    }
+    // 仅凭共享 env 变量扫进来的兄弟厂商(ZHIPU_API_KEY 同时挂在 glm /
+    // glm-coding / glm-intl 的预设上,MOONSHOT_API_KEY 同理配对 kimi 系),
+    // key 被端点判 401/403 说明它不属于这家——预设兜底行会渲染成"可选却
+    // 必 401"的陷阱,整组丢弃。显式配置过的组保留兜底与失败原因。
+    if (!explicit.has(provider.id) && (probe.status === 401 || probe.status === 403)) {
+      return [];
+    }
+    return [
+      {
+        providerId: provider.id,
+        label: provider.label,
+        contextWindows: windows,
+        // 探测失败:退回预设已知模型(contextWindows 含默认模型),原因只取
+        // 第一行(错误正文可能带响应体)。
+        models: (preset ? Object.keys(preset.contextWindows) : []).map((id) => ({ id })),
+        error: probe.error?.split('\n')[0],
+      },
+    ];
+  });
 }

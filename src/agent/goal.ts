@@ -60,7 +60,7 @@ export interface GoalControllerOptions {
   /** 按引用持有:goalMaxTurns 改了立刻生效。 */
   config: Config;
   /**
-   * 每次评估现取模型:`/model`、`/provider` 换过之后 provider 是个新对象,
+   * 每次评估现取模型:`/models`、`/provider` 换过之后 provider 是个新对象,
    * 提前建好的模型会一直打向已经被换掉的那个服务端。
    */
   evaluatorModel: () => LanguageModel;

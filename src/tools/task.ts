@@ -44,7 +44,7 @@ export interface TaskToolDeps {
   /** 主总线,只用来转发 task-progress。 */
   bus: EventBus;
   /**
-   * 全部惰性 getter,理由同 ToolContext.searchBackend:/model、/provider、
+   * 全部惰性 getter,理由同 ToolContext.searchBackend:/models、/provider、
    * 权限切换都会就地改 config/provider,现取现算才拿到当下的值。
    */
   model: () => LanguageModel;

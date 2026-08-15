@@ -88,7 +88,7 @@ export interface DoctorOptions {
   offline?: boolean;
   fetchImpl?: typeof fetch;
   /**
-   * 会话当前生效的配置。TUI 传它,好让报告反映 /approvals、/model 这些
+   * 会话当前生效的配置。TUI 传它,好让报告反映 /approvals、/models 这些
    * 运行期改动;不传则以磁盘上的分层结果为准(CLI 的情形)。
    */
   config?: Config;

@@ -2,6 +2,7 @@ import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'so
 import { Box, Text, useInput, type JSX, type ScrollDirection } from './kit.js';
 import { theme, glyphs, inputModeStyle } from './theme.js';
 import { t } from '../i18n/index.js';
+import { centeredWindowStart } from './picker-utils.js';
 import { fuzzyFilter } from '../app/file-index.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import type { ClipboardImage } from '../app/clipboard.js';
@@ -25,7 +26,7 @@ export interface SlashCommand {
   aliases?: string[];
   /**
    * 枚举参数的取值来源。提供了它的命令,在菜单上回车会进入二级选择器
-   * 而不是直接执行;异步形式用于要请求线上数据的命令(如 /model)。
+   * 而不是直接执行;异步形式用于要请求线上数据的命令(如 /resume)。
    */
   options?: () => CommandOption[] | Promise<CommandOption[]>;
   /**
@@ -212,8 +213,7 @@ export function Input(props: Props): JSX.Element {
   );
   const menuCursor = () => (matches().length > 0 ? Math.min(menuIndex(), matches().length - 1) : 0);
   // 光标居中的滚动窗口:候选多于一屏时跟随光标滚动,而不是截断列表。
-  const menuWindowStart = () =>
-    Math.max(0, Math.min(menuCursor() - Math.floor(MENU_WINDOW / 2), matches().length - MENU_WINDOW));
+  const menuWindowStart = () => centeredWindowStart(menuCursor(), matches().length, MENU_WINDOW);
 
   // ── @ 文件引用补全 ──
   // 与斜杠菜单天然互斥:斜杠菜单要求整条以 `/` 开头且无空格,而 @token
@@ -230,11 +230,7 @@ export function Input(props: Props): JSX.Element {
   });
   const fileCursor = () =>
     fileMatches().length > 0 ? Math.min(fileMenuIndex(), fileMatches().length - 1) : 0;
-  const fileWindowStart = () =>
-    Math.max(
-      0,
-      Math.min(fileCursor() - Math.floor(MENU_WINDOW / 2), fileMatches().length - MENU_WINDOW),
-    );
+  const fileWindowStart = () => centeredWindowStart(fileCursor(), fileMatches().length, MENU_WINDOW);
   /**
    * 回车是否作用于文件菜单。模糊匹配是子序列匹配,几乎对任何词都能命中
    * 点什么;若回车一律插入,`看下 @types/node 的用法` 这类正常行文一按
@@ -395,7 +391,7 @@ export function Input(props: Props): JSX.Element {
       },
       () => {
         if (selectorGen !== gen) return;
-        // 选项加载失败(如 /model 拉取线上列表出错)——回退为提交无参
+        // 选项加载失败(如 /resume 读会话列表出错)——回退为提交无参
         // 命令,让命令自身把错误报告到时间线上。
         setSelector(undefined);
         submit(`/${command.name}`);
@@ -720,9 +716,13 @@ export function Input(props: Props): JSX.Element {
               {(c, i) => {
                 const index = () => menuWindowStart() + i();
                 return (
+                  /* 命令名是外层 Text 的直接子字符串、继承行色:光标行整体
+                     accent,其余行回落默认色(与 @ 文件菜单/二级选择器一致)。
+                     刻意不做"条件色的嵌套 span"——上游对 span 的 style.fg 为
+                     falsy 时保留旧值,颜色一旦点亮就清不掉(sticky 高亮)。 */
                   <Text color={index() === menuCursor() ? theme.accent : undefined}>
                     {index() === menuCursor() ? `${glyphs.pointer} ` : '  '}
-                    <Text color={theme.accent}>{formatCommandLabel(c)}</Text>
+                    {formatCommandLabel(c)}
                     {c.options ? <Text color={theme.dim}> ▸</Text> : null}
                     <Text color={theme.dim}> — {c.description}</Text>
                   </Text>
@@ -812,10 +812,7 @@ function SelectorView(props: {
 }): JSX.Element {
   const { options, cursor: selCursor, loading, selected } = props.state;
   const multi = props.state.command.multi === true;
-  const windowStart = Math.max(
-    0,
-    Math.min(selCursor - Math.floor(SELECTOR_WINDOW / 2), options.length - SELECTOR_WINDOW),
-  );
+  const windowStart = centeredWindowStart(selCursor, options.length, SELECTOR_WINDOW);
   const visible = options.slice(windowStart, windowStart + SELECTOR_WINDOW);
   return (
     <Box flexDirection="column" onScroll={props.onScroll}>

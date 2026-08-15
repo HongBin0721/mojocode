@@ -33,7 +33,7 @@ import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { GoalStopReason } from '../core/events.js';
-import type { ModelInfo } from '../model/registry.js';
+import type { ProviderModels } from '../model/registry.js';
 import type { DoctorReport } from '../app/doctor.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
 import { ProviderSwitchError } from '../app/bootstrap.js';
@@ -556,7 +556,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       state = { ...state, provider: { ...state.provider, reasoningEffort: level } };
       return call<void>('setReasoningEffort', { level });
     },
-    listModels: () => call<ModelInfo[]>('listModels'),
+    listProviderModels: () => call<ProviderModels[]>('listProviderModels'),
     doctor: (opts) => call<DoctorReport>('doctor', opts),
     refreshEnvironment: () => call<void>('refreshEnvironment'),
     get skills() {
@@ -581,7 +581,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       closed = true;
       if (options.ownsServer && !wasClosed) {
         // 必须限时:shutdown 走同一条串行队列,前面可能正排着一个慢调用
-        // (/model 的 listModels、/doctor 的联网探测,两者都不在 busy 拦截
+        // (/models 的 listProviderModels、/doctor 的联网探测,两者都不在 busy 拦截
         // 名单里),而 fetch 本身也没有超时。dispose 是在主屏已还原之后
         // await 的——一旦卡住,用户面对的是一个冻住的终端。超时就放手,
         // 受管子进程还有 stdin EOF 与 ppid 看门狗两道兜底。

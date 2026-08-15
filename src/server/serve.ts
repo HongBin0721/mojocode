@@ -286,8 +286,13 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return undefined;
       case 'refreshSkills':
         return session.refreshSkills();
+      case 'listProviderModels':
+        return session.listProviderModels();
+      // 兼容垫片:旧客户端(--attach 版本偏差)的裸 /model 仍发 listModels。
+      // 首组恒为当前厂商(listProviderModels 的排序约定),取它的模型列表
+      // 就是旧语义;与 GET /history 的向后兼容是同一条纪律。
       case 'listModels':
-        return session.listModels();
+        return session.listProviderModels().then((groups) => groups[0]?.models ?? []);
       case 'doctor':
         return session.doctor({ offline: args['offline'] === true });
       case 'shutdown':

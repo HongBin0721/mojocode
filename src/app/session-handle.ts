@@ -24,7 +24,7 @@ import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalState, GoalStatus } from '../agent/goal.js';
-import type { ModelInfo } from '../model/registry.js';
+import type { ProviderModels } from '../model/registry.js';
 import type { DoctorReport } from './doctor.js';
 import type { ImageAttachment } from './attachments.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
@@ -94,7 +94,8 @@ export interface SessionHandle {
   setPermissions(permissions: Permissions): void;
   setPlan(active: boolean): void;
   setReasoningEffort(level: ReasoningEffort): void | Promise<void>;
-  listModels(): Promise<ModelInfo[]>;
+  /** 所有已配置厂商的模型分组(`/models`):远程侧 RPC,server 侧并发探测。 */
+  listProviderModels(): Promise<ProviderModels[]>;
   doctor(options: { offline: boolean }): Promise<DoctorReport>;
   refreshEnvironment(): Promise<void>;
   /** user-invocable 技能投影(命令菜单用),同步读取(远程侧走 SSE 镜像)。 */

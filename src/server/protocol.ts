@@ -34,7 +34,7 @@ export interface WireError {
 /** 会话状态快照。字段面 = TUI 对 Session 的全部同步读取。 */
 export interface StateSnapshot {
   root: string;
-  /** apiKey / headers 已抹除:client 永远不需要凭据(listModels 也在 server 侧跑)。 */
+  /** apiKey / headers 已抹除:client 永远不需要凭据(listProviderModels 也在 server 侧跑)。 */
   provider: ResolvedProvider;
   /** 凭据已抹除:providers.*.apiKey、search.apiKey、mcpServers.*.env/.headers(见 redactConfig)。 */
   config: Config;

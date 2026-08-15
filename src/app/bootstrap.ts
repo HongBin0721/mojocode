@@ -12,7 +12,7 @@ import {
 } from '../config/schema.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus, type PermissionAsker } from '../core/events.js';
-import { createModel, listModels, type ModelInfo } from '../model/registry.js';
+import { createModel, listProviderModels, type ProviderModels } from '../model/registry.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
 import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
@@ -75,8 +75,11 @@ export interface Session {
    * 才能落到真正跑模型的那个进程。
    */
   setReasoningEffort: (level: ReasoningEffort) => void | Promise<void>;
-  /** 拉取当前 provider 的模型列表。收进契约:凭据只存在于 server 侧。 */
-  listModels: () => Promise<ModelInfo[]>;
+  /**
+   * 拉取**所有已配置厂商**的模型列表(`/models` 分组选择器):并发探测,
+   * 单组失败不抛错、就地带回原因。收进契约:凭据只存在于 server 侧。
+   */
+  listProviderModels: () => Promise<ProviderModels[]>;
   /**
    * 会话内体检(`/doctor`):读会话此刻的配置、采信已连上的 MCP 状态、
    * 复用已拉起的 LSP——收进契约后 TUI 不必再摸 session.lsp / mcpStatuses。
@@ -349,7 +352,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const taskDeps: TaskToolDeps = {
     config,
     bus,
-    // 惰性取值:/model、/provider 之后 provider 是新对象,提前建好的模型
+    // 惰性取值:/models、/provider 之后 provider 是新对象,提前建好的模型
     // 会一直打向被换掉的服务端(与 GoalController.evaluatorModel 同理)。
     // model 与 provider 必须取同一份:normalizeError 用 provider.model 组装
     // "模型不存在"的提示,两者不一致时 taskModel 打错字会报到会话模型头上,
@@ -453,7 +456,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   // 轮末把本轮真实用量随会话落盘(kind: 'usage',恢复回放不读、旧版本安全
   // 跳过)。缓存命中率与成本核算都靠逐轮数据,而消息流里无从还原。取当下的
-  // provider:/model 换过之后统计要记到实际服务的那个模型头上。尽力而为,
+  // provider:/models 换过之后统计要记到实际服务的那个模型头上。尽力而为,
   // 失败只静默——统计缺一轮远好过打断一次会话。
   bus.on((event) => {
     if (event.type !== 'turn-end') return;
@@ -472,7 +475,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     agent,
     bus,
     config,
-    // 现取而不是提前建好:`/model`、`/provider` 换过之后 provider 是个新对象,
+    // 现取而不是提前建好:`/models`、`/provider` 换过之后 provider 是个新对象,
     // 提前建的模型会一直打向已经被换掉的那个服务端。createModel 只是本地
     // 构造(registry.ts:13),没有网络往返,每次评估现建一个不值一提。
     evaluatorModel: () =>
@@ -512,7 +515,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     const next = resolveProvider({
       ...config,
       provider: change.provider ?? config.provider,
-      // 单独的 `/model x` 保留当前 provider;不带模型切换 provider 时,
+      // 单独的 `/models x` 保留当前 provider;不带模型切换 provider 时,
       // 必须回退到该 provider 的默认模型,而不是沿用旧的模型 id。
       model: change.model ?? (change.provider ? undefined : config.model),
     });
@@ -675,7 +678,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     setPlan,
     setReasoningEffort: (level: ReasoningEffort) => {
       // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
-      // streamText 生效;同时写回内存配置,使 /model、/provider 重新 resolve
+      // streamText 生效;同时写回内存配置,使 /models、/provider 重新 resolve
       // 时不丢失本次选择。(从 App.tsx 的 /think 分支原样收编。)
       provider.reasoningEffort = level;
       config.providers[provider.id] = {
@@ -683,7 +686,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         reasoningEffort: level,
       };
     },
-    listModels: () => listModels(provider),
+    listProviderModels: () => listProviderModels(config),
     doctor: ({ offline }) =>
       runDoctor({
         root,

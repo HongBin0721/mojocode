@@ -78,7 +78,7 @@ export async function saveProviderChoice(providerId: string, file?: string): Pro
   }, file);
 }
 
-/** 持久化 `/model` 的选择:写入当前 provider 的 `model`,顶层覆盖同样移除。 */
+/** 持久化 `/models` 的选择:写入当前 provider 的 `model`,顶层覆盖同样移除。 */
 export async function saveModelChoice(
   providerId: string,
   model: string,

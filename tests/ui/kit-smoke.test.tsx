@@ -37,6 +37,33 @@ describe('kit(Solid)', () => {
     await ui.destroy();
   });
 
+  it('Text 的 color 从有值变回 undefined 必须真正清除(span 不残留旧色)', async () => {
+    // 回归:styled memo 曾把 undefined 的 fg 键整个省略,而 Solid 的 spread
+    // 只对「仍存在的键」调 setter——键消失 = 旧颜色静默残留。症状是选择器
+    // 里光标扫过的行全部保持高亮。
+    function Probe() {
+      const [on, setOn] = createSignal(true);
+      useInput((_input, key) => {
+        if (key.return) setOn((v) => !v);
+      });
+      return <Text color={on() ? 'red' : undefined}>row</Text>;
+    }
+    const ui = await renderUi(() => <Probe />, { width: 40, height: 4 });
+    const fgGreen = () => {
+      const captured = ui.spans() as {
+        lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
+      };
+      const span = captured.lines.flatMap((l) => l.spans).find((s) => s.text.includes('row'));
+      return span?.fg?.buffer[1] ?? 0;
+    };
+    expect(fgGreen()).toBeLessThan(100); // red = (255, 0, 0)
+    await ui.press('return');
+    expect(fgGreen()).toBeGreaterThan(200); // 回落默认白 (255, 255, 255)
+    await ui.press('return');
+    expect(fgGreen()).toBeLessThan(100); // 再点亮,往返都干净
+    await ui.destroy();
+  });
+
   it('useInput 把同批可打印字符合并为一次派发,信号同步可见', async () => {
     const calls: string[] = [];
     function Probe() {

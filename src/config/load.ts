@@ -215,9 +215,20 @@ export interface LoadedConfig {
   warnings: string[];
 }
 
+export interface ResolveProviderOptions {
+  /**
+   * 探测模式(/models 枚举):缺 key、缺 model 都不抛——探测请求根本不读
+   * model 字段,缺 key 就让端点用 401 给出真实答案。只有缺 baseURL 仍抛
+   * (无从探测)。存在这个开关是为了让探测与实际对话共用同一份字段回退
+   * 顺序:key 解析链只允许有这一份实现。
+   */
+  probe?: boolean;
+}
+
 export function resolveProvider(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,
+  options: ResolveProviderOptions = {},
 ): ResolvedProvider {
   const id = config.provider;
   const preset = isBuiltinProvider(id) ? PROVIDER_PRESETS[id] : undefined;
@@ -237,7 +248,7 @@ export function resolveProvider(
     apiKeyFromEnv(preset?.apiKeyEnv ?? [], env);
   // 无 key 只对内置厂商(有预设)和声明了 apiKeyEnv 的自定义条目是错误——
   // 自定义本地端点(Ollama/vLLM)本来就不需要凭据,不该被拦在启动向导上。
-  if (!apiKey && (preset !== undefined || override.apiKeyEnv !== undefined)) {
+  if (!apiKey && !options.probe && (preset !== undefined || override.apiKeyEnv !== undefined)) {
     const hint = override.apiKeyEnv ?? preset?.apiKeyEnv.join(' or ') ?? `providers.${id}.apiKey`;
     throw new MissingKeyError(
       `No API key for provider "${id}". Run \`mojocode auth\`, or set ${hint}, or providers.${id}.apiKey.`,
@@ -246,7 +257,7 @@ export function resolveProvider(
   }
 
   const model = config.model ?? override.model ?? preset?.defaultModel;
-  if (!model) {
+  if (!model && !options.probe) {
     throw new ConfigError(`No model for provider "${id}". Set providers.${id}.model or pass --model.`);
   }
 
@@ -262,7 +273,8 @@ export function resolveProvider(
     label: override.label ?? preset?.label ?? id,
     baseURL,
     apiKey,
-    model,
+    // probe 模式下允许缺 model(上面没抛):探测不发对话请求,空串只是占位。
+    model: model ?? '',
     headers: override.headers ?? {},
     contextWindow,
     parallelToolCalls: override.parallelToolCalls ?? preset?.parallelToolCalls ?? true,

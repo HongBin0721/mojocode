@@ -3,6 +3,7 @@ import { Box, Text, useApp, useInput, type JSX } from './kit.js';
 import type { SessionMeta } from '../session/store.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
+import { centeredWindowStart } from './picker-utils.js';
 
 const WINDOW = 8;
 
@@ -40,9 +41,7 @@ export function SessionPicker(props: Props): JSX.Element {
     }
   });
 
-  const windowStart = createMemo(() =>
-    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), props.sessions.length - WINDOW)),
-  );
+  const windowStart = createMemo(() => centeredWindowStart(cursor(), props.sessions.length, WINDOW));
   const visible = createMemo(() => props.sessions.slice(windowStart(), windowStart() + WINDOW));
 
   return (

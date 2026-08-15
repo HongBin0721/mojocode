@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from
 import { Box, Text, useInput, type JSX } from './kit.js';
 import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
+import { centeredWindowStart } from './picker-utils.js';
 
 const WINDOW = 8;
 
@@ -155,9 +156,7 @@ export function ProviderPicker(props: Props): JSX.Element {
     }
   });
 
-  const windowStart = createMemo(() =>
-    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), props.rows.length - WINDOW)),
-  );
+  const windowStart = createMemo(() => centeredWindowStart(cursor(), props.rows.length, WINDOW));
   const visible = createMemo(() => props.rows.slice(windowStart(), windowStart() + WINDOW));
 
   return (

@@ -2,6 +2,7 @@ import { batch, createMemo, createSignal, For, Show } from 'solid-js';
 import { Box, Text, useInput, type JSX } from './kit.js';
 import { theme, glyphs } from './theme.js';
 import { LOCALES, t, type Locale, type MessageKey } from '../i18n/index.js';
+import { centeredWindowStart } from './picker-utils.js';
 import { STATUS_SEGMENTS, type StatusSegment } from '../config/schema.js';
 
 /** 语言名用各自的母语写法展示,不做翻译。 */
@@ -204,9 +205,7 @@ export function SettingsPanel(props: Props): JSX.Element {
     activate(cursor());
   });
 
-  const windowStart = createMemo(() =>
-    Math.max(0, Math.min(cursor() - Math.floor(WINDOW / 2), rows().length - WINDOW)),
-  );
+  const windowStart = createMemo(() => centeredWindowStart(cursor(), rows().length, WINDOW));
 
   const title = () => {
     const id = section();

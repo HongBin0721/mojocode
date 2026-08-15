@@ -62,9 +62,9 @@ import {
   type TimelineMode,
 } from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider, type BuiltinProviderId } from '../config/providers.js';
-import { ModelPicker, contextNote, type ModelOption } from './ModelPicker.js';
+import { ModelsPicker } from './ModelsPicker.js';
 import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
-import { listModels } from '../model/registry.js';
+import { listModels, type ProviderModels } from '../model/registry.js';
 import { saveApiKey } from '../config/save.js';
 import {
   saveLanguage,
@@ -90,7 +90,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'init', description: t('cmd.init') },
     { name: 'plan', description: t('cmd.plan') },
     { name: 'goal', description: t('cmd.goal') },
-    { name: 'model', description: t('cmd.model') },
+    { name: 'models', aliases: ['model'], description: t('cmd.models') },
     { name: 'provider', description: t('cmd.provider') },
     { name: 'approvals', description: t('cmd.approvals') },
     { name: 'think', description: t('cmd.think') },
@@ -128,8 +128,10 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
   max: 'thinkopt.max',
 };
 
-/** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'provider', 'resume', 'fork', 'init']);
+/** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。别名要单独列:
+ * 拦截按提交的命令名判断,手打 `/model xxx` 或历史回放不经过 Input 的
+ * 别名改写,漏列就是一条绕过。 */
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'models', 'provider', 'resume', 'fork', 'init']);
 
 /**
  * 压缩进度条的预估摘要总长(字符)。摘要提示词要的是分节的事实性散文,
@@ -177,7 +179,7 @@ let itemCounter = 0;
 const nextKey = () => `item-${itemCounter++}`;
 
 /**
- * 启动横幅条目:字段取自 session 的当前值。会话中途 /model、shift+tab
+ * 启动横幅条目:字段取自 session 的当前值。会话中途 /models、shift+tab
  * 改掉的值走 App 内的 bannerItem(那边读的是 state 镜像)。
  */
 function sessionBanner(session: SessionHandle): TimelineItem {
@@ -318,9 +320,9 @@ export function App(props: Props): JSX.Element {
   const [copyFlash, setCopyFlash] = createSignal<number | undefined>(undefined);
   let copyFlashTimer: NodeJS.Timeout | undefined;
   const [rewind, setRewind] = createSignal<RewindEntry[] | undefined>(undefined);
-  // /model 与 /provider 的选择器(互斥渲染,同回退选择器)。models 为空数组
-  // 时 ModelPicker 只剩手动输入行——端点不提供列表时的形态。
-  const [modelPicker, setModelPicker] = createSignal<{ models: ModelOption[] } | undefined>(undefined);
+  // /models 与 /provider 的选择器(互斥渲染,同回退选择器)。/models 的分组
+  // 数据在打开前拉好;单组失败在选择器里就地标注,手动输入行永远兜底。
+  const [modelsPicker, setModelsPicker] = createSignal<ProviderModels[] | undefined>(undefined);
   const [providerPicker, setProviderPicker] = createSignal<ProviderRow[] | undefined>(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
@@ -338,7 +340,7 @@ export function App(props: Props): JSX.Element {
     rewind() !== undefined ||
     settingsOpen() ||
     modePickerOpen() ||
-    modelPicker() !== undefined ||
+    modelsPicker() !== undefined ||
     providerPicker() !== undefined;
 
   /**
@@ -457,7 +459,7 @@ export function App(props: Props): JSX.Element {
     setModePickerOpen(false);
     setSettingsOpen(false);
     setRewind(undefined);
-    setModelPicker(undefined);
+    setModelsPicker(undefined);
     setProviderPicker(undefined);
     setPermission(request);
   };
@@ -932,7 +934,7 @@ export function App(props: Props): JSX.Element {
     copyFlashTimer = setTimeout(() => setCopyFlash(undefined), 2000);
   });
 
-  // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/model、
+  // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/models、
   // shift+tab 等会话中途的改动会反映进去。
   const bannerItem = (): TimelineItem => ({
     key: nextKey(),
@@ -1059,14 +1061,40 @@ export function App(props: Props): JSX.Element {
     });
   };
 
-  /** `/model <id>` 与模型选择器共用的切换落地:换模型、刷新镜像、落盘。 */
-  const applyModelSwitch = async (modelId: string): Promise<void> => {
+  /**
+   * `/models <id>`(当前厂商)与分组选择器共用的切换落地:换厂商/模型、刷新
+   * 镜像、落盘。厂商没变时走 modelNow 分隔线;变了就走 provider 的 switched
+   * 文案,并把默认厂商一并落盘(下次启动直接开在新厂商上)。
+   *
+   * providerId 只在用户**显式点名**厂商(分组选择器里选了某组的行)时传:
+   * 文本参数路径必须只发 { model },让 server 按它的实时 provider 解析——
+   * 共享会话下 client 的 provider 镜像可能滞后,拿镜像值钉死会把别的
+   * client 刚切过去的厂商又翻回来。
+   */
+  const applyModelSwitch = async (providerId: string | undefined, modelId: string): Promise<void> => {
     try {
-      const next = await session.switch({ model: modelId });
+      // 上一家厂商要在 switch 之前取:本地 Session 切完 provider 就地更新,
+      // 远程镜像也会在 refreshState 后跟上,事后比是恒等的。
+      const previousId = session.provider.id;
+      const next = await session.switch(
+        providerId ? { provider: providerId, model: modelId } : { model: modelId },
+      );
+      if (next.id !== previousId) setProviderLabel(next.label);
       setModel(next.model);
       setThink(next.reasoningEffort);
       setUsage((prev) => ({ ...prev, window: next.contextWindow }));
-      push({ kind: 'divider', label: t('divider.modelNow', { model: next.model }) });
+      push({
+        kind: 'divider',
+        label:
+          next.id !== previousId
+            ? t('divider.switched', { label: next.label, model: next.model })
+            : t('divider.modelNow', { model: next.model }),
+      });
+      if (next.id !== previousId) {
+        await saveProviderChoice(next.id).catch((err: Error) => {
+          push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
+        });
+      }
       await saveModelChoice(next.id, next.model).catch((err: Error) => {
         push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
       });
@@ -1177,7 +1205,7 @@ export function App(props: Props): JSX.Element {
     // /compact 等待摘要返回时还能执行 /clear,压缩随后会把已丢弃的对话
     // 写回内存,并存进那个全新的会话文件。
     // goal.busy 必须并进来:目标循环两轮之间的评估窗口里 agent 是空闲的,
-    // 但历史随时会被下一轮接着写——不算作忙的话,`/clear`、`/model`、
+    // 但历史随时会被下一轮接着写——不算作忙的话,`/clear`、`/models`、
     // `/resume` 会从这个缝里溜进去把历史或模型换掉。
     const busy =
       session.agent.isRunning ||
@@ -1465,32 +1493,27 @@ export function App(props: Props): JSX.Element {
         break;
       }
 
-      case 'model': {
+      // 别名 model 兜底:提交侧(Input)总是改写为主名,这支只为手打
+      // `/model xxx` 或旧脚本留一条活路。
+      case 'model':
+      case 'models': {
         if (!arg) {
-          // 无参数:拉线上模型列表打开选择器;拉不到就退回预设已知模型,
-          // 无论如何手动输入行都在(部分订阅端点不提供列表)。
+          // 无参数:并发拉取所有已配置厂商的模型列表,打开分组选择器。
+          // 整体 RPC 失败(如 server 不在)时提示一句,选择器只剩手动输入行。
           setWork({ phase: 'listingModels', since: Date.now() });
-          const preset = isBuiltinProvider(session.provider.id)
-            ? PROVIDER_PRESETS[session.provider.id as BuiltinProviderId]
-            : undefined;
-          const windows = preset?.contextWindows;
-          let ids: string[];
+          let groups: ProviderModels[];
           try {
-            ids = (await session.listModels()).map((m) => m.id);
+            groups = await session.listProviderModels();
           } catch {
-            push({ kind: 'notice', level: 'warn', message: t('notice.modelListFailed') });
-            ids = preset ? Object.keys(preset.contextWindows) : [];
+            push({ kind: 'notice', level: 'warn', message: t('notice.modelsUnavailable') });
+            groups = [];
           }
           endWork();
-          setModelPicker({
-            models: ids.map((id) => ({
-              id,
-              note: contextNote(windows ? windows[id as keyof typeof windows] : undefined),
-            })),
-          });
+          setModelsPicker(groups);
           break;
         }
-        await applyModelSwitch(arg);
+        // 只发 model:server 按实时 provider 解析(见 applyModelSwitch 的说明)。
+        await applyModelSwitch(undefined, arg);
         break;
       }
 
@@ -1541,7 +1564,7 @@ export function App(props: Props): JSX.Element {
         break;
       }
 
-      // 体检读的是会话此刻的配置(含 /approvals、/model 改过的值),MCP 直接
+      // 体检读的是会话此刻的配置(含 /approvals、/models 改过的值),MCP 直接
       // 采信已连上的状态——重新连一遍会把每个 stdio server 的子进程再拉起
       // 一份。`/doctor offline` 跳过联网那两项(端点探测、版本比对)。
       case 'doctor': {
@@ -1795,10 +1818,8 @@ export function App(props: Props): JSX.Element {
           label: PROVIDER_PRESETS[id].label,
           current: id === session.provider.id,
         })),
-      model: async (): Promise<CommandOption[]> => {
-        const models = await session.listModels();
-        return models.map((m) => ({ value: m.id, current: m.id === model() }));
-      },
+      // /models 不挂二级选择器:分组+搜索的交互塞不进平铺选项列表,
+      // 菜单上回车直接提交无参命令,由 App 打开 ModelsPicker 覆盖层。
       resume: async (): Promise<CommandOption[]> => {
         const metas = await SessionStore.list(session.root);
         return metas
@@ -2074,18 +2095,17 @@ export function App(props: Props): JSX.Element {
               onClose={() => setSettingsOpen(false)}
             />
           </Match>
-          <Match when={modelPicker()} keyed>
-            {(state: { models: ModelOption[] }) => (
-              <ModelPicker
-                title={t('modelpicker.title', { label: providerLabel() })}
-                models={state.models}
-                current={model()}
-                allowManual={true}
-                onPick={(id) => {
-                  setModelPicker(undefined);
-                  void applyModelSwitch(id);
+          <Match when={modelsPicker()} keyed>
+            {(groups: ProviderModels[]) => (
+              <ModelsPicker
+                groups={groups}
+                currentProvider={session.provider.id}
+                currentModel={model()}
+                onPick={(providerId, modelId) => {
+                  setModelsPicker(undefined);
+                  void applyModelSwitch(providerId, modelId);
                 }}
-                onCancel={() => setModelPicker(undefined)}
+                onCancel={() => setModelsPicker(undefined)}
               />
             )}
           </Match>

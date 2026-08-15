@@ -530,8 +530,12 @@ export function Text(props: TextProps): JSX.Element {
   const nested = useContext(NestedText);
   const click = clickHandlers(useRenderer(), () => props.onClick);
   const styled = createMemo(() => ({
-    ...(props.color !== undefined ? { fg: props.color } : {}),
-    ...(props.backgroundColor !== undefined ? { bg: props.backgroundColor } : {}),
+    // fg/bg 键必须**始终存在**:Solid 的 spread 只对「新 props 里仍存在的键」
+    // 调 setter,省略键 = 旧值静默残留——color 从有值变回 undefined 时(选择器
+    // 光标移走的行)节点上的旧颜色清不掉,症状是光标扫过的行全部保持高亮。
+    // 显式 undefined 走到上游的 default 分支 node.fg = undefined,正确清除。
+    fg: props.color,
+    bg: props.backgroundColor,
     attributes: attributesOf(props),
   }));
   if (nested) {

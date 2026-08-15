@@ -168,7 +168,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `ctrl+v` | 粘贴剪贴板中的图片：输入框出现 `[image #N]` 占位符，提交时图片随消息发给模型（macOS 为主平台，Linux 需 `xclip`/`wl-paste`）。注意 DeepSeek 官方 SDK 不支持图片，会被忽略并提示 |
 
 图片长边超过 1568px 时会自动等比降采样（PNG 用 `node:zlib` 手写编解码，JPEG 走纯 JS 的 `jpeg-js`，缩放统一用盒式滤波）——服务商本身就会缩到这个尺寸，多传的像素只会白白撑大会话文件并在后续每一步重传。格式保持不变，重编码后反而更大时保留原图；GIF/WebP 不处理。所有图片另受 5MB/张、10MB/条的上限约束。
-| 命令菜单回车 | 带枚举参数的命令（`/model` `/provider` `/approvals` `/think` `/focus`）会进入二级选择器 |
+| 命令菜单回车 | 带枚举参数的命令（`/provider` `/approvals` `/think` `/focus`）会进入二级选择器；`/models` 不带参数回车则打开按厂商分组的模型选择器 |
 
 **斜杠命令**：
 
@@ -178,7 +178,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `/init` | 分析代码库并生成/改进项目根目录的 AGENTS.md（会注入后续会话的系统提示词） |
 | `/plan [任务]` | 进入计划模式：只读调研、产出方案交你批准，批准后自动开工。带参数则顺带以该任务开跑 |
 | `/goal [条件\|clear]` | 目标模式：给一个完成条件，每轮结束后自动检查、没达成就接着干。不带参数看状态，`clear` 取消 |
-| `/model <id>` | 切换模型；不带参数列出可用模型 |
+| `/models [id]` | 切换模型。不带参数打开分组选择器：按已配置厂商分支展示全部可用模型，输入即搜索（匹配模型 id 或厂商名），`←`/`→` 折叠/展开分组；`/model` 仍是它的别名 |
 | `/provider <id>` | 切换服务商（kimi / deepseek / glm / …） |
 | `/approvals <预设>` | 切换沙箱与确认策略预设 |
 | `/setting` | 打开设置面板：界面语言、状态栏显示项。`↑`/`↓` 选择、回车进入、`esc` 逐级返回；状态栏是多选，空格勾选、回车生效。改动即时生效并写入 `~/.mojocode/config.json` |
@@ -556,7 +556,7 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 `/goal` **不改权限档位**：`ask` 档下每一轮照样逐次弹确认框。想要真正无人值守，
 自己配合 `/approvals auto`。
 
-两轮之间的判定窗口里 agent 是空闲的，但这段时间同样算「忙」：`/clear`、`/model`、
+两轮之间的判定窗口里 agent 是空闲的，但这段时间同样算「忙」：`/clear`、`/models`、
 `/resume` 会被拦下，esc 停的是整个循环；这时候发消息则会成为下一轮的指令，取代判定器
 的引导——你随时可以纠偏，而不必先把循环停掉。
 
@@ -710,8 +710,8 @@ npm login && npm publish              # prepublishOnly 跑 typecheck + test + te
 **Q：GLM 返回 404**
 检查 baseURL 是否被改动过——必须是 `https://open.bigmodel.cn/api/paas/v4`，不带 `/v1`。
 
-**Q：`/model` 里没有我想要的模型**
-模型列表来自你的密钥实际权限。`mojocode models --provider <id>` 确认后用 `/model <id>` 或配置 `model` 字段指定。
+**Q：`/models` 里没有我想要的模型**
+模型列表以线上接口为准；接口滞后时（如智谱 Coding Plan 初期列表里没有最新的 glm），预设的默认模型仍会被并入保证可选。`mojocode models --provider <id>` 可查看密钥实际返回的列表，确认后用 `/models <id>` 或配置 `model` 字段指定。
 
 **Q：上下文满了怎么办**
 超过窗口 80% 会自动压缩成摘要继续；也可随时 `/compact`。磁盘上的会话记录始终是完整的。
