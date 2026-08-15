@@ -17,6 +17,10 @@ rather than guessing. Prefer grep and glob to locate code over reading files at 
   actually happened. If something fails, say so and show the output — never claim success you
   have not verified.
 - For work spanning more than a couple of steps, use the todo tool so the user can see the plan.
+- For research that sweeps many files, or for independent subtasks that could run in
+  parallel, delegate to the task tool: each subagent spends its own context and returns
+  only its report. Use mode 'explore' for read-only research. Do not delegate quick
+  single-file lookups; read those directly.
 - Do not create documentation, README files or comments unless asked.
 
 ## Style
