@@ -16,6 +16,16 @@ describe('timeline(/focus)配置分层', () => {
     expect((layer as Record<string, unknown>).timeline).toBeUndefined();
   });
 
+  it('分层 parse 剥掉全部顶层默认值,provider/language/statusBar 等也不再有幻影值', () => {
+    const layer = partialConfigSchema.parse({});
+    expect((layer as Record<string, unknown>).provider).toBeUndefined();
+    expect((layer as Record<string, unknown>).timeline).toBeUndefined();
+    expect((layer as Record<string, unknown>).language).toBeUndefined();
+    expect((layer as Record<string, unknown>).statusBar).toBeUndefined();
+    expect((layer as Record<string, unknown>).sandbox).toBeUndefined();
+    expect((layer as Record<string, unknown>).approval).toBeUndefined();
+  });
+
   describe('全局保存的 /focus 偏好不被项目层重置', () => {
     let home: string;
     let root: string;
@@ -46,6 +56,27 @@ describe('timeline(/focus)配置分层', () => {
 
       const { config } = await loadRawConfig({ root, env: {} });
       expect(config.timeline).toBe('compact');
+    });
+
+    it('项目层只写权限不写 provider 时,全局层保存的 provider/model 生效', async () => {
+      await fs.mkdir(path.join(home, '.mojocode'), { recursive: true });
+      await fs.writeFile(
+        path.join(home, '.mojocode', 'config.json'),
+        JSON.stringify({
+          provider: 'glm-coding',
+          providers: { 'glm-coding': { model: 'GLM-5.3' } },
+        }),
+      );
+      // 项目层写点别的(比如 /approvals 落过盘),不含 provider/model。
+      await fs.mkdir(path.join(root, '.mojocode'), { recursive: true });
+      await fs.writeFile(
+        path.join(root, '.mojocode', 'config.json'),
+        JSON.stringify({ approval: 'on-request' }),
+      );
+
+      const { config } = await loadRawConfig({ root, env: {} });
+      expect(config.provider).toBe('glm-coding');
+      expect(config.providers['glm-coding']?.model).toBe('GLM-5.3');
     });
   });
 });

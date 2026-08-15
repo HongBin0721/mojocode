@@ -349,16 +349,52 @@ export const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>;
 
-/** 与 `Config` 形状相同但所有字段可选——即配置文件里可以写的内容。 */
-export const partialConfigSchema = configSchema.partial().extend({
-  // 见 searchLayerSchema 的注释。(permissions 各字段有同样的既有问题——
-  // 项目层只写 allowBash 会把全局层的 denyPath 盖成空数组——但那是历史
-  // 行为,修它超出本次改动范围。)
+/**
+ * 分层文件用的无默认版本,与 `Config` 形状相同但所有字段可选。
+ *
+ * 不能直接用 `configSchema.partial()`:zod 的 `.partial()` 不摘 `.default()`,
+ * 项目层只要存在任意配置文件,幻影默认值(provider:'deepseek'、language:'auto'、
+ * statusBar 全量列表等)就会以更高优先级把全局层的显式配置逐次抹掉——「每次
+ * 启动恢复默认模型」一类的问题即源于此。这里把带默认值的字段全部重写成裸
+ * optional(search/lsp/timeline 的默认值埋在子 schema 里,整层换成无默认变体;
+ * 其余字段在下方逐一手写)。将来给 configSchema 加带默认值的新字段时,记得
+ * 同步到这里,否则它的幻影默认值会再次静默覆盖全局层——readLayer 还有按
+ * 文件实际键过滤的第二道兜底(load.ts),漏同步不会立刻变成静默覆盖,但
+ * `partialConfigSchema.parse` 自身的语义会再次不纯。漏同步会被
+ * tests/config-layer-defaults.test.ts 的键集 parity 断言拦下。
+ */
+export const partialConfigSchema = z.object({
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  providers: z.record(z.string(), providerConfigSchema).optional(),
+  sandbox: sandboxModeSchema.optional(),
+  approval: approvalPolicySchema.optional(),
+  plan: z.boolean().optional(),
+  // permissions 各字段有同样的既有问题——项目层只写 allowBash 会把全局层的
+  // denyPath 盖成空数组——但那是历史行为,修它超出本次改动范围;顶层 default
+  // 剥掉后,项目层完全没写 permissions 时全局层不再被幻影空对象覆盖。
+  permissions: permissionRulesSchema.optional(),
+  mcpServers: z.record(z.string(), mcpServerSchema).optional(),
+  // 见 searchLayerSchema 的注释:默认值埋在子 schema 里,剥顶层不够。
   search: searchLayerSchema.optional(),
+  // 与 search 同理。
   lsp: lspLayerSchema.optional(),
+  maxSteps: z.number().int().positive().optional(),
+  goalModel: z.string().optional(),
+  goalMaxTurns: z.number().int().positive().max(100).optional(),
+  taskModel: z.string().optional(),
+  taskMaxSteps: z.number().int().positive().optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
+  compactThreshold: z.number().min(0.1).max(0.95).optional(),
+  maxContext: z.number().int().positive().optional(),
+  systemPromptAppend: z.string().optional(),
+  language: z.enum(['auto', 'en', 'zh-CN']).optional(),
+  statusBar: z.array(statusSegmentSchema).optional(),
   // timeline 同理:`.partial()` 不摘 `.default('full')`,项目层只要存在任意
   // 配置文件,幻影 timeline:'full' 就会以更高优先级把全局保存的 /focus
-  // 偏好在每次启动时静默重置。裸 optional 让「没写」真正表示「没写」。
+  // 偏好重置。裸 optional 让「没写」真正表示「没写」。
   timeline: timelineModeSchema.optional(),
+  cleanupPeriodDays: z.number().int().positive().optional(),
 });
 export type PartialConfig = z.input<typeof partialConfigSchema>;

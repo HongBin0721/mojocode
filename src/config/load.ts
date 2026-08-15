@@ -103,7 +103,22 @@ async function readLayer(file: string, warnings: string[]): Promise<PartialConfi
       .join('\n');
     throw new ConfigError(`${file} has invalid settings:\n${issues}`);
   }
-  return parsed.data as PartialConfig;
+  // zod 4 的 .partial() 不摘 .default():文件里没写的键会被幻影默认值填充
+  // (provider→deepseek、timeline→full、maxSteps→50……)。层合并按层优先级
+  // 覆盖,于是项目层只要存在(/approvals 落盘就会写它),一个不相干的键就
+  // 足以把全局保存的 provider/model、/focus 偏好在每次启动时静默重置。
+  // schema.ts 只对 search/lsp/timeline 三个嵌套字段手动 extend 成裸 optional;
+  // 这里按文件实际写了的键过滤解析结果,「没写」才等于「这一层不表态」——
+  // 一处兜住所有带默认值的顶层字段,包括未来新增的。嵌套对象(search/lsp)
+  // 的内层默认由层 schema 自己负责,不受这份过滤影响。
+  // 注意 written 必须在 convertLegacyMode 之后采集:它会把 permissionMode
+  // 转写成 sandbox/approval 写回 json,那两个键算这一层明确表态的。
+  const written = new Set(Object.keys(json as Record<string, unknown>));
+  const layer: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed.data)) {
+    if (written.has(key)) layer[key] = value;
+  }
+  return layer as PartialConfig;
 }
 
 /** 映射到顶层配置键的环境变量。provider 的 API key 另行单独处理。 */
