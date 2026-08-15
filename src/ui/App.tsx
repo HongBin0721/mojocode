@@ -4,14 +4,13 @@ import {
   createSignal,
   For,
   Match,
-  on,
   onCleanup,
   Show,
   Switch,
 } from 'solid-js';
 import { Box, ScrollArea, Text, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
 import { Footer } from './Footer.js';
-import { Input, formatCommandLabel, type CommandOption, type SlashCommand } from './Input.js';
+import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine } from './StatusLine.js';
 import { TodoPanel } from './TodoPanel.js';
 import { GoalLine } from './GoalLine.js';
@@ -20,9 +19,7 @@ import { PermissionPrompt } from './PermissionPrompt.js';
 import {
   theme,
   glyphs,
-  formatDuration,
   formatToolInput,
-  formatTokens,
   toolDisplayName,
   truncateWidth,
   WIDTH_SAFETY,
@@ -37,12 +34,15 @@ import {
   sessionBanner,
 } from './timeline-controller.js';
 import { createProviderActions } from './provider-actions.js';
+import { createSubmitGate } from './commands/submit-gate.js';
+import { dispatch } from './commands/index.js';
+import { launchReview } from './commands/review-cmds.js';
+import type { CommandContext } from './commands/types.js';
 import type { TimelineItem } from './types.js';
 import type {
   PermissionDecision,
   PermissionRequest,
 } from '../core/events.js';
-import { ProviderSwitchError } from '../app/bootstrap.js';
 import type { SessionHandle } from '../app/session-handle.js';
 import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
@@ -53,12 +53,10 @@ import { ModePicker, type ModeOption } from './ModePicker.js';
 import type { TodoItem } from '../tools/index.js';
 import {
   APPROVAL_PRESETS,
-  canEverWrite,
   isDangerousPermissions,
   nextCycleStep,
   permissionsLabel,
   presetById,
-  reasoningEffortSchema,
   TIMELINE_MODES,
   type ApprovalPresetId,
   type Permissions,
@@ -73,28 +71,16 @@ import type { ProviderModels } from '../model/registry.js';
 import {
   saveLanguage,
   savePermissions,
-  saveReasoningEffort,
   saveStatusBar,
-  saveTimelineMode,
 } from '../config/save.js';
 import { supportedEfforts } from '../model/reasoning.js';
-import { getLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
-import { INIT_PROMPT } from '../agent/init.js';
-import { parseReviewArg, type ReviewStartResult } from '../agent/review.js';
-import { parseSimplifyArg } from '../agent/simplify.js';
+import { getLocale, setLocale, t, type Locale } from '../i18n/index.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
 import { readClipboardImage } from '../app/clipboard.js';
-import { formatDoctor } from '../app/doctor.js';
 import {
   buildCommands,
-  canonicalCommandName,
-  BUSY_BLOCKED_COMMANDS,
-  CANNED_FAILURE_NOTICES,
-  COMPACT_EXPECTED_SUMMARY_CHARS,
   FOCUS_DESCRIPTIONS,
-  GOAL_CLEAR_WORDS,
-  GOAL_STOP_MESSAGES,
   PRESET_DESCRIPTIONS,
   REASONING_PREVIEW_ROWS,
   THINK_DESCRIPTIONS,
@@ -369,23 +355,10 @@ export function App(props: Props): JSX.Element {
 
   let ctrlCTimer: NodeJS.Timeout | undefined;
   let escTimer: NodeJS.Timeout | undefined;
-  /**
-   * 已受理但尚未发起 run() 的提交(@ 引用展开是异步的)。这段窗口里
-   * agent 仍是 idle,esc 与 busy 拦截都要把它当作"忙"看待;submitGen
-   * 递增即作废在途提交。
-   */
-  let submitPending = false;
-  let submitGen = 0;
-  /**
-   * submitPending 当前属于一次罐装命令启动(launchCanned,/review、
-   * /simplify)。它与 @ 展开窗口不同:没有 submitGen 那样的作废机制。esc 在
-   * 窗口内既取消不了它、也不该清掉标志(清了会重新打开 busy 门,第二个罐装
-   * 命令撞上 loop.ts 的防重入兜底退化成轮中注入),handleSubmit 对窗口内的
-   * 普通消息同样据此拒绝——主 agent 空闲时没有轮可注入,放行只会另起一轮
-   * 等应用轮撞车。轮子转起来(isRunning 点亮)后 esc 走正常的中断路径、
-   * 消息走正常引导,不受此影响。
-   */
-  let cannedLaunchPending = false;
+  // 提交门:submitPending / cannedLaunchPending / submitGen 三件套收编成
+  // 一个对象——handleSubmit / handleEscape / 命令 dispatch 三方共用的
+  // 可变状态,语义注释随实现住在 ./commands/submit-gate.ts。
+  const submitGate = createSubmitGate();
 
   {
     const off = session.todos.subscribe(setTodos);
@@ -514,14 +487,13 @@ export function App(props: Props): JSX.Element {
     // 提交已受理但 @ 引用还在展开(run 尚未发起):作废这一次提交。
     // 注意不能就此返回——运行中提交的是引导消息,此时按 esc 要的是中断
     // 那一轮,只取消引导会表现为"esc 没反应,状态栏却灭了"。
-    if (submitPending) {
+    if (submitGate.pending) {
       // 例外:pending 属于罐装命令(/review、/simplify)启动的 git 收集
       // 窗口——没有可作废的提交,清掉标志只会重新打开 busy 门(见
-      // cannedLaunchPending 的注释)。窗口次秒级,忽略这次 esc;轮子转
+      // submit-gate 的注释)。窗口次秒级,忽略这次 esc;轮子转
       // 起来后走下面的正常中断。
-      if (cannedLaunchPending && !session.agent.isRunning && !session.goal.busy) return;
-      submitGen++;
-      submitPending = false;
+      if (submitGate.cannedPending && !session.agent.isRunning && !session.goal.busy) return;
+      submitGate.invalidate();
       if (!session.agent.isRunning && !session.goal.busy) {
         setRunning(false);
         return;
@@ -624,698 +596,51 @@ export function App(props: Props): JSX.Element {
    * provider/model 切换的统一落地(实现见 provider-actions.ts):/provider、
    * /models 两条命令与两个选择器共用的出口,镜像 setter 由这里注入。
    */
-  const { landSwitch, applyModelSwitch, applyProviderSwitch, providerRows, probeProviderKey } =
-    createProviderActions({ session, push, setProviderLabel, setModel, setThink, setUsage });
+  const providerActions = createProviderActions({ session, push, setProviderLabel, setModel, setThink, setUsage });
 
-  /**
-   * 罐装命令(/review、/simplify)的公共执行出口:占住 busy 门 → RPC →
-   * 失败 reason 映射本地化提示(按命令取 CANNED_FAILURE_NOTICES 的对应列)。
-   * 两命令只差 RPC 调用、文案列与传输错误文案。
-   *
-   * submitPending 与 handleSubmit 同一语义:本地进程内的启动在 agent.run
-   * 之前还有收集 git 摘要的异步窗口(最多四条串行子进程),期间 isRunning
-   * 仍为 false——不占住的话,第二个罐装命令能穿过 BUSY_BLOCKED 拦截,撞上
-   * loop.ts 的防重入兜底退化成轮中注入,整份罐装提示词被灌进第一个命令的
-   * 流里,且后到者的 finally 还会提前清掉 running。远程侧无此窗口
-   * (callDeferred 同步置乐观 run 标志),两条路共用这份保险。
-   */
-  const launchCanned = (
-    invoke: () => Promise<ReviewStartResult>,
-    column: 'review' | 'simplify',
-    transportErrorKey: MessageKey,
-  ) => {
-    submitPending = true;
-    cannedLaunchPending = true;
-    setRunning(true);
-    void invoke()
-      .then((result) => {
-        if (result.ok) return;
-        // reason 经 JSON 线路到达,防御性取列:伪造的 reason 不该掀翻 TUI。
-        const entry = CANNED_FAILURE_NOTICES[result.reason];
-        const messageKey = entry?.[column];
-        if (!entry || !messageKey) return;
-        push({
-          kind: 'notice',
-          level: entry.level,
-          message: t(messageKey, {
-            branch: result.branch ?? '',
-            sha: result.sha ?? '',
-            message: result.detail ?? '',
-          }),
-        });
-      })
-      // 失败以 reason 返回,但 RPC 本身会 reject(传输层错误),未捕获的
-      // rejection 会掀掉整个 TUI——与 /init 同一条教训。
-      .catch((err: Error) => {
-        push({ kind: 'notice', level: 'warn', message: t(transportErrorKey, { message: err.message }) });
-      })
-      .finally(() => {
-        submitPending = false;
-        cannedLaunchPending = false;
-        setRunning(false);
-      });
+  // ---- 斜杠命令:dispatch 入口与依赖上下文(实现见 ./commands/) ----
+
+  /** 运行中拦截谓词:isRunning、isCompacting、提交在途、goal.busy 任一成立。 */
+  const busy = () =>
+    session.agent.isRunning ||
+    session.agent.isCompacting ||
+    submitGate.pending ||
+    session.goal.busy;
+
+  const cmdCtx: CommandContext = {
+    session,
+    exit,
+    push,
+    setItems,
+    setUsage,
+    setWork,
+    endWork,
+    usage,
+    perms,
+    planActive,
+    modeLabel,
+    think,
+    timelineMode,
+    setPerms,
+    setPlanActive,
+    setThink,
+    setTimelineMode,
+    setProviderLabel,
+    setModel,
+    setRunning,
+    setSettingsOpen,
+    setModelsPicker,
+    setProviderPicker,
+    setReviewPicker,
+    setPrefill,
+    busy,
+    bannerItem,
+    persistPermissions,
+    providerActions,
+    submitGate,
   };
 
-  /**
-   * `/review <范围>` 的执行出口:预设选择器直选、第二级选择器(base/commit)
-   * 挑完、手打/回退重发走的是同一条路。display 统一按 `/review <范围>` 重组
-   * ——picker 路径没有"用户原文"可用,直打路径与原文等价。
-   */
-  const launchReview = (scopeArg: string) =>
-    launchCanned(
-      () => session.startReview(scopeArg, { display: `/review ${scopeArg}` }),
-      'review',
-      'notice.reviewFailed',
-    );
-
-  /**
-   * `/simplify <目标>` 的执行出口:与 launchReview 同一条路。display 不在
-   * UI 侧组装——裸命令不带尾随空格的规则由 server 侧(startSimplify 的
-   * 缺省值)唯一一份持有,本地与远程两条路都经它落到 turn-start。
-   */
-  const launchSimplify = (targetArg: string) =>
-    launchCanned(() => session.startSimplify(targetArg), 'simplify', 'notice.simplifyFailed');
-
-  const runCommand = async (raw: string) => {
-    const [typed, ...rest] = raw.slice(1).trim().split(/\s+/);
-    // 别名先归一为主名(未知的命令保持原样,走 default 分支的提示)。
-    const name = typed ? canonicalCommandName(typed) : undefined;
-    const arg = rest.join(' ');
-
-    // 这些命令会改写正在被进行中的流读写的历史/模型,运行中禁止。
-    // 压缩没有 controller,isRunning 期间为 false——不把它算进来的话,
-    // /compact 等待摘要返回时还能执行 /clear,压缩随后会把已丢弃的对话
-    // 写回内存,并存进那个全新的会话文件。
-    // goal.busy 必须并进来:目标循环两轮之间的评估窗口里 agent 是空闲的,
-    // 但历史随时会被下一轮接着写——不算作忙的话,`/clear`、`/models`、
-    // `/resume` 会从这个缝里溜进去把历史或模型换掉。
-    const busy =
-      session.agent.isRunning ||
-      session.agent.isCompacting ||
-      submitPending ||
-      session.goal.busy;
-    if (name && BUSY_BLOCKED_COMMANDS.has(name) && busy) {
-      push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
-      return;
-    }
-
-    switch (name) {
-      case 'help':
-        push({
-          kind: 'notice',
-          level: 'info',
-          message: buildCommands()
-            .map((c) => `${formatCommandLabel(c)} — ${c.description}`)
-            .join('\n'),
-        });
-        break;
-
-      // (/quit 别名已在 runCommand 入口归一为 exit。)
-      case 'exit':
-        exit();
-        break;
-
-      // 与 Claude Code 一致:两者都丢弃当前对话、换新的会话文件;
-      // /clear 额外清掉终端屏幕与回滚缓冲,/new 保留已滚出的历史。
-      case 'new':
-      case 'clear': {
-        try {
-          await session.newSession();
-        } catch (err) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.newSessionFailed', { message: (err as Error).message }),
-          });
-          break;
-        }
-        // 清空时间线,只留横幅,回到和启动时一致的界面。全屏渲染下
-        // /clear 与 /new 的屏幕表现相同(没有终端回滚缓冲可清),差异
-        // 只剩语义上的会话文件切换,都由上面的 newSession 完成。
-        setItems([bannerItem()]);
-        setUsage((prev) => ({ ...prev, used: session.agent.contextUsage.used, total: 0 }));
-        break;
-      }
-
-      // `/init` 是唯一发起完整 agent 轮的命令:时间线上只回显 `/init`
-      // (turn-start 的 display),完整指令进历史喂模型。轮结束后刷新
-      // 环境信息,让刚生成的 AGENTS.md 立刻进入系统提示词。
-      case 'init': {
-        // 写入完全不可能的组合(plan、read-only+never)下这一轮注定写不出
-        // AGENTS.md,提前拦下,别白烧一轮 token。read-only+on-request 放行:
-        // 写入可以逐次升级确认。
-        if (!canEverWrite(perms(), planActive())) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.initReadonly', { mode: modeLabel() }),
-          });
-          break;
-        }
-        setRunning(true);
-        void session.agent
-          .run(INIT_PROMPT, { display: '/init' })
-          .then(() => session.refreshEnvironment())
-          // run() 自己消化模型错误,但 refreshEnvironment 是新的一环:
-          // 不接住的话 rejection 会掀掉整个 TUI(Node ≥20 视为致命)。
-          .catch((err: Error) => {
-            push({ kind: 'notice', level: 'warn', message: t('notice.initFailed', { message: err.message }) });
-          })
-          .finally(() => setRunning(false));
-        break;
-      }
-
-      // 代码评审(/review):二级选择器选范围,server 侧组稿罐装提示词后
-      // 以一轮对话跑只读评审(见 bootstrap.startReview)。评审天然兼容只读
-      // 沙箱——它本来就不改文件,所以没有 /init 那道 canEverWrite 前置闸。
-      // 代码评审(/review):预设选择器(Codex 式)选四个预设之一,base/commit
-      // 再经第二级选择器挑分支/提交,custom 预填输入框补焦点文本;直打
-      // `/review base main` 这类(含回退重发)直接开跑。评审天然兼容只读沙箱。
-      case 'review': {
-        // 计划模式按设计必须以 exit_plan 收尾,而评审轮的产出是发现清单——
-        // 两条指令会把模型夹住。检查放在最前:裸命令、开选择器、预填之前
-        // 统统先拦。
-        if (planActive()) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.reviewPlanMode') });
-          break;
-        }
-        // 裸 /review:非 git 仓库时选择器返回空表、回退成裸提交,这里再拉
-        // 一次 targets 把"没有仓库"和"用法不对"区分开;拉取失败如实报告——
-        // 吞成 undefined 会退化成误导性的用法提示(base 二级路径同理)。
-        if (!arg) {
-          const targets = await session.reviewTargets().catch((err: Error) => err);
-          if (targets instanceof Error) {
-            push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: targets.message }) });
-            break;
-          }
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: !targets.isRepo ? t('notice.reviewNoRepo') : t('notice.reviewUsage'),
-          });
-          break;
-        }
-        // 预设的裸关键字:开第二级选择器或预填输入框,不直接成范围。
-        if (arg === 'base' || arg === 'commit') {
-          let rows: ReviewPickerRow[] = [];
-          if (arg === 'base') {
-            // catch 到的错误要如实报告:吞成空表会把传输失败误报成"没有分支"。
-            const targets = await session.reviewTargets().catch((err: Error) => err);
-            if (targets instanceof Error) {
-              push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: targets.message }) });
-              break;
-            }
-            if (!targets.isRepo) {
-              push({ kind: 'notice', level: 'warn', message: t('notice.reviewNoRepo') });
-              break;
-            }
-            rows = targets.branches.map((b) => ({ value: b.name, head: b.name, detail: b.subject }));
-          } else {
-            const commits = await session.reviewCommits().catch((err: Error) => err);
-            if (commits instanceof Error) {
-              push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: commits.message }) });
-              break;
-            }
-            rows = commits.map((c) => ({
-              value: c.sha,
-              head: c.sha,
-              detail: `${c.subject}${c.date ? ` · ${c.date}` : ''}`,
-            }));
-          }
-          if (rows.length === 0) {
-            // 提交列表为空分两种:非仓库(reviewCommits 对非仓库静默给空表)
-            // 与真空仓——再探一次 targets 区分,别把"不是仓库"误报成"没有提交"。
-            if (arg === 'commit') {
-              const targets = await session.reviewTargets().catch(() => undefined);
-              if (targets && !targets.isRepo) {
-                push({ kind: 'notice', level: 'warn', message: t('notice.reviewNoRepo') });
-                break;
-              }
-            }
-            push({
-              kind: 'notice',
-              level: 'warn',
-              message: arg === 'base' ? t('notice.reviewNoBranches') : t('notice.reviewNoCommits'),
-            });
-            break;
-          }
-          setReviewPicker({
-            kind: arg,
-            title: t(arg === 'base' ? 'reviewpick.branchTitle' : 'reviewpick.commitTitle'),
-            rows,
-          });
-          break;
-        }
-        if (arg === 'custom') {
-          // 预填焦点文本的半成品:尾随空格保持命令菜单关闭,用户补完再提交。
-          setPrefill({ text: '/review custom ' });
-          break;
-        }
-        if (!parseReviewArg(arg)) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.reviewUsage') });
-          break;
-        }
-        launchReview(arg);
-        break;
-      }
-
-      // 代码清理(/simplify,对齐 Claude Code):审查变更代码的清理机会并直接
-      // 应用修复——复用已有实现、化简、效率、抽象层级四个维度;正确性 bug 归
-      // /review,这一轮明确不找。范围语法与 /review 共享,裸命令默认未提交
-      // 改动,其余任意文本(路径/焦点)作为清理目标。要写文件:计划模式与
-      // read-only+never 提前拦下,别白烧注定写不出的一轮(read-only+on-request
-      // 放行,写入逐次升级确认)。
-      case 'simplify': {
-        if (planActive()) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.simplifyPlanMode') });
-          break;
-        }
-        if (!canEverWrite(perms(), false)) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.simplifyReadonly', { mode: modeLabel() }),
-          });
-          break;
-        }
-        // 裸命令合法(默认未提交改动),只有半截关键字(base/commit/custom)不成目标。
-        if (!parseSimplifyArg(arg)) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.simplifyUsage') });
-          break;
-        }
-        launchSimplify(arg);
-        break;
-      }
-
-      // 计划模式:裸 /plan 只切模式,`/plan <任务>` 顺带以任务原文发起一轮。
-      // 任务原文直接进历史(不像 /init 那样套 display):用户写的就是他的
-      // 意图本身,实时时间线与 /resume 回放因此天然一致,回退重发也能重跑。
-      case 'plan': {
-        // 带参数会发起一轮,运行中禁止。不走 BUSY_BLOCKED_COMMANDS——那张表
-        // 按命令名判断,表达不了"只有带参数时才拦"。
-        if (arg && busy) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
-          break;
-        }
-        if (!planActive()) {
-          // read-only+never 进来的话批准后会提升到 ask,提前说明,免得用户
-          // 以为设置被吞了。其余组合忠实还原,不必多话。
-          if (!canEverWrite(perms(), false)) {
-            push({ kind: 'notice', level: 'info', message: t('notice.planReturnFromReadonly') });
-          }
-          session.setPlan(true);
-          setPlanActive(true);
-          push({ kind: 'notice', level: 'info', message: t('notice.planEntered') });
-        }
-        if (!arg) break;
-        setRunning(true);
-        void session.agent
-          .run(arg)
-          // run() 自己消化模型错误,但未捕获的 rejection 在 Node ≥20 会掀掉
-          // 整个 TUI——与 /init 同一条教训。
-          .catch((err: Error) => {
-            push({ kind: 'notice', level: 'warn', message: err.message });
-          })
-          .finally(() => setRunning(false));
-        break;
-      }
-
-      // 目标模式:给一个完成条件,每轮收尾后由评估器判断达成没有,没达成
-      // 就以评估理由为指令自动续跑。裸 /goal 报状态、`/goal clear` 取消,
-      // 这两支任何时候都可用——clear 正是停下循环的手段,拦忙就没法停了。
-      case 'goal': {
-        const status = session.goal.snapshot();
-        if (!arg) {
-          push({
-            kind: 'notice',
-            level: 'info',
-            message: !status
-              ? t('notice.goalNone')
-              : status.restored
-                ? t('notice.goalStatusIdle', { condition: status.condition })
-                : t('notice.goalStatus', {
-                    condition: status.condition,
-                    turns: status.turns,
-                    max: status.maxTurns,
-                    elapsed: formatDuration(status.elapsedMs),
-                    tokens: formatTokens(status.tokens),
-                    reason: status.lastReason || '—',
-                  }),
-          });
-          break;
-        }
-        if (GOAL_CLEAR_WORDS.has(arg.toLowerCase())) {
-          // 提示统一由 goal-stop 事件给出,这里不再推一条。
-          if (status) session.goal.clear('cleared');
-          else push({ kind: 'notice', level: 'info', message: t('notice.goalNone') });
-          break;
-        }
-        // 以下这支会发起一轮,所以要拦忙——和 `/plan <任务>` 同一个理由,
-        // 同样不进 BUSY_BLOCKED_COMMANDS(那张表按命令名判断,表达不了
-        // "只有这种参数形式才拦")。
-        if (busy) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name }) });
-          break;
-        }
-        if (planActive()) {
-          push({ kind: 'notice', level: 'warn', message: t('notice.goalPlanMode') });
-          break;
-        }
-        session.goal.set(arg);
-        setRunning(true);
-        void session.goal
-          .run(arg)
-          // goal.run 和 agent.run 一样不会 reject,但未捕获的 rejection 在
-          // Node ≥20 会掀掉整个 TUI——与 /init、/plan 同一条教训,照旧兜住。
-          .catch((err: Error) => {
-            push({ kind: 'notice', level: 'warn', message: err.message });
-          })
-          .finally(() => setRunning(false));
-        break;
-      }
-
-      case 'compact':
-        setWork({ phase: 'compacting', since: Date.now() });
-        setRunning(true);
-        await session.agent.compact().catch((err: Error) => {
-          push({ kind: 'error', message: t('notice.compactFailed', { message: err.message }) });
-        });
-        setRunning(false);
-        endWork();
-        break;
-
-      case 'approvals': {
-        const preset = APPROVAL_PRESETS.find((p) => p.id === arg);
-        if (!preset) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.approvalsUsage', {
-              list: APPROVAL_PRESETS.map((p) => p.id).join('|'),
-              mode: modeLabel(),
-            }),
-          });
-          break;
-        }
-        const next = presetById(preset.id);
-        session.setPermissions(next);
-        setPerms(next);
-        setPlanActive(false);
-        push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: preset.id }) });
-        // full-access 绕过硬拒名单,而且和别的档位一样会留到下次启动——
-        // 时间线上必须留一条,事后翻记录能认出这一段跑在无沙箱下。
-        if (isDangerousPermissions(next)) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.modeDanger', { mode: preset.id }),
-          });
-        }
-        // 落盘范围是本工作区的 .mojocode/config.json,不碰全局配置。
-        const saved = await persistPermissions(next);
-        if (saved) {
-          push({ kind: 'notice', level: 'info', message: t('notice.modeSavedTo', { path: saved }) });
-        }
-        break;
-      }
-
-      case 'think': {
-        // 档位与当前 provider/model 绑定:只接受它能完整表达的值,
-        // 不支持的档位直接拒绝并列出可用项。
-        const valid = supportedEfforts(session.provider);
-        const parsed = reasoningEffortSchema.safeParse(arg);
-        if (!parsed.success || !valid.includes(parsed.data)) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.thinkUsage', { list: valid.join('|'), level: think() }),
-          });
-          break;
-        }
-        const level = parsed.data;
-        // 档位必须落到真正跑模型的进程:本地会话改共享的 provider/config
-        // 对象,远程会话(client-server)则经 RPC 送达——细节收进 Session 契约。
-        // RPC 会 reject(server 抖动),而 runCommand 是 `void` 调用的:
-        // 不接住就是未捕获 rejection,整个 TUI 被掀掉。
-        try {
-          await session.setReasoningEffort(level);
-        } catch (err) {
-          push({ kind: 'error', message: (err as Error).message });
-          break;
-        }
-        setThink(level);
-        push({ kind: 'notice', level: 'info', message: t('notice.thinkSet', { level }) });
-        await saveReasoningEffort(session.provider.id, level).catch((err: Error) => {
-          push({ kind: 'notice', level: 'warn', message: t('notice.thinkSaveFailed', { message: err.message }) });
-        });
-        break;
-      }
-
-      // 设置面板:语言与状态栏都收在这里(旧的 /lang、/statusbar 已并入)。
-      // 面板自己带按键处理,命令只负责把它打开。
-      //
-      // 刻意不进 BUSY_BLOCKED_COMMANDS:面板只改显示层,碰不到进行中的流。
-      // 代价是它开着时 Input 卸载,想插话引导得先 esc 关掉面板。
-      // (/settings 别名已在 runCommand 入口归一为 setting。)
-      case 'setting':
-        setSettingsOpen(true);
-        break;
-
-      case 'focus': {
-        if (!arg || !(TIMELINE_MODES as readonly string[]).includes(arg)) {
-          push({
-            kind: 'notice',
-            level: arg ? 'warn' : 'info',
-            message: t('notice.focusUsage', {
-              list: TIMELINE_MODES.join(' | '),
-              current: timelineMode(),
-            }),
-          });
-          break;
-        }
-        const next = arg as TimelineMode;
-        setTimelineMode(next);
-        session.config.timeline = next;
-        push({ kind: 'notice', level: 'info', message: t('notice.focusSet', { mode: next }) });
-        await saveTimelineMode(next).catch((err: Error) => {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.focusSaveFailed', { message: err.message }),
-          });
-        });
-        break;
-      }
-
-      case 'provider': {
-        if (!arg) {
-          // 无参数:打开厂商选择器——已配 key 的 ✓ 即切,未配的就地输入验证。
-          setProviderPicker(providerRows());
-          break;
-        }
-        await applyProviderSwitch(arg);
-        break;
-      }
-
-      case 'models': {
-        if (!arg) {
-          // 无参数:并发拉取所有已配置厂商的模型列表,打开分组选择器。
-          // 整体 RPC 失败(如 server 不在)时提示一句,选择器只剩手动输入行。
-          setWork({ phase: 'listingModels', since: Date.now() });
-          let groups: ProviderModels[];
-          try {
-            groups = await session.listProviderModels();
-          } catch {
-            push({ kind: 'notice', level: 'warn', message: t('notice.modelsUnavailable') });
-            groups = [];
-          }
-          endWork();
-          setModelsPicker(groups);
-          break;
-        }
-        // 只发 model:server 按实时 provider 解析(见 applyModelSwitch 的说明)。
-        await applyModelSwitch(undefined, arg);
-        break;
-      }
-
-      case 'mcp':
-        push({
-          kind: 'notice',
-          level: 'info',
-          message:
-            session.mcpStatuses.length === 0
-              ? t('notice.mcpNone')
-              : session.mcpStatuses
-                  .map((s) =>
-                    s.connected
-                      ? `  ${glyphs.done} ${s.name} — ${t('notice.mcpTools', { n: s.toolCount })}`
-                      : `  ${glyphs.failed} ${s.name} — ${s.error ?? '?'}`,
-                  )
-                  .join('\n'),
-        });
-        break;
-
-      // 强制重扫技能目录并列出(名字、参数提示、描述)。远程模式下这也是
-      // 把 server 侧刚出现的技能立刻拉进 `/` 菜单的手动通道(平时靠 TTL)。
-      case 'skills': {
-        try {
-          const list = await session.refreshSkills();
-          push({
-            kind: 'notice',
-            level: 'info',
-            message:
-              list.length > 0
-                ? t('notice.skillsList', {
-                    list: list
-                      .map(
-                        (s) =>
-                          `/${s.name}${s.argumentHint ? ` ${s.argumentHint}` : ''} — ${s.description}`,
-                      )
-                      .join('\n'),
-                  })
-                : t('notice.skillsNone'),
-          });
-        } catch (err) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.skillsFailed', { message: (err as Error).message }),
-          });
-        }
-        break;
-      }
-
-      // 体检读的是会话此刻的配置(含 /approvals、/models 改过的值),MCP 直接
-      // 采信已连上的状态——重新连一遍会把每个 stdio server 的子进程再拉起
-      // 一份。`/doctor offline` 跳过联网那两项(端点探测、版本比对)。
-      case 'doctor': {
-        const offline = arg.trim() === 'offline';
-        push({ kind: 'notice', level: 'info', message: t('notice.doctorRunning') });
-        try {
-          // 体检在会话所在的进程里跑(远程会话时是 server 侧):读的是会话
-          // 此刻的配置,MCP 采信已连上的状态,已拉起的 LSP 不再重复握手。
-          const report = await session.doctor({ offline });
-          push({
-            kind: 'notice',
-            level: report.healthy ? 'info' : 'warn',
-            // 不上色:notice 整段由 Timeline 按 level 着色,再嵌一层 ANSI
-            // 会和它打架;✓ / ! / ✗ 三个符号已经能区分轻重。
-            message: formatDoctor(report).trimEnd(),
-          });
-        } catch (err) {
-          push({ kind: 'error', message: (err as Error).message });
-        }
-        break;
-      }
-
-      case 'cost':
-        push({
-          kind: 'notice',
-          level: 'info',
-          message:
-            `${t('notice.costSession', { total: usage().total })}\n` +
-            `${t('notice.costContext', { used: usage().used, window: usage().window })}\n` +
-            t('notice.costTranscript', { path: `~/.mojocode/sessions/${session.store.id}.jsonl` }),
-        });
-        break;
-
-      // 与 Claude Code 一致:把当前对话分叉进一个新会话 id 并切换过去。
-      // 屏幕上什么都不变——历史、todos、权限全部照旧,只是从此写入新文件;
-      // 源会话停在分叉点,之后可用 /resume 回去走另一条线。
-      case 'fork': {
-        const fromId = session.store.id;
-        try {
-          const forked = await session.forkSession();
-          push({
-            kind: 'notice',
-            level: 'info',
-            message: t('notice.forked', { id: forked.id, from: fromId.slice(0, 8) }),
-          });
-        } catch (err) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.forkFailed', { message: (err as Error).message }),
-          });
-        }
-        break;
-      }
-
-      case 'resume': {
-        // 无参提交(如本工作区没有其他会话,选择器空表单直接回车)。
-        if (!arg) {
-          push({ kind: 'notice', level: 'info', message: t('cli.noSessions') });
-          break;
-        }
-        let providerWarn: string | undefined;
-        try {
-          await session.resumeSession(arg);
-        } catch (err) {
-          if (err instanceof ProviderSwitchError) {
-            // 仅旧版 server(--attach)会抛:历史已恢复,只是没切到会话
-            // 记录的 provider/model。新版恢复不再动模型。
-            providerWarn = err.message;
-          } else {
-            push({
-              kind: 'notice',
-              level: 'warn',
-              message: t('notice.resumeFailed', { message: (err as Error).message }),
-            });
-            break;
-          }
-        }
-        // 横幅取 session 值而非 state 镜像:resumeSession 可能刚改写了权限,
-        // 镜像要到下面的 set 之后才追上。provider/model 不会被恢复改写
-        //(始终沿用当前模型),但旧版 server 仍可能切,照样同步一遍。
-        resetTimeline([sessionBanner(session), ...buildResumeItems(session)]);
-        // 同步 UI 状态:权限可能被恢复改写;上下文用量取恢复历史的估算
-        // (lastInputTokens 已随 setHistory 作废),下一轮 step-end 会带回
-        // 真实值。todos 由订阅自动更新。
-        setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
-        setPlanActive(session.config.plan);
-        setProviderLabel(session.provider.label);
-        setModel(session.provider.model);
-        setThink(session.provider.reasoningEffort);
-        setUsage({ ...session.agent.contextUsage, total: 0 });
-        if (providerWarn) {
-          push({
-            kind: 'notice',
-            level: 'warn',
-            message: t('notice.resumeProviderFailed', { message: providerWarn }),
-          });
-        }
-        break;
-      }
-
-      default: {
-        // 不是内置命令:查技能表。命中则整轮交给 runSkill(激活、展开、
-        // 跑轮次都在会话进程侧),display 用用户敲的原文。
-        const skill = name ? session.skills.find((s) => s.name === name) : undefined;
-        if (skill) {
-          // 技能发起完整一轮,运行中禁止。与 `/plan <任务>` 同理走内联检查:
-          // BUSY_BLOCKED_COMMANDS 是静态表,列不进动态发现的名字。
-          if (busy) {
-            push({ kind: 'notice', level: 'warn', message: t('notice.busyCommand', { name: name ?? '' }) });
-            break;
-          }
-          setRunning(true);
-          void session
-            .runSkill(skill.name, arg, { display: raw.trim() })
-            // runSkill 是 RPC:不接住的话传输层 rejection 会掀掉整个 TUI。
-            .catch((err: Error) => {
-              push({
-                kind: 'notice',
-                level: 'warn',
-                message: t('notice.skillRunFailed', { message: err.message }),
-              });
-            })
-            .finally(() => setRunning(false));
-          break;
-        }
-        push({ kind: 'notice', level: 'warn', message: t('notice.unknownCommand', { name: name ?? '' }) });
-      }
-    }
-  };
+  const runCommand = (raw: string) => dispatch(cmdCtx, raw);
 
   // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
   const fileLister = createFileLister(session.root);
@@ -1333,7 +658,7 @@ export function App(props: Props): JSX.Element {
     // 阶段二的应用轮提示词随后撞上防重入兜底、整份灌进用户那轮;且这条
     // 路径会清掉 submitPending 把 busy 门重新打开。窗口期内拒绝——轮子转
     // 起来(turn-start 之后)inject 恢复正常,引导照常可用。
-    if (cannedLaunchPending && !session.agent.isRunning && !session.goal.busy) {
+    if (submitGate.cannedPending && !session.agent.isRunning && !session.goal.busy) {
       push({ kind: 'notice', level: 'warn', message: t('notice.cannedBusy') });
       return;
     }
@@ -1343,8 +668,7 @@ export function App(props: Props): JSX.Element {
     // 回车之后、run() 之前有一段 agent 仍是 idle 的窗口。不标记的话,
     // 这期间 esc 会去武装回退选择器而不是取消,/clear 之类命令也会绕过
     // busy 拦截把历史换掉,随后排队的这一轮再往新会话里写。
-    const gen = ++submitGen;
-    submitPending = true;
+    const gen = submitGate.begin();
     void (async () => {
       let expanded = text;
       const images: ImageAttachment[] = [...(pastedImages ?? [])];
@@ -1369,11 +693,11 @@ export function App(props: Props): JSX.Element {
         // 展开失败不阻塞提交:按原文发送,文件内容让模型自己用工具读。
       }
       // 展开期间按了 esc(或又提交了一次):这一轮作废,不再发起。
-      if (submitGen !== gen) {
+      if (submitGate.gen !== gen) {
         if (!session.agent.isRunning && !session.goal.busy) setRunning(false);
         return;
       }
-      submitPending = false;
+      submitGate.clearPending();
       // deepseek SDK 会静默丢弃图片 part(只发无人读的 warning),
       // 用户不提示的话会以为模型看到了图。
       if (images.length > 0 && session.provider.sdk === 'deepseek') {
@@ -1414,7 +738,7 @@ export function App(props: Props): JSX.Element {
       // 连接断开)就会 reject,而这里是个 void 的异步 IIFE——未捕获的
       // rejection 在 Node ≥20 / Bun 下直接掀掉整个 TUI。与 /init、/plan、
       // /goal 三处同一条教训,这条提交路径在方法变成异步后被漏掉了。
-      submitPending = false;
+      submitGate.clearPending();
       setRunning(false);
       push({ kind: 'error', message: err.message });
     });
@@ -1767,7 +1091,7 @@ export function App(props: Props): JSX.Element {
                 currentModel={model()}
                 onPick={(providerId, modelId) => {
                   setModelsPicker(undefined);
-                  void applyModelSwitch(providerId, modelId);
+                  void providerActions.applyModelSwitch(providerId, modelId);
                 }}
                 onCancel={() => setModelsPicker(undefined)}
               />
@@ -1777,10 +1101,10 @@ export function App(props: Props): JSX.Element {
             {(rows: ProviderRow[]) => (
               <ProviderPicker
                 rows={rows}
-                probe={probeProviderKey}
+                probe={providerActions.probeProviderKey}
                 onSwitch={(id, apiKey) => {
                   setProviderPicker(undefined);
-                  void applyProviderSwitch(id, apiKey);
+                  void providerActions.applyProviderSwitch(id, apiKey);
                 }}
                 onCancel={() => setProviderPicker(undefined)}
               />
@@ -1793,7 +1117,7 @@ export function App(props: Props): JSX.Element {
                 rows={picker.rows}
                 onPick={(value) => {
                   setReviewPicker(undefined);
-                  launchReview(`${picker.kind} ${value}`);
+                  launchReview(cmdCtx, `${picker.kind} ${value}`);
                 }}
                 onCancel={() => {
                   // esc 退回上一级:重开预设选择器,光标还原到刚才那个预设
