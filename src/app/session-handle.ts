@@ -18,7 +18,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { EventBus, GoalStopReason, PermissionAsker } from '../core/events.js';
+import type { ContextUsage, EventBus, GoalStopReason, PermissionAsker } from '../core/events.js';
 import type { Config, Permissions, ReasoningEffort } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
@@ -40,6 +40,12 @@ export interface AgentHandle {
   readonly isRunning: boolean;
   readonly isCompacting: boolean;
   readonly history: ModelMessage[];
+  /**
+   * 上下文占用(已用/窗口)。provider 上报数优先;换史后(恢复会话、回退
+   * 截断)回落到本地估算,直到下一轮 step-end——恢复会话的计量条因此不会
+   * 显示误导性的 0。远程侧随 state 快照镜像。
+   */
+  readonly contextUsage: { used: number; window: number };
   run(text: string, options?: RunOptions): Promise<void>;
   inject(text: string, images?: ImageAttachment[]): boolean | Promise<boolean>;
   abort(): void;

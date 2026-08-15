@@ -18,7 +18,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { AgentEvent, PermissionDecision, PermissionRequest } from '../core/events.js';
+import type { AgentEvent, ContextUsage, PermissionDecision, PermissionRequest } from '../core/events.js';
 import type { Config } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
@@ -44,6 +44,12 @@ export interface StateSnapshot {
     isRunning: boolean;
     isCompacting: boolean;
     historyLength: number;
+    /**
+     * 上下文占用(provider 上报数,换史后为本地估算)。可选:旧 server
+     * 没有该字段,client 侧回退到 `{ used: 0 }`——计量条退回旧行为,等
+     * 下一个 step-end 带回真实值。
+     */
+    contextUsage?: { used: number; window: number };
   };
   goal: {
     active: boolean;

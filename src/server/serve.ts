@@ -146,6 +146,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         isRunning: session.agent.isRunning,
         isCompacting: session.agent.isCompacting,
         historyLength: session.agent.history.length,
+        contextUsage: session.agent.contextUsage,
       },
       goal: {
         active: session.goal.active,

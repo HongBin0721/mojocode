@@ -319,7 +319,9 @@ export function App(props: Props): JSX.Element {
   // 常驻会让屏幕上重复好几份同样的任务。平时看时间线的记录即可,需要盯
   // 实时进度时再按 ctrl+t 调出来(状态行一直提示这个快捷键)。
   const [todoPanelOpen, setTodoPanelOpen] = createSignal(false);
-  const [usage, setUsage] = createSignal({ used: 0, window: session.provider.contextWindow, total: 0 });
+  // 挂载初值取 contextUsage(--attach 到跑到一半的 server 时立即有读数,
+  // 而不是等下一个 step-end),本地新会话自然是 0。
+  const [usage, setUsage] = createSignal({ ...session.agent.contextUsage, total: 0 });
   const [providerLabel, setProviderLabel] = createSignal(session.provider.label);
   const [model, setModel] = createSignal(session.provider.model);
   // 两轴权限 + plan 标志。UI 展示与判断都从这份镜像取,靠 permission-change
@@ -1098,9 +1100,9 @@ export function App(props: Props): JSX.Element {
       (item) => ({ ...item, key: nextKey() }) as TimelineItem,
     );
     resetTimeline([bannerItem(), ...replayed]);
-    // 上下文用量归零:历史刚变短,旧数字会一直挂到下一轮 step-end。
-    // 累计消耗保留——那些 token 确实花掉了。
-    setUsage((prev) => ({ ...prev, used: 0 }));
+    // 上下文用量换成截断后历史的估算(setHistory 后 lastInputTokens 已
+    // 作废)。累计消耗保留——那些 token 确实花掉了。
+    setUsage((prev) => ({ ...prev, used: session.agent.contextUsage.used }));
     push({ kind: 'notice', level: 'info', message: t('notice.rewound', { n: entry.ordinal }) });
     // 原消息放回输入框,编辑后重发即分叉出新的走向。
     setPrefill({ text: entry.text });
@@ -1406,7 +1408,7 @@ export function App(props: Props): JSX.Element {
         // /clear 与 /new 的屏幕表现相同(没有终端回滚缓冲可清),差异
         // 只剩语义上的会话文件切换,都由上面的 newSession 完成。
         setItems([bannerItem()]);
-        setUsage((prev) => ({ ...prev, used: 0, total: 0 }));
+        setUsage((prev) => ({ ...prev, used: session.agent.contextUsage.used, total: 0 }));
         break;
       }
 
@@ -1921,14 +1923,15 @@ export function App(props: Props): JSX.Element {
         // 镜像要到下面的 set 之后才追上。provider/model 不会被恢复改写
         //(始终沿用当前模型),但旧版 server 仍可能切,照样同步一遍。
         resetTimeline([sessionBanner(session), ...buildResumeItems(session)]);
-        // 同步 UI 状态:权限可能被恢复改写;上下文用量归零,下一轮
-        // step-end 会带回真实值。todos 由订阅自动更新。
+        // 同步 UI 状态:权限可能被恢复改写;上下文用量取恢复历史的估算
+        // (lastInputTokens 已随 setHistory 作废),下一轮 step-end 会带回
+        // 真实值。todos 由订阅自动更新。
         setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
         setPlanActive(session.config.plan);
         setProviderLabel(session.provider.label);
         setModel(session.provider.model);
         setThink(session.provider.reasoningEffort);
-        setUsage({ used: 0, window: session.provider.contextWindow, total: 0 });
+        setUsage({ ...session.agent.contextUsage, total: 0 });
         if (providerWarn) {
           push({
             kind: 'notice',

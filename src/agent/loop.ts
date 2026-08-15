@@ -6,7 +6,7 @@ import {
   type ToolSet,
   type UserContent,
 } from 'ai';
-import type { EventBus, UsageSnapshot } from '../core/events.js';
+import type { ContextUsage, EventBus, UsageSnapshot } from '../core/events.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
@@ -94,6 +94,13 @@ export class Agent {
   private messages: ModelMessage[] = [];
   private cumulativeTokens = 0;
   private lastInputTokens: number | undefined;
+  /**
+   * 换史/清史/压缩后缓存的本地估算,仅在 lastInputTokens 作废(没有
+   * provider 上报数)时作为 contextUsage 的显示回落——恢复会话后计量条
+   * 立即有近似读数,下一轮 step-end 会带回真实值。只服务显示,绝不进入
+   * shouldCompact 的判断(本地估算的精度约束见 compact.ts)。
+   */
+  private estimatedTokens = 0;
   private controller: AbortController | undefined;
   /** 运行中用户发来的引导消息,等待下一步开始时注入。 */
   private pendingGuidance: GuidanceEntry[] = [];
@@ -154,8 +161,11 @@ export class Agent {
     const { provider, config } = this.options;
     this.messages = messages;
     this.lastInputTokens = undefined;
-    this.historyNeedsCompact =
-      estimateTokens(messages) > provider.contextWindow * config.compactThreshold;
+    // 同一次估算两用:超阈值置位压缩标记;存下来给 contextUsage 作显示
+    // 回落,恢复会话后计量条不再是误导性的 0。
+    const estimated = estimateTokens(messages);
+    this.estimatedTokens = estimated;
+    this.historyNeedsCompact = estimated > provider.contextWindow * config.compactThreshold;
     if (options?.resetSpend) this.cumulativeTokens = 0;
     this.historyGeneration++;
   }
@@ -173,6 +183,7 @@ export class Agent {
   clear(): void {
     this.messages = [];
     this.lastInputTokens = undefined;
+    this.estimatedTokens = 0;
     this.historyNeedsCompact = false;
     // 累计用量属于被丢弃的那次会话:不清零的话 footer 与 /cost 会把旧账
     // 算到新会话头上(UI 乐观置 0,下一个 step-end 又跳回清空前的数字)。
@@ -181,9 +192,9 @@ export class Agent {
     this.historyGeneration++;
   }
 
-  get contextUsage(): { used: number; window: number } {
+  get contextUsage(): ContextUsage {
     return {
-      used: this.lastInputTokens ?? 0,
+      used: this.lastInputTokens ?? this.estimatedTokens,
       window: this.options.provider.contextWindow,
     };
   }
@@ -238,6 +249,9 @@ export class Agent {
     if (generation !== this.historyGeneration) return;
     this.messages = result.messages;
     this.lastInputTokens = undefined;
+    // 压缩后 lastInputTokens 作废,显示回落也得跟着换算到变短的历史上,
+    // 否则计量条会把压缩前的占用一直挂到下一轮 step-end。
+    this.estimatedTokens = estimateTokens(result.messages);
     this.options.bus.emit({
       type: 'compaction',
       removedMessages: result.removedMessages,

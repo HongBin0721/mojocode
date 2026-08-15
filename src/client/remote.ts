@@ -40,6 +40,7 @@ import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/re
 import type { SimplifyStartResult } from '../agent/simplify.js';
 import { ProviderSwitchError } from '../app/bootstrap.js';
 import type { RunOptions, SessionHandle } from '../app/session-handle.js';
+import { estimateTokens } from '../agent/compact.js';
 import {
   DEFERRED_METHODS,
   deserializeEvent,
@@ -444,6 +445,10 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       get history() {
         return history;
       },
+      get contextUsage() {
+        // 旧 server 的快照没有该字段:回退到 0,计量条等下一个 step-end。
+        return state.agent.contextUsage ?? { used: 0, window: state.provider.contextWindow };
+      },
       run: (text, options) => callDeferred('run', { text, options }).then(() => undefined),
       inject: (text, images) => call<boolean>('inject', { text, images }),
       abort: () => {
@@ -459,6 +464,16 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
           displayHistory = displayHistory.slice(0, displayHistory.length - removed);
         }
         history = messages;
+        // 上下文占用同样即时估算:call 是 fire-and-forget,server 的权威
+        // state 帧要几拍后才到,而 App 紧接着就要读 contextUsage 画计量条
+        // (本地模式同理由核心侧同步给出)——回退后显示 0 会一直挂到下一轮。
+        state = {
+          ...state,
+          agent: {
+            ...state.agent,
+            contextUsage: { used: estimateTokens(messages), window: state.provider.contextWindow },
+          },
+        };
         void call('setHistory', { messages }).catch(() => {});
       },
     },

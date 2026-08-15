@@ -112,6 +112,7 @@ function fakeSession() {
       get history() {
         return history;
       },
+      contextUsage: { used: 1234, window: 100_000 },
       run: spies.run,
       inject: spies.inject,
       abort: spies.abort,
@@ -413,6 +414,20 @@ describe('server ↔ remote client', () => {
     await remote.store.save(truncated);
     await waitFor(() => parts.spies.setHistory.mock.calls.length === 1);
     expect(parts.spies.save).toHaveBeenCalled();
+  });
+
+  // contextUsage 经 state 快照过线:--attach 与恢复会话后计量条立即有读数。
+  it('state 快照携带 contextUsage,镜像可读', async () => {
+    const { remote } = await boot();
+    expect(remote.agent.contextUsage).toEqual({ used: 1234, window: 100_000 });
+  });
+
+  it('setHistory 的镜像即时估算上下文占用,不等 server 的权威帧', async () => {
+    const { remote } = await boot();
+    remote.agent.setHistory([{ role: 'user', content: '你好世界' }]);
+    // CJK 按字符 1:1 估算:4 个汉字 4 token——为 0 就是退化回了旧行为。
+    expect(remote.agent.contextUsage.used).toBe(4);
+    expect(remote.agent.contextUsage.window).toBe(128_000);
   });
 
   it('resumeSession 的 ProviderSwitchError 过线后类型复原', async () => {

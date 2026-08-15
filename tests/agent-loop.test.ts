@@ -831,3 +831,32 @@ describe('轮中途替换系统提示词', () => {
     expect(prepared[0]).toEqual({});
   });
 });
+
+describe('contextUsage 显示回落', () => {
+  // 恢复会话/回退截断后 lastInputTokens 作废,计量条如果挂 0 会一直误导
+  // 到下一轮 step-end——setHistory 缓存的本地估算就是给它兜底的。
+  it('setHistory 后回落到估算值,clear 归零', () => {
+    const { agent } = makeAgent();
+    mockEstimateTokens.mockReturnValue(42_000);
+    agent.setHistory([{ role: 'user', content: '一段恢复进来的长历史' }]);
+    expect(agent.contextUsage).toEqual({ used: 42_000, window: 100_000 });
+
+    agent.clear();
+    expect(agent.contextUsage.used).toBe(0);
+  });
+
+  it('provider 上报数仍优先于估算', async () => {
+    mockStreamText.mockImplementation(() => ({
+      fullStream: (async function* () {
+        yield { type: 'finish-step', usage: { inputTokens: 2000, outputTokens: 10 } };
+        yield { type: 'finish', totalUsage: {}, finishReason: 'stop' };
+      })(),
+      responseMessages: Promise.resolve([{ role: 'assistant', content: '回复' }]),
+      finishReason: Promise.resolve('stop'),
+    }));
+    mockEstimateTokens.mockReturnValue(99_999);
+    const { agent } = makeAgent();
+    await agent.run('你好');
+    expect(agent.contextUsage.used).toBe(2000);
+  });
+});

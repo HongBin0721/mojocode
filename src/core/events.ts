@@ -77,6 +77,16 @@ export interface UsageSnapshot {
   contextWindow: number;
 }
 
+/**
+ * 上下文占用的即时读数(计量条显示用):used 优先取 provider 上报的上一步
+ * 输入 token,换史/清史/压缩后没有上报数时回落到本地估算,直到下一个
+ * step-end 带回真实值。
+ */
+export interface ContextUsage {
+  used: number;
+  window: number;
+}
+
 export type AgentEvent =
   // display:时间线展示用的替代文本(如 `/init`);userText 才是喂给模型的内容。
   | { type: 'turn-start'; userText: string; display?: string; imageCount?: number }
