@@ -104,10 +104,7 @@ export function TimelineEntry(props: {
           <Text color={theme.dim}>
             {glyphs.turn} {item.model} · {formatDuration(item.durationMs)} ·{' '}
             {t('ui.turnTokens', { n: formatTokens(item.tokens) })}
-            {(() => {
-              const cache = formatCacheHit(item.cachedTokens, item.inputTokens);
-              return cache ? ` · ${cache}` : '';
-            })()}
+            {formatCacheHit(item.cachedTokens, item.inputTokens)}
           </Text>
         </Box>
       );

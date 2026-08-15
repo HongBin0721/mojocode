@@ -12,7 +12,7 @@ import {
 } from '../config/schema.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus, type PermissionAsker } from '../core/events.js';
-import { createModel, listProviderModels, type ProviderModels } from '../model/registry.js';
+import { createModel, listModels, listProviderModels, type ModelInfo, type ProviderModels } from '../model/registry.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
 import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
@@ -80,6 +80,13 @@ export interface Session {
    * 单组失败不抛错、就地带回原因。收进契约:凭据只存在于 server 侧。
    */
   listProviderModels: () => Promise<ProviderModels[]>;
+  /**
+   * 只拉**当前厂商**的模型列表。新代码用 listProviderModels,这个方法
+   * 只剩 server 的 listModels 兼容垫片在调(旧 --attach 客户端的版本偏差
+   * 路径)——垫片转发到 listProviderModels 会把 1 次探测放大成全厂商并发
+   * 探测,还得等最慢的一个,旧语义必须保住单厂商。
+   */
+  listModels: () => Promise<ModelInfo[]>;
   /**
    * 会话内体检(`/doctor`):读会话此刻的配置、采信已连上的 MCP 状态、
    * 复用已拉起的 LSP——收进契约后 TUI 不必再摸 session.lsp / mcpStatuses。
@@ -687,6 +694,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       };
     },
     listProviderModels: () => listProviderModels(config),
+    listModels: () => listModels(provider),
     doctor: ({ offline }) =>
       runDoctor({
         root,

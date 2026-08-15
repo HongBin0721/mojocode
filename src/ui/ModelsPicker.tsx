@@ -1,8 +1,7 @@
 import { batch, createMemo, createSignal, For, Show } from 'solid-js';
 import { Box, Text, useInput, type JSX } from './kit.js';
-import { theme, glyphs } from './theme.js';
+import { theme, glyphs, contextNote } from './theme.js';
 import { t } from '../i18n/index.js';
-import { contextNote } from './ModelPicker.js';
 import { centeredWindowStart, createManualEntry, ManualEntryBox } from './picker-utils.js';
 import type { ProviderModels } from '../model/registry.js';
 
@@ -46,22 +45,21 @@ export function ModelsPicker(props: Props): JSX.Element {
     const q = query().trim().toLowerCase();
     const out: Row[] = [];
     for (const group of props.groups) {
-      if (q) {
-        // 厂商名命中 → 整组保留;否则只留模型 id 命中的行;全不命中 → 整组隐藏。
-        const labelMatch = group.label.toLowerCase().includes(q);
-        const matched = labelMatch
+      // 本组要显示的模型,三态归一:搜索时厂商名命中整组保留、否则按模型
+      // id 过滤;非搜索时折叠组就是空(只剩组头)。组头/错误行/模型行的
+      // 入队规则因此只写一份。
+      const models = q
+        ? group.label.toLowerCase().includes(q)
           ? group.models
-          : group.models.filter((m) => m.id.toLowerCase().includes(q));
-        if (matched.length === 0) continue;
-        out.push({ kind: 'header', group });
-        if (group.error) out.push({ kind: 'error', group });
-        for (const m of matched) out.push({ kind: 'model', group, model: m.id });
-        continue;
-      }
+          : group.models.filter((m) => m.id.toLowerCase().includes(q))
+        : collapsed().has(group.providerId)
+          ? []
+          : group.models;
+      // 搜索全不命中 → 整组隐藏(非搜索的折叠组 models 为空,组头照常)。
+      if (q && models.length === 0) continue;
       out.push({ kind: 'header', group });
       if (group.error) out.push({ kind: 'error', group });
-      if (collapsed().has(group.providerId)) continue;
-      for (const m of group.models) out.push({ kind: 'model', group, model: m.id });
+      for (const m of models) out.push({ kind: 'model', group, model: m.id });
     }
     out.push({ kind: 'manual' });
     return out;
@@ -103,16 +101,21 @@ export function ModelsPicker(props: Props): JSX.Element {
   const entryAtCursor = () =>
     table().entries.find((e) => e.selIndex === curIndex());
 
+  /** 折叠集合的唯一写入口:不可变替换,让 memo 依赖引用变化。 */
+  const setGroupCollapsed = (providerId: string, value: boolean): void => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (value) next.add(providerId);
+      else next.delete(providerId);
+      return next;
+    });
+  };
+
   const toggleGroup = (providerId: string): void => {
     // 搜索时行集忽略 collapsed(结果完整性优先),这时切折叠只会改到一个
     // 看不见的集合——清词后凭空少掉几组。搜索中一律不动它。
     if (query()) return;
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(providerId)) next.delete(providerId);
-      else next.add(providerId);
-      return next;
-    });
+    setGroupCollapsed(providerId, !collapsed().has(providerId));
   };
 
   useInput((input, key) => {
@@ -160,17 +163,12 @@ export function ModelsPicker(props: Props): JSX.Element {
       // 与 toggleGroup 同一条纪律:搜索中不改看不见的折叠集合。
       if (query()) return;
       const providerId = entry.row.group.providerId;
-      const shouldCollapse = key.leftArrow && !collapsed().has(providerId);
-      const shouldExpand = key.rightArrow && collapsed().has(providerId);
-      if (!shouldCollapse && !shouldExpand) return;
-      setCollapsed((prev) => {
-        const next = new Set(prev);
-        if (shouldCollapse) next.add(providerId);
-        else next.delete(providerId);
-        return next;
-      });
+      // ← 折叠、→ 展开;已是目标态就 no-op。
+      const collapsing = key.leftArrow;
+      if (collapsed().has(providerId) === collapsing) return;
+      setGroupCollapsed(providerId, collapsing);
       // 折叠模型行时把光标挪回它所在组的组头,免得悬到下一组。
-      if (shouldCollapse && entry.row.kind === 'model') {
+      if (collapsing && entry.row.kind === 'model') {
         const headerSel = findSel(
           (r) => r.kind === 'header' && r.group.providerId === providerId,
         );

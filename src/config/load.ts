@@ -225,6 +225,26 @@ export interface ResolveProviderOptions {
   probe?: boolean;
 }
 
+/**
+ * 厂商是否已被用户**显式配置**过(/models 枚举的准入判定):内置厂商 =
+ * 配置文件里存过 key、或声明了自定义 apiKeyEnv 且该变量有值(与
+ * resolveProvider 的 key 回退同一条链——只配 apiKeyEnv 的厂商能切过去,
+ * 就必须能在选择器里被列出来);自定义条目 = 写了 baseURL(本地端点
+ * 不需要凭据)。key 的有无按"存在"而不是真值判断:存过空串也是明确
+ * 配置,探测会给出真实答案。紧挨 resolveProvider 而居,"对话能不能用
+ * key"与"/models 里列不列出"两份判断只允许在这一份实现上同步演化。
+ */
+export function isProviderConfigured(
+  id: string,
+  override: ProviderConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return isBuiltinProvider(id)
+    ? override.apiKey !== undefined ||
+        (override.apiKeyEnv !== undefined && apiKeyFromEnv([override.apiKeyEnv], env) !== undefined)
+    : override.baseURL !== undefined;
+}
+
 export function resolveProvider(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,

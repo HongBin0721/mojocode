@@ -62,6 +62,7 @@ import {
   type TimelineMode,
 } from '../config/schema.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider, type BuiltinProviderId } from '../config/providers.js';
+import type { ResolvedProvider } from '../config/load.js';
 import { ModelsPicker } from './ModelsPicker.js';
 import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
 import { listModels, type ProviderModels } from '../model/registry.js';
@@ -84,6 +85,15 @@ import { readClipboardImage } from '../app/clipboard.js';
 import { formatDoctor } from '../app/doctor.js';
 
 /** 每次渲染时重建,使 /setting 里的语言切换与配置中的语言设置都能生效。 */
+/**
+ * 把手打的别名(/model、/settings、/quit 这类,不经 Input 菜单的改写)
+ * 归一为分发主名。别名的知识只住在 buildCommands 的表里:拦截表与
+ * switch 都只见主名,给命令配别名时漏列任何一处都不再构成绕过。
+ */
+function canonicalCommandName(name: string): string {
+  return buildCommands().find((c) => c.aliases?.includes(name))?.name ?? name;
+}
+
 function buildCommands(): SlashCommand[] {
   return [
     { name: 'help', description: t('cmd.help') },
@@ -128,10 +138,9 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
   max: 'thinkopt.max',
 };
 
-/** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。别名要单独列:
- * 拦截按提交的命令名判断,手打 `/model xxx` 或历史回放不经过 Input 的
- * 别名改写,漏列就是一条绕过。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'model', 'models', 'provider', 'resume', 'fork', 'init']);
+/** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。runCommand 入口
+ * 已把别名归一为主名,这里只列主名。 */
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'models', 'provider', 'resume', 'fork', 'init']);
 
 /**
  * 压缩进度条的预估摘要总长(字符)。摘要提示词要的是分节的事实性散文,
@@ -1062,9 +1071,43 @@ export function App(props: Props): JSX.Element {
   };
 
   /**
-   * `/models <id>`(当前厂商)与分组选择器共用的切换落地:换厂商/模型、刷新
-   * 镜像、落盘。厂商没变时走 modelNow 分隔线;变了就走 provider 的 switched
-   * 文案,并把默认厂商一并落盘(下次启动直接开在新厂商上)。
+   * `session.switch` 返回后的统一落地:刷新镜像、按"厂商是否变化"选分隔线
+   * 文案、厂商变化时把默认厂商落盘。/provider 与 /models 两条路径共用——
+   * "switch 之后必须发生什么"这份后果清单只允许有一份。
+   *
+   * changed 由调用方给定:/provider 一律视作切换(重选当前厂商也重新钉一
+   * 遍),/models 按厂商实际变没变算。persistModel 只在用户显式选了模型时
+   * 为真——/provider 的模型是回退解析出来的,不落盘。
+   */
+  const landSwitch = async (
+    next: ResolvedProvider,
+    changed: boolean,
+    persistModel: boolean,
+  ): Promise<void> => {
+    if (changed) setProviderLabel(next.label);
+    setModel(next.model);
+    setThink(next.reasoningEffort);
+    setUsage((prev) => ({ ...prev, window: next.contextWindow }));
+    push({
+      kind: 'divider',
+      label: changed
+        ? t('divider.switched', { label: next.label, model: next.model })
+        : t('divider.modelNow', { model: next.model }),
+    });
+    if (changed) {
+      await saveProviderChoice(next.id).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
+      });
+    }
+    if (persistModel) {
+      await saveModelChoice(next.id, next.model).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
+      });
+    }
+  };
+
+  /**
+   * `/models <id>`(当前厂商)与分组选择器共用的切换落地。
    *
    * providerId 只在用户**显式点名**厂商(分组选择器里选了某组的行)时传:
    * 文本参数路径必须只发 { model },让 server 按它的实时 provider 解析——
@@ -1079,25 +1122,7 @@ export function App(props: Props): JSX.Element {
       const next = await session.switch(
         providerId ? { provider: providerId, model: modelId } : { model: modelId },
       );
-      if (next.id !== previousId) setProviderLabel(next.label);
-      setModel(next.model);
-      setThink(next.reasoningEffort);
-      setUsage((prev) => ({ ...prev, window: next.contextWindow }));
-      push({
-        kind: 'divider',
-        label:
-          next.id !== previousId
-            ? t('divider.switched', { label: next.label, model: next.model })
-            : t('divider.modelNow', { model: next.model }),
-      });
-      if (next.id !== previousId) {
-        await saveProviderChoice(next.id).catch((err: Error) => {
-          push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
-        });
-      }
-      await saveModelChoice(next.id, next.model).catch((err: Error) => {
-        push({ kind: 'notice', level: 'warn', message: t('notice.modelSaveFailed', { message: err.message }) });
-      });
+      await landSwitch(next, next.id !== previousId, true);
     } catch (err) {
       push({ kind: 'error', message: (err as Error).message });
     }
@@ -1116,14 +1141,7 @@ export function App(props: Props): JSX.Element {
         });
       }
       const next = await session.switch(apiKey ? { provider: id, apiKey } : { provider: id });
-      setProviderLabel(next.label);
-      setModel(next.model);
-      setThink(next.reasoningEffort);
-      setUsage((prev) => ({ ...prev, window: next.contextWindow }));
-      push({ kind: 'divider', label: t('divider.switched', { label: next.label, model: next.model }) });
-      await saveProviderChoice(next.id).catch((err: Error) => {
-        push({ kind: 'notice', level: 'warn', message: t('notice.providerSaveFailed', { message: err.message }) });
-      });
+      await landSwitch(next, true, false);
     } catch (err) {
       push({ kind: 'error', message: (err as Error).message });
     }
@@ -1197,7 +1215,9 @@ export function App(props: Props): JSX.Element {
   };
 
   const runCommand = async (raw: string) => {
-    const [name, ...rest] = raw.slice(1).trim().split(/\s+/);
+    const [typed, ...rest] = raw.slice(1).trim().split(/\s+/);
+    // 别名先归一为主名(未知的命令保持原样,走 default 分支的提示)。
+    const name = typed ? canonicalCommandName(typed) : undefined;
     const arg = rest.join(' ');
 
     // 这些命令会改写正在被进行中的流读写的历史/模型,运行中禁止。
@@ -1228,8 +1248,8 @@ export function App(props: Props): JSX.Element {
         });
         break;
 
+      // (/quit 别名已在 runCommand 入口归一为 exit。)
       case 'exit':
-      case 'quit':
         exit();
         break;
 
@@ -1452,8 +1472,8 @@ export function App(props: Props): JSX.Element {
       //
       // 刻意不进 BUSY_BLOCKED_COMMANDS:面板只改显示层,碰不到进行中的流。
       // 代价是它开着时 Input 卸载,想插话引导得先 esc 关掉面板。
+      // (/settings 别名已在 runCommand 入口归一为 setting。)
       case 'setting':
-      case 'settings':
         setSettingsOpen(true);
         break;
 
@@ -1493,9 +1513,6 @@ export function App(props: Props): JSX.Element {
         break;
       }
 
-      // 别名 model 兜底:提交侧(Input)总是改写为主名,这支只为手打
-      // `/model xxx` 或旧脚本留一条活路。
-      case 'model':
       case 'models': {
         if (!arg) {
           // 无参数:并发拉取所有已配置厂商的模型列表,打开分组选择器。

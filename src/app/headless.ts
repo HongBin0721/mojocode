@@ -58,17 +58,15 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
       case 'aborted':
         errStream.write(`  ! ${t('headless.interrupted')}\n`);
         break;
-      case 'turn-end': {
-        // 缓存命中段与 TUI 收尾行同一份格式化(provider 不报则不画)。
-        const cache = formatCacheHit(event.usage.cachedInputTokens, event.usage.inputTokens);
+      case 'turn-end':
         errStream.write(
+          // 缓存命中段与 TUI 收尾行同一份格式化(自带分隔符,不报则空串)。
           `  · ${t('headless.turnEnd', {
             tokens: event.usage.cumulativeTotalTokens,
             reason: event.finishReason,
-          })}${cache ? ` · ${cache}` : ''}\n`,
+          })}${formatCacheHit(event.usage.cachedInputTokens, event.usage.inputTokens)}\n`,
         );
         break;
-      }
       default:
         break;
     }

@@ -27,6 +27,12 @@ export interface ProviderPreset {
   defaultContextWindow: number;
   /** 有些端点无法处理并行工具调用;可按 provider 关闭。 */
   parallelToolCalls: boolean;
+  /**
+   * 模型 id 的官方拼写归一(如 GLM 系端点回小写、官方拼写是大写)。厂商
+   * 怪癖住在它自己的预设里,而不是通用路径上的 id 前缀判断——后者会误伤
+   * 名字碰巧带同样前缀的自定义条目(如 glm-proxy),改写它发往端点的 id。
+   */
+  normalizeModelId?: (id: string) => string;
   /** 使用专用的 @ai-sdk/deepseek 包,而不是 openai-compatible。 */
   sdk?: 'deepseek';
 }
@@ -103,6 +109,7 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZHIPU_API_KEY', 'ZHIPUAI_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
+    normalizeModelId: (id) => id.toUpperCase(),
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -116,6 +123,7 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZHIPU_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
+    normalizeModelId: (id) => id.toUpperCase(),
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -129,6 +137,7 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZAI_API_KEY', 'ZHIPU_API_KEY'],
     keyUrl: 'https://z.ai/manage-apikey/apikey-list',
     defaultModel: 'GLM-5.3',
+    normalizeModelId: (id) => id.toUpperCase(),
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -147,14 +156,18 @@ export function isBuiltinProvider(id: string): id is BuiltinProviderId {
 }
 
 /**
- * GLM 系厂商的模型名官方拼写是大写(GLM-5.3),但线上 /models 返回的以及
- * 老配置里存的是小写 id。统一归一为大写,否则大小写错位会让预设
- * contextWindows 查不到(退回兜底窗口)、ensurePresetDefault 的精确匹配合并
- * 出现重复行。厂商判断沿用 reasoning.ts 的家族前缀惯例(glm / glm-coding /
- * glm-intl)。
+ * 把模型 id 归一为厂商预设的官方拼写(GLM 系端点回小写、官方拼写是大写,
+ * 不归一会让预设 contextWindows 查不到、ensurePresetDefault 合并出重复行)。
+ * 查预设表而不是按 provider id 前缀判断:自定义条目(哪怕叫 glm-proxy)
+ * 不在表里,永不归一——归一后的 id 是要发往端点的,不能碰用户自己的拼写。
  */
 export function normalizeModelId(providerId: string, modelId: string): string {
-  return providerId.startsWith('glm') ? modelId.toUpperCase() : modelId;
+  // 显式标成 ProviderPreset:表是 as const 的,kimi 等未声明该字段的成员
+  // 类型上没有这个可选属性,直接对联合取属性会报错。
+  const preset: ProviderPreset | undefined = isBuiltinProvider(providerId)
+    ? PROVIDER_PRESETS[providerId]
+    : undefined;
+  return preset?.normalizeModelId ? preset.normalizeModelId(modelId) : modelId;
 }
 
 /** 读取预设中列出的第一个非空环境变量。 */

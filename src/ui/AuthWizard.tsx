@@ -11,8 +11,8 @@ import { globalConfigPath } from '../config/paths.js';
 import { saveApiKey, saveCustomProvider, saveModelChoice, setDefaultProvider } from '../config/save.js';
 import { listModels } from '../model/registry.js';
 import type { ResolvedProvider } from '../config/load.js';
-import { ModelPicker, contextNote, type ModelOption } from './ModelPicker.js';
-import { theme, glyphs } from './theme.js';
+import { ModelPicker, type ModelOption } from './ModelPicker.js';
+import { theme, glyphs, contextNote } from './theme.js';
 import { t } from '../i18n/index.js';
 
 /** 本次要配置的端点:内置预设,或用户手输的 OpenAI 兼容自定义端点。 */

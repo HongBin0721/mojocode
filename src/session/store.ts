@@ -559,71 +559,75 @@ export class SessionStore {
     await this.flush();
   }
 
-  /** 追加一条子任务过程记录。尽力而为:失败不打扰用户(与 saveState 同理)。 */
-  async saveTask(task: SessionTaskRecord): Promise<void> {
-    const record: TaskRecord = { kind: 'task', at: new Date().toISOString(), task };
+  /**
+   * 追加一条附属记录(子任务过程 / 轮末用量这类不属于对话历史的记录)。
+   * 尽力而为:失败不打扰用户(与 saveState 同理)。
+   */
+  private async appendExtra(record: TaskRecord | UsageRecord): Promise<void> {
     this.enqueue(async () => {
       await this.appendRecord(record);
     });
     await this.flush();
   }
 
-  /** 追加一条轮末用量记录。尽力而为:统计写不进去不值得打扰一次会话。 */
+  /** 追加一条子任务过程记录。 */
+  async saveTask(task: SessionTaskRecord): Promise<void> {
+    await this.appendExtra({ kind: 'task', at: new Date().toISOString(), task });
+  }
+
+  /** 追加一条轮末用量记录。 */
   async saveUsage(usage: SessionUsageRecord): Promise<void> {
-    const record: UsageRecord = { kind: 'usage', at: new Date().toISOString(), usage };
-    this.enqueue(async () => {
-      await this.appendRecord(record);
-    });
-    await this.flush();
+    await this.appendExtra({ kind: 'usage', at: new Date().toISOString(), usage });
+  }
+
+  /**
+   * 读出一个会话文件里的附属记录(时间顺序),按 pick 返回非 undefined 的
+   * 行。ENOENT 映射为 SessionNotFoundError,末尾撕裂的写入照旧忽略——
+   * 这套文件读取语义只允许有这一份(readUsage / readTasks 共用)。
+   * 回查/测试用,不常驻内存。
+   */
+  private static async readExtraRecords<T>(
+    id: string,
+    dir: string | undefined,
+    pick: (record: Record_) => T | undefined,
+  ): Promise<T[]> {
+    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new SessionNotFoundError(id);
+      throw err;
+    }
+    const out: T[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as Record_;
+        const picked = pick(record);
+        if (picked !== undefined) out.push(picked);
+      } catch {
+        // 末尾的不完整写入照旧忽略
+      }
+    }
+    return out;
   }
 
   /** 读出一个会话文件里的逐轮用量(时间顺序)。事后统计/测试用,不常驻内存。 */
-  static async readUsage(
+  static readUsage(
     id: string,
     dir?: string,
   ): Promise<Array<SessionUsageRecord & { at: string }>> {
-    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
-    let raw: string;
-    try {
-      raw = await fs.readFile(file, 'utf8');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new SessionNotFoundError(id);
-      throw err;
-    }
-    const usage: Array<SessionUsageRecord & { at: string }> = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line) as Record_;
-        if (record.kind === 'usage') usage.push({ ...record.usage, at: record.at });
-      } catch {
-        // 末尾的不完整写入照旧忽略
-      }
-    }
-    return usage;
+    return SessionStore.readExtraRecords(id, dir, (record) =>
+      record.kind === 'usage' ? { ...record.usage, at: record.at } : undefined,
+    );
   }
 
   /** 读出一个会话文件里的全部子任务过程(时间顺序)。回查/测试用,不常驻内存。 */
-  static async readTasks(id: string, dir?: string): Promise<Array<SessionTaskRecord & { at: string }>> {
-    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
-    let raw: string;
-    try {
-      raw = await fs.readFile(file, 'utf8');
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new SessionNotFoundError(id);
-      throw err;
-    }
-    const tasks: Array<SessionTaskRecord & { at: string }> = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line) as Record_;
-        if (record.kind === 'task') tasks.push({ ...record.task, at: record.at });
-      } catch {
-        // 末尾的不完整写入照旧忽略
-      }
-    }
-    return tasks;
+  static readTasks(id: string, dir?: string): Promise<Array<SessionTaskRecord & { at: string }>> {
+    return SessionStore.readExtraRecords(id, dir, (record) =>
+      record.kind === 'task' ? { ...record.task, at: record.at } : undefined,
+    );
   }
 
   /** 只有状态真的变了才追加记录,避免每轮一条重复 state。 */

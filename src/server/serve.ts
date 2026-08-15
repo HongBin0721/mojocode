@@ -289,10 +289,11 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       case 'listProviderModels':
         return session.listProviderModels();
       // 兼容垫片:旧客户端(--attach 版本偏差)的裸 /model 仍发 listModels。
-      // 首组恒为当前厂商(listProviderModels 的排序约定),取它的模型列表
-      // 就是旧语义;与 GET /history 的向后兼容是同一条纪律。
+      // 旧语义是"只探当前厂商"——调 session.listModels,不能转发到
+      // listProviderModels:那会并发探测所有已配置厂商,还得等最慢的一个
+      // (死端点 10s),而其余 N-1 组的探测结果全被丢弃。
       case 'listModels':
-        return session.listProviderModels().then((groups) => groups[0]?.models ?? []);
+        return session.listModels();
       case 'doctor':
         return session.doctor({ offline: args['offline'] === true });
       case 'shutdown':

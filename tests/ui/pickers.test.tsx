@@ -6,7 +6,7 @@ import { ModelPicker } from '../../src/ui/ModelPicker.js';
 import { ModelsPicker } from '../../src/ui/ModelsPicker.js';
 import { ProviderPicker } from '../../src/ui/ProviderPicker.js';
 import { AuthWizard } from '../../src/ui/AuthWizard.js';
-import { renderUi } from '../support/otui.js';
+import { accentTexts, renderUi } from '../support/otui.js';
 import { setLocale } from '../../src/i18n/index.js';
 
 beforeEach(() => {
@@ -236,24 +236,8 @@ describe('ModelsPicker', () => {
       ),
       { width: 60, height: 16 },
     );
-    // accent 是 cyan (r 低、g/b 高);默认前景是白 (255,255,255) 不会命中。
-    const highlighted = () => {
-      const captured = ui.spans() as {
-        lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
-      };
-      return captured.lines
-        .flatMap((l) => l.spans)
-        .filter(
-          (s) =>
-            // 活动行的 ❯ 前缀与 id 同 span("❯   m-1"),非活动行是裸 id。
-            /^❯\s*m-\d$|^m-\d$/.test(s.text.trim()) &&
-            s.fg !== undefined &&
-            (s.fg.buffer[0] ?? 0) < 100 &&
-            (s.fg.buffer[1] ?? 0) > 180 &&
-            (s.fg.buffer[2] ?? 0) > 180,
-        )
-        .map((s) => s.text.trim().replace(/^❯\s*/, ''));
-    };
+    // 活动行的 ❯ 前缀与 id 同 span("❯   m-1"),非活动行是裸 id。
+    const highlighted = () => accentTexts(ui, /^❯\s*m-\d$|^m-\d$/);
     expect(highlighted()).toEqual(['m-1']);
     await ui.press('down');
     expect(highlighted()).toEqual(['m-2']);

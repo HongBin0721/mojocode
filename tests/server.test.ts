@@ -144,6 +144,7 @@ function fakeSession() {
     listProviderModels: vi.fn(async () => [
       { providerId: 'kimi', label: 'Kimi', models: [{ id: 'kimi-k2' }, { id: 'kimi-next' }] },
     ]),
+    listModels: vi.fn(async () => [{ id: 'kimi-k2' }, { id: 'kimi-next' }]),
     doctor: vi.fn(async () => ({ healthy: true, sections: [] })),
     refreshEnvironment: vi.fn(async () => {}),
     skills: [{ name: 'demo', description: 'demo skill' }],
@@ -300,7 +301,8 @@ describe('server ↔ remote client', () => {
       body: JSON.stringify({ id: 'legacy-1', method: 'listModels' }),
     });
     const payload = (await res.json()) as { ok: boolean; value: Array<{ id: string }> };
-    expect(parts.session.listProviderModels).toHaveBeenCalledOnce();
+    expect(parts.session.listModels).toHaveBeenCalledOnce();
+    expect(parts.session.listProviderModels).not.toHaveBeenCalled();
     expect(payload.ok).toBe(true);
     expect(payload.value.map((m) => m.id)).toEqual(['kimi-k2', 'kimi-next']);
   });

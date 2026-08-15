@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Input, type SlashCommand } from '../../src/ui/Input.js';
-import { renderUi } from '../support/otui.js';
+import { accentTexts, renderUi } from '../support/otui.js';
 
 function setup(
   commands: SlashCommand[],
@@ -109,23 +109,8 @@ describe('Input 斜杠命令菜单', () => {
     ]);
     const ui = await p;
     await ui.type('/');
-    const highlighted = () => {
-      const captured = ui.spans() as {
-        lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
-      };
-      // accent 是 cyan(r 低、g/b 高);只认命令行 span(❯ 前缀 + /name)。
-      return captured.lines
-        .flatMap((l) => l.spans)
-        .filter(
-          (s) =>
-            /\/(alpha|beta|gamma)/.test(s.text) &&
-            s.fg !== undefined &&
-            (s.fg.buffer[0] ?? 0) < 100 &&
-            (s.fg.buffer[1] ?? 0) > 180 &&
-            (s.fg.buffer[2] ?? 0) > 180,
-        )
-        .map((s) => s.text.trim().replace(/^❯\s*/, ''));
-    };
+    // accent 高亮只认命令行 span(❯ 前缀 + /name)。
+    const highlighted = () => accentTexts(ui, /\/(alpha|beta|gamma)/);
     expect(highlighted()).toEqual(['/alpha']);
     await ui.press('down');
     expect(highlighted()).toEqual(['/beta']);

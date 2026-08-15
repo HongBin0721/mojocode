@@ -100,19 +100,17 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         }
         break;
       }
-      case 'turn': {
-        // 缓存命中段与时间线同一份逻辑(provider 不报则不画,见 formatCacheHit)。
-        const cache = formatCacheHit(item.cachedTokens, item.inputTokens);
+      case 'turn':
         out.push(
           '',
           DIM(
             `${glyphs.turn} ${item.model} · ${formatDuration(item.durationMs)} · ` +
               t('ui.turnTokens', { n: formatTokens(item.tokens) }) +
-              (cache ? ` · ${cache}` : ''),
+              // 缓存命中段与时间线同一份逻辑(自带分隔符,不报则空串)。
+              formatCacheHit(item.cachedTokens, item.inputTokens),
           ),
         );
         break;
-      }
       case 'notice':
         out.push('', item.level === 'warn' ? YELLOW(`! ${item.message}`) : DIM(`· ${item.message}`));
         break;

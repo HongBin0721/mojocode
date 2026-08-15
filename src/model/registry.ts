@@ -1,8 +1,14 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import type { LanguageModel } from 'ai';
-import { resolveProvider, type ResolvedProvider } from '../config/load.js';
-import { apiKeyFromEnv, isBuiltinProvider, normalizeModelId, PROVIDER_PRESETS } from '../config/providers.js';
+import { isProviderConfigured, resolveProvider, type ResolvedProvider } from '../config/load.js';
+import {
+  apiKeyFromEnv,
+  BUILTIN_PROVIDER_IDS,
+  isBuiltinProvider,
+  normalizeModelId,
+  PROVIDER_PRESETS,
+} from '../config/providers.js';
 import type { Config } from '../config/schema.js';
 
 /**
@@ -217,40 +223,23 @@ export async function listProviderModels(
   const explicit = new Set(ids);
   const tryAdd = (id: string, configured: boolean): void => {
     if (seen.has(id)) return;
-    // key 的有无按"存在"而不是真值判断:内置厂商在配置文件里存过 key 就算
-    // 已配置(值为空串也可能是占位,探测会给出真实答案)。
-    if (isBuiltinProvider(id)) {
-      if (
-        configured ||
-        apiKeyFromEnv(PROVIDER_PRESETS[id].apiKeyEnv, env) !== undefined
-      ) {
-        seen.add(id);
-        ids.push(id);
-        if (configured) explicit.add(id);
-      }
-      return;
-    }
-    // 自定义条目:用户写了 baseURL 就是明确配置过(本地端点不需要凭据)。
-    if (configured) {
-      seen.add(id);
-      ids.push(id);
-      explicit.add(id);
-    }
+    // 准入:内置厂商 = 显式配置过或预设 env 变量扫到 key;自定义条目 =
+    // 显式配置过(写了 baseURL,本地端点不需要凭据)。三个集合的簿记
+    // 只写这一份尾巴,两个分支只负责算准入。
+    const eligible = isBuiltinProvider(id)
+      ? configured || apiKeyFromEnv(PROVIDER_PRESETS[id].apiKeyEnv, env) !== undefined
+      : configured;
+    if (!eligible) return;
+    seen.add(id);
+    ids.push(id);
+    if (configured) explicit.add(id);
   };
   for (const [id, override] of Object.entries(config.providers)) {
     if (!override) continue;
-    // 内置厂商"已配置"的三种形态:文件里存过 key、或指了自定义 env 变量且
-    // 该变量有值——与 resolveProvider 的 key 解析链一致,只配 apiKeyEnv 的
-    // 厂商能切过去,就必须能在选择器里被列出来。
-    tryAdd(
-      id,
-      isBuiltinProvider(id)
-        ? override.apiKey !== undefined ||
-            (override.apiKeyEnv !== undefined && apiKeyFromEnv([override.apiKeyEnv], env) !== undefined)
-        : override.baseURL !== undefined,
-    );
+    // "已配置"的判定链住在 config 层(resolveProvider 旁),这里只消费。
+    tryAdd(id, isProviderConfigured(id, override, env));
   }
-  for (const id of Object.keys(PROVIDER_PRESETS)) tryAdd(id, false);
+  for (const id of BUILTIN_PROVIDER_IDS) tryAdd(id, false);
 
   // 显式标注 U:catch 分支的 `[]` 会让 flatMap 的类型推断退化成 unknown。
   const resolved: ResolvedProvider[] = ids.flatMap<ResolvedProvider>((id) => {
@@ -267,46 +256,41 @@ export async function listProviderModels(
   });
 
   const timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
-  const probes = await Promise.all(
-    resolved.map((provider) => {
+  // 探测与组构造并进同一个 map:成功/失败两个分支共享的字段只写一次,
+  // 也免去"两个数组必须同序"的下标对齐。
+  const groups = await Promise.all(
+    resolved.map(async (provider): Promise<ProviderModels[]> => {
       const timeout = AbortSignal.timeout(timeoutMs);
       const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-      return probeModels(provider, { ...options, signal });
-    }),
-  );
-
-  return resolved.flatMap<ProviderModels>((provider, i) => {
-    const probe = probes[i]!;
-    const preset = isBuiltinProvider(provider.id) ? PROVIDER_PRESETS[provider.id] : undefined;
-    const windows = preset ? { ...preset.contextWindows } : undefined;
-    if (probe.ok) {
-      // 线上列表滞后时并入预设默认模型(见 ensurePresetDefault 的说明)。
-      return [
-        {
-          providerId: provider.id,
-          label: provider.label,
-          contextWindows: windows,
-          models: ensurePresetDefault(probe.models ?? [], provider.id),
-        },
-      ];
-    }
-    // 仅凭共享 env 变量扫进来的兄弟厂商(ZHIPU_API_KEY 同时挂在 glm /
-    // glm-coding / glm-intl 的预设上,MOONSHOT_API_KEY 同理配对 kimi 系),
-    // key 被端点判 401/403 说明它不属于这家——预设兜底行会渲染成"可选却
-    // 必 401"的陷阱,整组丢弃。显式配置过的组保留兜底与失败原因。
-    if (!explicit.has(provider.id) && (probe.status === 401 || probe.status === 403)) {
-      return [];
-    }
-    return [
-      {
+      const probe = await probeModels(provider, { ...options, signal });
+      const preset = isBuiltinProvider(provider.id) ? PROVIDER_PRESETS[provider.id] : undefined;
+      const base = {
         providerId: provider.id,
         label: provider.label,
-        contextWindows: windows,
-        // 探测失败:退回预设已知模型(contextWindows 含默认模型),原因只取
-        // 第一行(错误正文可能带响应体)。
-        models: (preset ? Object.keys(preset.contextWindows) : []).map((id) => ({ id })),
-        error: probe.error?.split('\n')[0],
-      },
-    ];
-  });
+        // 已知模型的上下文窗口(内置预设才有),UI 换算成行尾标注。
+        contextWindows: preset ? { ...preset.contextWindows } : undefined,
+      };
+      if (probe.ok) {
+        // 线上列表滞后时并入预设默认模型(见 ensurePresetDefault 的说明)。
+        return [{ ...base, models: ensurePresetDefault(probe.models ?? [], provider.id) }];
+      }
+      // 仅凭共享 env 变量扫进来的兄弟厂商(ZHIPU_API_KEY 同时挂在 glm /
+      // glm-coding / glm-intl 的预设上,MOONSHOT_API_KEY 同理配对 kimi 系),
+      // key 被端点判 401/403 说明它不属于这家——预设兜底行会渲染成"可选却
+      // 必 401"的陷阱,整组丢弃。显式配置过的组保留兜底与失败原因。
+      if (!explicit.has(provider.id) && (probe.status === 401 || probe.status === 403)) {
+        return [];
+      }
+      return [
+        {
+          ...base,
+          // 探测失败:退回预设已知模型(contextWindows 含默认模型),原因只取
+          // 第一行(错误正文可能带响应体)。
+          models: (preset ? Object.keys(preset.contextWindows) : []).map((id) => ({ id })),
+          error: probe.error?.split('\n')[0],
+        },
+      ];
+    }),
+  );
+  return groups.flat();
 }

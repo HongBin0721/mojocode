@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import { Box, Text, useInput, type JSX } from './kit.js';
-import { theme, glyphs, formatTokens } from './theme.js';
+import { theme, glyphs } from './theme.js';
 import { t } from '../i18n/index.js';
 import { centeredWindowStart, createManualEntry, ManualEntryBox } from './picker-utils.js';
 
@@ -10,11 +10,6 @@ const WINDOW = 8;
 export interface ModelOption {
   id: string;
   note?: string;
-}
-
-/** 上下文窗口换算成选择器行尾的标注(256k / 1.0M)。 */
-export function contextNote(window: number | undefined): string | undefined {
-  return window === undefined ? undefined : t('modelpicker.context', { n: formatTokens(window) });
 }
 
 interface Props {

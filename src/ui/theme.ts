@@ -169,18 +169,27 @@ export function formatTokens(n: number): string {
 }
 
 /**
- * 轮末收尾行的缓存命中段(如「缓存命中 12.3k/45.6k (27%)」)。
+ * 上下文窗口换算成选择器行尾的标注(256k / 1.0M)。所有模型选择器
+ * (向导的 ModelPicker、/models 的 ModelsPicker、AuthWizard)共用。
+ */
+export function contextNote(window: number | undefined): string | undefined {
+  return window === undefined ? undefined : t('modelpicker.context', { n: formatTokens(window) });
+}
+
+/**
+ * 轮末收尾行的缓存命中段(如「 · 缓存命中 12.3k/45.6k (27%)」,自带前导
+ * 分隔符——调用方无条件拼接,判空与拼段的规则收在这一个函数里)。
  * cached 是 input 中命中前缀缓存的部分;分母缺失或为 0 时返回空串——
  * provider 不报缓存、或回放旧会话没有这个字段,都不画这一段。
  * 0% 也照常返回:压缩后那一轮的全量 miss 正是用户想看到的事实。
  */
 export function formatCacheHit(cached: number | undefined, input: number | undefined): string {
   if (cached === undefined || !input) return '';
-  return t('ui.turnCache', {
+  return ` · ${t('ui.turnCache', {
     cached: formatTokens(cached),
     total: formatTokens(input),
     pct: Math.round((cached / input) * 100),
-  });
+  })}`;
 }
 
 export function formatDuration(ms: number): string {

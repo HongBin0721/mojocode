@@ -40,6 +40,28 @@ export interface UiHandle {
   mockMouse: Awaited<ReturnType<typeof testRender>>['mockMouse'];
 }
 
+/**
+ * 当前帧里 accent 色(theme.accent 是 cyan:r 低、g/b 高;默认前景是白
+ * 不会命中)的 span 文本,去掉指针前缀。用例只给"哪些文本算目标行"的
+ * 正则——"accent 是 cyan"这一主题知识只住在 harness 里,换色只改一处。
+ */
+export function accentTexts(ui: UiHandle, pattern: RegExp): string[] {
+  const captured = ui.spans() as {
+    lines: { spans: { text: string; fg?: { buffer: Record<number, number> } }[] }[];
+  };
+  return captured.lines
+    .flatMap((l) => l.spans)
+    .filter(
+      (s) =>
+        pattern.test(s.text.trim()) &&
+        s.fg !== undefined &&
+        (s.fg.buffer[0] ?? 0) < 100 &&
+        (s.fg.buffer[1] ?? 0) > 180 &&
+        (s.fg.buffer[2] ?? 0) > 180,
+    )
+    .map((s) => s.text.trim().replace(/^❯\s*/, ''));
+}
+
 export async function renderUi(
   node: () => JSX.Element,
   options: { width?: number; height?: number } = {},
