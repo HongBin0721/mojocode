@@ -80,7 +80,8 @@ import {
 import { supportedEfforts } from '../model/reasoning.js';
 import { getLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 import { INIT_PROMPT } from '../agent/init.js';
-import { parseReviewArg, type ReviewFailure } from '../agent/review.js';
+import { parseReviewArg, type ReviewFailure, type ReviewStartResult } from '../agent/review.js';
+import { parseSimplifyArg } from '../agent/simplify.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
 import { readClipboardImage } from '../app/clipboard.js';
@@ -101,6 +102,7 @@ function buildCommands(): SlashCommand[] {
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
     { name: 'review', description: t('cmd.review'), selectorTitle: t('reviewopt.selectorTitle') },
+    { name: 'simplify', description: t('cmd.simplify') },
     { name: 'plan', description: t('cmd.plan') },
     { name: 'goal', description: t('cmd.goal') },
     { name: 'models', aliases: ['model'], description: t('cmd.models') },
@@ -143,7 +145,18 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。runCommand 入口
  * 已把别名归一为主名,这里只列主名。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'models', 'provider', 'resume', 'fork', 'init', 'review']);
+const BUSY_BLOCKED_COMMANDS = new Set([
+  'new',
+  'clear',
+  'compact',
+  'models',
+  'provider',
+  'resume',
+  'fork',
+  'init',
+  'review',
+  'simplify',
+]);
 
 /**
  * 压缩进度条的预估摘要总长(字符)。摘要提示词要的是分节的事实性散文,
@@ -178,21 +191,26 @@ const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
 };
 
 /**
- * `/review` 失败原因 → 提示文案与级别。穷尽 Record:review.ts 新增失败
- * 原因时编译期就会提醒补文案。"没有可评审的内容"是信息,其余是警告。
- * git-error 的 {message} 填的是 stderr 摘要,仅供排查。
+ * 罐装命令(/review、/simplify)失败原因 → 两命令各自的提示文案 + 级别。
+ * 穷举 Record:review.ts 新增失败原因时编译期就会提醒两列一起补文案,级别
+ * 只写一份。"没有可评审的内容"是信息,其余是警告。git-error 的 {message}
+ * 填的是 stderr 摘要,仅供排查。unknown-* 四项两命令措辞相同,共用 review*
+ * 的键,不为换个前缀在目录里抄一份。
  */
-const REVIEW_FAILURE_NOTICES: Record<ReviewFailure, { key: MessageKey; level: 'info' | 'warn' }> = {
-  'no-repo': { key: 'notice.reviewNoRepo', level: 'warn' },
-  'clean-tree': { key: 'notice.reviewCleanTree', level: 'info' },
-  'no-commits': { key: 'notice.reviewNoCommits', level: 'info' },
-  'no-diff': { key: 'notice.reviewNoDiff', level: 'info' },
-  'unknown-branch': { key: 'notice.reviewUnknownBranch', level: 'warn' },
-  'same-branch': { key: 'notice.reviewSameBranch', level: 'warn' },
-  'no-merge-base': { key: 'notice.reviewNoMergeBase', level: 'warn' },
-  'unknown-commit': { key: 'notice.reviewUnknownCommit', level: 'warn' },
-  'git-error': { key: 'notice.reviewGitError', level: 'warn' },
-  'bad-arg': { key: 'notice.reviewUsage', level: 'warn' },
+const CANNED_FAILURE_NOTICES: Record<
+  ReviewFailure,
+  { review: MessageKey; simplify: MessageKey; level: 'info' | 'warn' }
+> = {
+  'no-repo': { review: 'notice.reviewNoRepo', simplify: 'notice.simplifyNoRepo', level: 'warn' },
+  'clean-tree': { review: 'notice.reviewCleanTree', simplify: 'notice.simplifyCleanTree', level: 'info' },
+  'no-commits': { review: 'notice.reviewNoCommits', simplify: 'notice.simplifyNoCommits', level: 'info' },
+  'no-diff': { review: 'notice.reviewNoDiff', simplify: 'notice.simplifyNoDiff', level: 'info' },
+  'unknown-branch': { review: 'notice.reviewUnknownBranch', simplify: 'notice.reviewUnknownBranch', level: 'warn' },
+  'same-branch': { review: 'notice.reviewSameBranch', simplify: 'notice.reviewSameBranch', level: 'warn' },
+  'no-merge-base': { review: 'notice.reviewNoMergeBase', simplify: 'notice.reviewNoMergeBase', level: 'warn' },
+  'unknown-commit': { review: 'notice.reviewUnknownCommit', simplify: 'notice.reviewUnknownCommit', level: 'warn' },
+  'git-error': { review: 'notice.reviewGitError', simplify: 'notice.simplifyGitError', level: 'warn' },
+  'bad-arg': { review: 'notice.reviewUsage', simplify: 'notice.simplifyUsage', level: 'warn' },
 };
 
 /**
@@ -550,13 +568,15 @@ export function App(props: Props): JSX.Element {
   let submitPending = false;
   let submitGen = 0;
   /**
-   * submitPending 当前属于一次评审启动(launchReview)。它与 @ 展开窗口
-   * 不同:没有 submitGen 那样的作废机制,esc 在 git 收集窗口内既取消不了
-   * 它、也不该清掉标志——清了会重新打开 busy 门,第二个 /review 撞上
-   * loop.ts 的防重入兜底退化成轮中注入。轮子转起来(isRunning 点亮)后
-   * esc 走正常的中断路径,不受此影响。
+   * submitPending 当前属于一次罐装命令启动(launchCanned,/review、
+   * /simplify)。它与 @ 展开窗口不同:没有 submitGen 那样的作废机制。esc 在
+   * 窗口内既取消不了它、也不该清掉标志(清了会重新打开 busy 门,第二个罐装
+   * 命令撞上 loop.ts 的防重入兜底退化成轮中注入),handleSubmit 对窗口内的
+   * 普通消息同样据此拒绝——主 agent 空闲时没有轮可注入,放行只会另起一轮
+   * 等应用轮撞车。轮子转起来(isRunning 点亮)后 esc 走正常的中断路径、
+   * 消息走正常引导,不受此影响。
    */
-  let reviewLaunchPending = false;
+  let cannedLaunchPending = false;
 
   const push = (item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
@@ -1011,10 +1031,11 @@ export function App(props: Props): JSX.Element {
     // 注意不能就此返回——运行中提交的是引导消息,此时按 esc 要的是中断
     // 那一轮,只取消引导会表现为"esc 没反应,状态栏却灭了"。
     if (submitPending) {
-      // 例外:pending 属于评审启动的 git 收集窗口——没有可作废的提交,
-      // 清掉标志只会重新打开 busy 门(见 reviewLaunchPending 的注释)。
-      // 窗口次秒级,忽略这次 esc;轮子转起来后走下面的正常中断。
-      if (reviewLaunchPending && !session.agent.isRunning && !session.goal.busy) return;
+      // 例外:pending 属于罐装命令(/review、/simplify)启动的 git 收集
+      // 窗口——没有可作废的提交,清掉标志只会重新打开 busy 门(见
+      // cannedLaunchPending 的注释)。窗口次秒级,忽略这次 esc;轮子转
+      // 起来后走下面的正常中断。
+      if (cannedLaunchPending && !session.agent.isRunning && !session.goal.busy) return;
       submitGen++;
       submitPending = false;
       if (!session.agent.isRunning && !session.goal.busy) {
@@ -1260,48 +1281,73 @@ export function App(props: Props): JSX.Element {
   };
 
   /**
-   * `/review <范围>` 的执行出口:预设选择器直选、第二级选择器(base/commit)
-   * 挑完、手打/回退重发走的是同一条路。display 统一按 `/review <范围>` 重组
-   * ——picker 路径没有"用户原文"可用,直打路径与原文等价。
+   * 罐装命令(/review、/simplify)的公共执行出口:占住 busy 门 → RPC →
+   * 失败 reason 映射本地化提示(按命令取 CANNED_FAILURE_NOTICES 的对应列)。
+   * 两命令只差 RPC 调用、文案列与传输错误文案。
+   *
+   * submitPending 与 handleSubmit 同一语义:本地进程内的启动在 agent.run
+   * 之前还有收集 git 摘要的异步窗口(最多四条串行子进程),期间 isRunning
+   * 仍为 false——不占住的话,第二个罐装命令能穿过 BUSY_BLOCKED 拦截,撞上
+   * loop.ts 的防重入兜底退化成轮中注入,整份罐装提示词被灌进第一个命令的
+   * 流里,且后到者的 finally 还会提前清掉 running。远程侧无此窗口
+   * (callDeferred 同步置乐观 run 标志),两条路共用这份保险。
    */
-  const launchReview = (scopeArg: string) => {
-    // submitPending 与 handleSubmit 同一语义:本地进程内的 startReview 在
-    // agent.run 之前还有 collectReviewSummary 的异步窗口(最多四条串行 git
-    // 子进程),期间 isRunning 仍为 false——不占住的话,第二个 /review 能
-    // 穿过 BUSY_BLOCKED 拦截,撞上 loop.ts 的防重入兜底退化成轮中注入,
-    // 整份罐装提示词被灌进第一个评审的流里,且后到者的 finally 还会提前
-    // 清掉 running。远程侧无此窗口(callDeferred 同步置乐观 run 标志),
-    // 两条路共用这份保险。
+  const launchCanned = (
+    invoke: () => Promise<ReviewStartResult>,
+    column: 'review' | 'simplify',
+    transportErrorKey: MessageKey,
+  ) => {
     submitPending = true;
-    reviewLaunchPending = true;
+    cannedLaunchPending = true;
     setRunning(true);
-    void session
-      .startReview(scopeArg, { display: `/review ${scopeArg}` })
+    void invoke()
       .then((result) => {
         if (result.ok) return;
-        const notice = REVIEW_FAILURE_NOTICES[result.reason];
-        if (!notice) return;
+        // reason 经 JSON 线路到达,防御性取列:伪造的 reason 不该掀翻 TUI。
+        const entry = CANNED_FAILURE_NOTICES[result.reason];
+        const messageKey = entry?.[column];
+        if (!entry || !messageKey) return;
         push({
           kind: 'notice',
-          level: notice.level,
-          message: t(notice.key, {
+          level: entry.level,
+          message: t(messageKey, {
             branch: result.branch ?? '',
             sha: result.sha ?? '',
             message: result.detail ?? '',
           }),
         });
       })
-      // startReview 的失败以 reason 返回,但 RPC 本身会 reject(传输层错误),
-      // 未捕获的 rejection 会掀掉整个 TUI——与 /init 同一条教训。
+      // 失败以 reason 返回,但 RPC 本身会 reject(传输层错误),未捕获的
+      // rejection 会掀掉整个 TUI——与 /init 同一条教训。
       .catch((err: Error) => {
-        push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: err.message }) });
+        push({ kind: 'notice', level: 'warn', message: t(transportErrorKey, { message: err.message }) });
       })
       .finally(() => {
         submitPending = false;
-        reviewLaunchPending = false;
+        cannedLaunchPending = false;
         setRunning(false);
       });
   };
+
+  /**
+   * `/review <范围>` 的执行出口:预设选择器直选、第二级选择器(base/commit)
+   * 挑完、手打/回退重发走的是同一条路。display 统一按 `/review <范围>` 重组
+   * ——picker 路径没有"用户原文"可用,直打路径与原文等价。
+   */
+  const launchReview = (scopeArg: string) =>
+    launchCanned(
+      () => session.startReview(scopeArg, { display: `/review ${scopeArg}` }),
+      'review',
+      'notice.reviewFailed',
+    );
+
+  /**
+   * `/simplify <目标>` 的执行出口:与 launchReview 同一条路。display 不在
+   * UI 侧组装——裸命令不带尾随空格的规则由 server 侧(startSimplify 的
+   * 缺省值)唯一一份持有,本地与远程两条路都经它落到 turn-start。
+   */
+  const launchSimplify = (targetArg: string) =>
+    launchCanned(() => session.startSimplify(targetArg), 'simplify', 'notice.simplifyFailed');
 
   const runCommand = async (raw: string) => {
     const [typed, ...rest] = raw.slice(1).trim().split(/\s+/);
@@ -1483,6 +1529,34 @@ export function App(props: Props): JSX.Element {
           break;
         }
         launchReview(arg);
+        break;
+      }
+
+      // 代码清理(/simplify,对齐 Claude Code):审查变更代码的清理机会并直接
+      // 应用修复——复用已有实现、化简、效率、抽象层级四个维度;正确性 bug 归
+      // /review,这一轮明确不找。范围语法与 /review 共享,裸命令默认未提交
+      // 改动,其余任意文本(路径/焦点)作为清理目标。要写文件:计划模式与
+      // read-only+never 提前拦下,别白烧注定写不出的一轮(read-only+on-request
+      // 放行,写入逐次升级确认)。
+      case 'simplify': {
+        if (planActive()) {
+          push({ kind: 'notice', level: 'warn', message: t('notice.simplifyPlanMode') });
+          break;
+        }
+        if (!canEverWrite(perms(), false)) {
+          push({
+            kind: 'notice',
+            level: 'warn',
+            message: t('notice.simplifyReadonly', { mode: modeLabel() }),
+          });
+          break;
+        }
+        // 裸命令合法(默认未提交改动),只有半截关键字(base/commit/custom)不成目标。
+        if (!parseSimplifyArg(arg)) {
+          push({ kind: 'notice', level: 'warn', message: t('notice.simplifyUsage') });
+          break;
+        }
+        launchSimplify(arg);
         break;
       }
 
@@ -1904,6 +1978,15 @@ export function App(props: Props): JSX.Element {
   const handleSubmit = (text: string, pastedImages?: ImageAttachment[]) => {
     if (text.startsWith('/')) {
       void runCommand(text);
+      return;
+    }
+    // 罐装命令的阶段一窗口(/simplify 四个子代理并行,主 agent 空闲,可达数
+    // 分钟):普通消息没有在途的轮可注入,放过去会经 goal.run 另起一轮,
+    // 阶段二的应用轮提示词随后撞上防重入兜底、整份灌进用户那轮;且这条
+    // 路径会清掉 submitPending 把 busy 门重新打开。窗口期内拒绝——轮子转
+    // 起来(turn-start 之后)inject 恢复正常,引导照常可用。
+    if (cannedLaunchPending && !session.agent.isRunning && !session.goal.busy) {
+      push({ kind: 'notice', level: 'warn', message: t('notice.cannedBusy') });
       return;
     }
     // 以 agent 的真实运行状态为准,不依赖可能滞后的渲染状态。展开

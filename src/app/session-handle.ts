@@ -29,6 +29,7 @@ import type { DoctorReport } from './doctor.js';
 import type { ImageAttachment } from './attachments.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
 import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/review.js';
+import type { SimplifyStartResult } from '../agent/simplify.js';
 
 export interface RunOptions {
   display?: string;
@@ -120,5 +121,10 @@ export interface SessionHandle {
    * 远程侧是 deferred RPC(包 agent.run,与 runSkill 同理)。
    */
   startReview(scope: string, options?: { display?: string }): Promise<ReviewStartResult>;
+  /**
+   * `/simplify` 跑一轮代码清理并直接应用修复:与 /review 共用 git 收集器与
+   * 失败 reason(UI 据此映射本地化提示);远程侧同样走 deferred RPC。
+   */
+  startSimplify(target: string, options?: { display?: string }): Promise<SimplifyStartResult>;
   dispose(): Promise<void>;
 }

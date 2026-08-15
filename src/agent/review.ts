@@ -1,5 +1,6 @@
 /**
  * `/review` 命令的服务端核心:解析审查范围、收集 git 摘要、组稿审查提示词。
+ * 收集器与范围块也被 `/simplify` 复用(见 simplify.ts)。
  *
  * 与 init.ts 同级的"罐装指令"模块。设计要点(见 tests/review.test.ts):
  *  - **不把完整 diff 嵌进提示词**——大 diff 会撑爆持久历史,而 bash 工具输出
@@ -121,6 +122,14 @@ function branchTokenOk(token: string): boolean {
 }
 /** 提交 token:7-40 位十六进制,覆盖短 SHA 到全 SHA。 */
 const SHA_TOKEN = /^[0-9a-f]{7,40}$/i;
+
+/**
+ * "后接参数"的范围关键字(`uncommitted` 不算——裸打即是合法范围)。
+ * parseReviewArg 只认 `keyword <参数>` 形态,裸关键字不成范围;App 侧要用
+ * 它区分"半截用法"与"目标文本"(/simplify 的兜底会把任意非空文本当清理
+ * 目标)。新增带参关键字时这里一处补齐,消费方共享,不再各自手抄一份。
+ */
+export const ARG_SCOPE_KEYWORDS: readonly string[] = ['base', 'commit', 'custom'];
 
 /**
  * 解析 `/review <arg>` 的参数。App 侧先解析一次给 usage 提示,server 侧
@@ -385,13 +394,22 @@ function uncommittedBlock(summary: ReviewSummary): string {
   ].join('\n');
 }
 
-function scopeBlock(scope: ReviewScope, summary: ReviewSummary): string {
+/**
+ * 组稿范围块(摘要 + 只读命令),`/review` 与 `/simplify` 共用。custom 范围的
+ * 用户文本引导句两边措辞不同,经 customFocusHeader 覆盖(缺省为评审措辞)。
+ */
+export function scopeBlock(
+  scope: ReviewScope,
+  summary: ReviewSummary,
+  options?: { customFocusHeader?: string },
+): string {
   if (scope.kind === 'uncommitted') return uncommittedBlock(summary);
   if (scope.kind === 'custom') {
     return [
       uncommittedBlock(summary),
       '',
-      'Review focus requested by the user — weigh it above the generic guidance:',
+      options?.customFocusHeader ??
+        'Review focus requested by the user — weigh it above the generic guidance:',
       '',
       scope.instructions,
     ].join('\n');

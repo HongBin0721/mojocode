@@ -92,7 +92,22 @@ export interface PermissionReply {
 }
 
 /** 这些方法可能一跑几小时:POST 立即 ack,完成经 SSE call-result 送达。 */
-export const DEFERRED_METHODS = new Set(['run', 'goalRun', 'compact', 'runSkill', 'startReview']);
+export const DEFERRED_METHODS = new Set([
+  'run',
+  'goalRun',
+  'compact',
+  'runSkill',
+  'startReview',
+  'startSimplify',
+]);
+
+/**
+ * deferred 里"本身就是一整轮 agent.run"的方法。客户端(remote.ts)据此点亮
+ * 乐观 run 标志——漏一边就是"ack 迟到把标志置回、永远没人清"的卡死,所以
+ * 与 DEFERRED_METHODS 放在一起:新增这类方法时两张表要一起动。goalRun 也
+ * 占 run 标志但还额外点亮 goal,调用处单独判;compact 点亮的是 compact。
+ */
+export const RUN_LIKE_METHODS = new Set(['run', 'runSkill', 'startReview', 'startSimplify']);
 
 export function toWireError(error: unknown): WireError {
   if (error instanceof Error) return { name: error.name, message: error.message };

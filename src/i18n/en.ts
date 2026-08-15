@@ -126,6 +126,8 @@ export const en = {
   'cmd.help': 'Show these commands',
   'cmd.init': 'Analyze the project and generate AGENTS.md',
   'cmd.review': 'Review recent changes — base branch, uncommitted, a commit, or custom focus',
+  'cmd.simplify':
+    'Clean up recent changes and apply the fixes — uncommitted by default, or a scope/target',
   'reviewopt.selectorTitle': 'Select a review preset',
   'reviewopt.baseTitle': 'Review against a base branch (PR style)',
   'reviewopt.baseDesc': 'Finds the merge base and reviews your branch diff',
@@ -208,6 +210,7 @@ export const en = {
   'notice.tooManyImages': 'Too many pending images ({n} max).',
   'notice.providerNoVision': 'This provider ignores images — the model will not see them.',
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
+  'notice.cannedBusy': 'A review/cleanup command is still preparing — send messages in a moment.',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
   'notice.compactFailed': 'Compaction failed: {message}',
   'notice.initReadonly':
@@ -284,6 +287,20 @@ export const en = {
   'notice.reviewGitError': 'Git failed while preparing the review: {message}',
   'notice.reviewFailed': 'Review failed: {message}',
   'notice.reviewPlanMode': 'Leave plan mode first (shift+tab): a review must not end by submitting a plan.',
+  'notice.simplifyUsage':
+    'Usage: /simplify [uncommitted | base <branch> | commit <sha> | <target path or focus>]',
+  'notice.simplifyNoRepo': 'Not a git repository — /simplify needs one.',
+  'notice.simplifyCleanTree': 'Nothing to clean up: the working tree is clean.',
+  'notice.simplifyNoCommits': 'Nothing to clean up: this repository has no commits yet.',
+  'notice.simplifyNoDiff': 'Nothing to clean up: no changes since the merge-base with {branch}.',
+  'notice.simplifyGitError': 'Git failed while preparing the cleanup: {message}',
+  'notice.simplifyFailed': 'Simplify failed: {message}',
+  'notice.simplifyAxes':
+    'Scouting cleanup opportunities with four parallel reviewers (reuse · simplification · efficiency · abstraction). Reports next, then fixes.',
+  'notice.simplifyPlanMode':
+    'Leave plan mode first (shift+tab): /simplify applies fixes, and plan mode forbids every write.',
+  'notice.simplifyReadonly':
+    '/simplify applies fixes, but "{mode}" refuses every write — switch first (/approvals auto).',
 
   'error.auth': '{label} rejected the API key (401). Check the key for provider "{id}".',
   'error.modelNotFound':

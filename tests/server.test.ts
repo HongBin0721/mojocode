@@ -95,6 +95,7 @@ function fakeSession() {
       { sha: 'def5678', subject: 'first', date: '3 hours ago' },
     ]),
     startReview: vi.fn(async () => ({ ok: true })),
+    startSimplify: vi.fn(async () => ({ ok: true })),
     refreshSkills: vi.fn(async () => [{ name: 'demo', description: 'demo skill' }]),
   };
 
@@ -165,6 +166,7 @@ function fakeSession() {
     reviewTargets: spies.reviewTargets,
     reviewCommits: spies.reviewCommits,
     startReview: spies.startReview,
+    startSimplify: spies.startSimplify,
     dispose: vi.fn(async () => {}),
   } as unknown as Session;
 
@@ -309,6 +311,15 @@ describe('server ↔ remote client', () => {
     await expect(pending).resolves.toEqual({ ok: true });
     expect(parts.spies.startReview).toHaveBeenCalledWith('base main', {
       display: '/review base main',
+    });
+    await waitFor(() => !remote.agent.isRunning);
+
+    // /simplify 走同一条 deferred 通道,乐观标志同样随完成清除。
+    const pendingSimplify = remote.startSimplify('src/foo.ts', { display: '/simplify src/foo.ts' });
+    expect(remote.agent.isRunning).toBe(true);
+    await expect(pendingSimplify).resolves.toEqual({ ok: true });
+    expect(parts.spies.startSimplify).toHaveBeenCalledWith('src/foo.ts', {
+      display: '/simplify src/foo.ts',
     });
     await waitFor(() => !remote.agent.isRunning);
   });

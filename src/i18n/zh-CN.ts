@@ -119,6 +119,7 @@ export const zhCN: Record<keyof typeof en, string> = {
 
   'cmd.help': '显示所有命令',
   'cmd.review': '评审近期改动 — 基准分支、未提交变更、某次提交或自定义焦点',
+  'cmd.simplify': '清理近期改动并直接应用修复 — 默认未提交变更，也可指定范围/目标',
   'reviewopt.selectorTitle': '选择审查预设',
   'reviewopt.baseTitle': '对比基准分支（PR 式）',
   'reviewopt.baseDesc': '找到 merge-base，审查整条分支的差异',
@@ -201,6 +202,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.tooManyImages': '待发送图片过多（上限 {n} 张）。',
   'notice.providerNoVision': '当前服务商会忽略图片——模型看不到它们。',
   'notice.busyCommand': '任务运行中不能使用 /{name}（可先 esc 中断）。',
+  'notice.cannedBusy': '评审/清理命令正在准备中，稍候片刻再发消息。',
   'notice.compacted': '已将 {removed} 条消息压缩为 {chars} 字符的摘要。',
   'notice.compactFailed': '压缩失败：{message}',
   'notice.initReadonly':
@@ -268,6 +270,18 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.reviewGitError': '准备评审时 git 出错：{message}',
   'notice.reviewFailed': '评审失败：{message}',
   'notice.reviewPlanMode': '请先退出计划模式（shift+tab）：评审不该以提交方案收尾。',
+  'notice.simplifyUsage':
+    '用法：/simplify [uncommitted | base <分支> | commit <sha> | <目标路径或焦点>]',
+  'notice.simplifyNoRepo': '不是 git 仓库 — /simplify 需要在仓库里使用。',
+  'notice.simplifyCleanTree': '没有可清理的内容：工作区是干净的。',
+  'notice.simplifyNoCommits': '没有可清理的内容：这个仓库还没有任何提交。',
+  'notice.simplifyNoDiff': '没有可清理的内容：与 {branch} 的 merge-base 之后没有改动。',
+  'notice.simplifyGitError': '准备清理时 git 出错：{message}',
+  'notice.simplifyFailed': '清理失败：{message}',
+  'notice.simplifyAxes':
+    '正在用四个并行审查员排查清理机会（复用 · 化简 · 效率 · 抽象层级），报告随后汇总应用。',
+  'notice.simplifyPlanMode': '请先退出计划模式（shift+tab）：/simplify 要写文件，而计划模式禁止一切写入。',
+  'notice.simplifyReadonly': '/simplify 要写入修复，但「{mode}」拒绝一切写入 — 请先切换（/approvals auto）。',
 
   'error.auth': '{label} 拒绝了 API key（401）。请检查服务商 "{id}" 的密钥。',
   'error.modelNotFound':

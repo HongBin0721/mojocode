@@ -313,20 +313,32 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
   /** 长任务:立即 ack,完成经 SSE call-result 回执。 */
   const startDeferred = (call: CallRequest): void => {
     const args = (call.args ?? {}) as Record<string, unknown>;
-    const promise: Promise<unknown> =
-      call.method === 'run'
-        ? session.agent.run(args['text'] as string, args['options'] as never)
-        : call.method === 'goalRun'
-          ? session.goal.run(args['text'] as string, args['options'] as never)
-          : call.method === 'runSkill'
-            ? session.runSkill(
-                args['name'] as string,
-                args['args'] as string,
-                args['options'] as never,
-              )
-            : call.method === 'startReview'
-              ? session.startReview(args['scope'] as string, args['options'] as never)
-              : session.agent.compact();
+    // 与上方即时分发同一 switch 风格:方法多了以后嵌套三元套不下去。
+    let promise: Promise<unknown>;
+    switch (call.method) {
+      case 'run':
+        promise = session.agent.run(args['text'] as string, args['options'] as never);
+        break;
+      case 'goalRun':
+        promise = session.goal.run(args['text'] as string, args['options'] as never);
+        break;
+      case 'runSkill':
+        promise = session.runSkill(
+          args['name'] as string,
+          args['args'] as string,
+          args['options'] as never,
+        );
+        break;
+      case 'startReview':
+        promise = session.startReview(args['scope'] as string, args['options'] as never);
+        break;
+      case 'startSimplify':
+        promise = session.startSimplify(args['target'] as string, args['options'] as never);
+        break;
+      default:
+        promise = session.agent.compact();
+        break;
+    }
     void promise
       .then((value) => broadcast({ kind: 'call-result', callId: call.id, ok: true, value }))
       .catch((error: unknown) =>

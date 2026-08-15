@@ -41,9 +41,17 @@ import {
   collectReviewTargets,
   parseReviewArg,
   type ReviewCommit,
+  type ReviewScope,
   type ReviewStartResult,
+  type ReviewSummary,
   type ReviewTargets,
 } from '../agent/review.js';
+import {
+  buildSimplifyApplyPrompt,
+  parseSimplifyArg,
+  runAxisReviews,
+  type SimplifyStartResult,
+} from '../agent/simplify.js';
 
 export interface Session {
   root: string;
@@ -137,6 +145,13 @@ export interface Session {
    * 本地化提示。远程侧是 deferred RPC(包 agent.run,可能跑几分钟)。
    */
   startReview: (scopeArg: string, options?: { display?: string }) => Promise<ReviewStartResult>;
+  /**
+   * 以用户身份跑一轮代码清理(`/simplify`,对齐 Claude Code):解析目标 →
+   * 复用 review.ts 的收集器 → 组稿清理提示词交给 agent.run,模型在这一轮里
+   * 直接应用修复(编辑工作区、保持未提交)。失败同样以 reason 代码返回;
+   * 远程侧 deferred RPC(包 agent.run)。
+   */
+  startSimplify: (targetArg: string, options?: { display?: string }) => Promise<SimplifyStartResult>;
   dispose: () => Promise<void>;
 }
 
@@ -635,9 +650,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
 
   /**
-   * `/review` 的执行侧。与 runSkill 的两点差异:不需要 gate.resumePending()
-   * (评审没有轮前的 allowed-tools 确认,turn-start 的总线监听已统一复位);
-   * 失败不抛异常而是带回 reason 代码——英文 git 错误串不该直接怼进时间线。
+   * `/review` 的执行侧:收集 git 摘要 → 失败以 reason 返回(英文 git 错误串
+   * 不直接怼进时间线,与 runSkill 的差异之一)→ 组稿提示词跑一轮。与
+   * runSkill 的另一点差异:不需要 gate.resumePending()(评审没有轮前的
+   * allowed-tools 确认,turn-start 的总线监听已统一复位)。display 缺省按
+   * `/review <范围>` 重组——picker 路径没有"用户原文"可用,直打路径与原文
+   * 等价。曾与 /simplify 共用一个参数化执行体,两阶段化后各只剩一份差异,
+   * 单调用方的包装层即拆除。
    */
   const startReview = async (
     scopeArg: string,
@@ -651,6 +670,41 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     await agent.run(wrapSkillPrompt(display, buildReviewPrompt(scope, collected.summary)), {
       display,
     });
+    return { ok: true };
+  };
+
+  /**
+   * `/simplify` 的执行侧(对齐 Claude Code 的多 agent 形态),两阶段:
+   *  1. 四个只读 explore 子代理并行,每轴一整份专属上下文与独立步数预算
+   *     (task.ts 的 runTaskSubagent——explore 模式不弹确认,过程落盘可回查);
+   *     编排与合成工具事件在 simplify.ts 的 runAxisReviews,让阶段一的进度
+   *     在 UI 里有宿主行可贴;
+   *  2. 主对话拿全四份报告跑应用轮:去重、对照现状核实、应用修复(未提交)。
+   * 失败的轴保留位置并明说覆盖不全,不静默少审一个维度;全轴失败也照常进
+   * 应用轮——提示词会把"无报告"交代成空清理,由模型如实总结。
+   */
+  const startSimplify = async (
+    targetArg: string,
+    options?: { display?: string },
+  ): Promise<SimplifyStartResult> => {
+    const scope = parseSimplifyArg(targetArg);
+    if (!scope) return { ok: false, reason: 'bad-arg' };
+    const collected = await collectReviewSummary(root, scope);
+    if (!collected.ok) return collected;
+    const trimmed = targetArg.trim();
+    const display = options?.display ?? (trimmed ? `/simplify ${trimmed}` : '/simplify');
+
+    // 阶段一可能跑几分钟,先给时间线一条交代(此时应用轮的 turn-start 还没来)。
+    bus.emit({ type: 'notice', level: 'info', message: t('notice.simplifyAxes') });
+    const sections = await runAxisReviews(scope, collected.summary, {
+      bus,
+      run: (opts) => runTaskSubagent(taskDeps, opts),
+    });
+
+    await agent.run(
+      wrapSkillPrompt(display, buildSimplifyApplyPrompt(scope, collected.summary, sections)),
+      { display },
+    );
     return { ok: true };
   };
 
@@ -776,6 +830,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     reviewTargets: () => collectReviewTargets(root),
     reviewCommits: () => collectReviewCommits(root),
     startReview,
+    startSimplify,
     dispose: async () => {
       goal.dispose();
       await Promise.all([...mcp.connections.map((c) => c.close()), lsp?.dispose()]);
