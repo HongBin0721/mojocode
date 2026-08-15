@@ -10,7 +10,13 @@ import type { ClipboardImage } from '../app/clipboard.js';
 export interface CommandOption {
   /** 提交给命令的参数值。 */
   value: string;
-  /** 选项旁展示的说明(服务商名称、模式含义等)。 */
+  /**
+   * Codex 式预设标题:任一选项提供时,选择器进入两行渲染——编号 + 标题行
+   * + 缩进的描述行(label 作描述)。value 不再展示:预设的 value 是机器串
+   * (uncommitted、base 之类),给人看的是 title。
+   */
+  title?: string;
+  /** 选项旁展示的说明(服务商名称、模式含义等);两行渲染时作描述行。 */
   label?: string;
   /** 当前生效的值——打开选择器时预选,并带 ✓ 标记。 */
   current?: boolean;
@@ -19,6 +25,8 @@ export interface CommandOption {
 export interface SlashCommand {
   name: string;
   description: string;
+  /** 选择器框标题;缺省用 `/name`。Codex 式预设命令用它给出本地化标题。 */
+  selectorTitle?: string;
   /**
    * 别名。菜单里以 `/name (alias)` 展示,输入别名同样能匹配到本命令;
    * 补全与提交仍用主名,别名的分发由 App 的 runCommand 自行处理。
@@ -81,6 +89,15 @@ interface Props {
    */
   onPrefillConsumed?: () => void;
   /**
+   * 外部请求打开某命令的二级选择器(/review 从第二级选择器 esc 返回预设层
+   * 用)。index 可选,指定初始光标(预设层的"回到刚才那项")。每次传入新
+   * 的对象,处理后必须由 `onSelectorConsumed` 清掉——语义与 prefill 相同
+   * (去重靠对象标识;Input 卸载重挂后组件内标记会归零)。
+   */
+  requestSelector?: { command: string; index?: number };
+  /** 选择器已打开(命令不存在或无枚举时放弃),调用方应清空请求。 */
+  onSelectorConsumed?: () => void;
+  /**
    * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
    * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
    * 不传则完全关闭 @ 补全。
@@ -113,6 +130,8 @@ const IMAGE_PLACEHOLDER = /\[image #(\d+)\]/g;
 
 /** 二级选择器一屏最多显示的选项数,超出部分滚动。 */
 const SELECTOR_WINDOW = 8;
+/** Codex 式两行预设的窗口:每项占两行,取 6 保持与单行 8 项相近的高度。 */
+const SELECTOR_WINDOW_DETAILED = 6;
 /** 命令菜单一屏最多显示的候选数,超出部分滚动(与二级选择器一致)。 */
 const MENU_WINDOW = 8;
 
@@ -165,6 +184,19 @@ export function Input(props: Props): JSX.Element {
         setCursor(prefill.text.length);
         setHistoryIndex(undefined);
         props.onPrefillConsumed?.();
+      },
+    ),
+  );
+
+  // 外部请求打开某命令的二级选择器:消费语义与 prefill 相同。
+  createEffect(
+    on(
+      () => props.requestSelector,
+      (request) => {
+        if (!request) return;
+        const command = props.commands.find((c) => c.name === request.command);
+        if (command?.options) openSelector(command, request.index);
+        props.onSelectorConsumed?.();
       },
     ),
   );
@@ -368,7 +400,7 @@ export function Input(props: Props): JSX.Element {
     );
   }
 
-  function openSelector(command: SlashCommand) {
+  function openSelector(command: SlashCommand, initialCursor?: number) {
     const gen = ++selectorGen;
     setSelector({ command, options: [], cursor: 0, loading: true, selected: new Set<string>() });
     void Promise.resolve(command.options!()).then(
@@ -384,7 +416,11 @@ export function Input(props: Props): JSX.Element {
         setSelector({
           command,
           options,
-          cursor: command.multi ? 0 : Math.max(0, current),
+          // initialCursor 是外部点名(如 esc 返回预设层时"回到刚才那项"),
+          // 优先于 current 标记;都钳在合法区间。
+          cursor: command.multi
+            ? 0
+            : Math.max(0, Math.min(initialCursor ?? current, options.length - 1)),
           loading: false,
           selected,
         });
@@ -818,13 +854,17 @@ function SelectorView(props: {
 }): JSX.Element {
   const { options, cursor: selCursor, loading, selected } = props.state;
   const multi = props.state.command.multi === true;
-  const windowStart = centeredWindowStart(selCursor, options.length, SELECTOR_WINDOW);
-  const visible = options.slice(windowStart, windowStart + SELECTOR_WINDOW);
+  // Codex 式预设(带 title 的选项):编号 + 标题行 + 缩进描述行。多选不参与
+  // ——勾选标记与编号挤在一行没有先例,真需要时再说。
+  const detailed = !multi && options.some((option) => option.title !== undefined);
+  const windowSize = detailed ? SELECTOR_WINDOW_DETAILED : SELECTOR_WINDOW;
+  const windowStart = centeredWindowStart(selCursor, options.length, windowSize);
+  const visible = options.slice(windowStart, windowStart + windowSize);
   return (
     <Box flexDirection="column" onScroll={props.onScroll}>
       <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
         <Text bold color={theme.accent}>
-          /{props.state.command.name}
+          {props.state.command.selectorTitle ?? `/${props.state.command.name}`}
         </Text>
         {loading ? (
           <Text color={theme.dim}>
@@ -839,6 +879,23 @@ function SelectorView(props: {
               {(option, i) => {
                 const index = windowStart + i();
                 const active = index === selCursor;
+                if (detailed) {
+                  return (
+                    <>
+                      <Text color={active ? theme.accent : undefined} wrap="truncate-end">
+                        {active ? `${glyphs.pointer} ` : '  '}
+                        {index + 1}. {option.title ?? option.value}
+                      </Text>
+                      {option.label ? (
+                        <Box paddingLeft={5}>
+                          <Text color={theme.dim} wrap="truncate-end">
+                            {option.label}
+                          </Text>
+                        </Box>
+                      ) : null}
+                    </>
+                  );
+                }
                 return (
                   <Text color={active ? theme.accent : undefined}>
                     {active ? `${glyphs.pointer} ` : '  '}
@@ -859,9 +916,9 @@ function SelectorView(props: {
                 );
               }}
             </For>
-            {windowStart + SELECTOR_WINDOW < options.length ? (
+            {windowStart + windowSize < options.length ? (
               <Text color={theme.dim}>
-                {t('selector.moreBelow', { n: options.length - windowStart - SELECTOR_WINDOW })}
+                {t('selector.moreBelow', { n: options.length - windowStart - windowSize })}
               </Text>
             ) : null}
           </>

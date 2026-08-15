@@ -84,6 +84,17 @@ function fakeSession() {
       throw new ProviderSwitchError(new Error('missing key for glm'));
     }),
     runSkill: vi.fn(async () => {}),
+    reviewTargets: vi.fn(async () => ({
+      isRepo: true,
+      detached: false,
+      currentBranch: 'main',
+      branches: [{ name: 'feature', subject: 'first' }],
+    })),
+    reviewCommits: vi.fn(async () => [
+      { sha: 'abc1234', subject: 'second: add b', date: '2 hours ago' },
+      { sha: 'def5678', subject: 'first', date: '3 hours ago' },
+    ]),
+    startReview: vi.fn(async () => ({ ok: true })),
     refreshSkills: vi.fn(async () => [{ name: 'demo', description: 'demo skill' }]),
   };
 
@@ -151,6 +162,9 @@ function fakeSession() {
     skillsChanged: vi.fn(() => () => {}),
     refreshSkills: spies.refreshSkills,
     runSkill: spies.runSkill,
+    reviewTargets: spies.reviewTargets,
+    reviewCommits: spies.reviewCommits,
+    startReview: spies.startReview,
     dispose: vi.fn(async () => {}),
   } as unknown as Session;
 
@@ -275,6 +289,28 @@ describe('server ↔ remote client', () => {
     expect(parts.spies.runSkill).toHaveBeenCalledWith('demo', 'foo bar', {
       display: '/demo foo bar',
     });
+  });
+
+  it('reviewTargets/reviewCommits 即时返回;startReview 走 deferred,乐观 run 标志随完成清除', async () => {
+    const { parts, remote } = await boot();
+
+    const targets = await remote.reviewTargets();
+    expect(parts.spies.reviewTargets).toHaveBeenCalledOnce();
+    expect(targets.isRepo).toBe(true);
+    expect(targets.branches).toEqual([{ name: 'feature', subject: 'first' }]);
+
+    const commits = await remote.reviewCommits();
+    expect(parts.spies.reviewCommits).toHaveBeenCalledOnce();
+    expect(commits[0]?.subject).toBe('second: add b');
+
+    const pending = remote.startReview('base main', { display: '/review base main' });
+    // 乐观 run 标志在 ack 之前同步置位:ack 往返的窗口期内 isRunning 不为 false。
+    expect(remote.agent.isRunning).toBe(true);
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(parts.spies.startReview).toHaveBeenCalledWith('base main', {
+      display: '/review base main',
+    });
+    await waitFor(() => !remote.agent.isRunning);
   });
 
   it('即时调用:switch 返回抹除凭据后的 provider,参数原样到达', async () => {

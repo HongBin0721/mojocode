@@ -28,6 +28,7 @@ import type { ProviderModels } from '../model/registry.js';
 import type { DoctorReport } from './doctor.js';
 import type { ImageAttachment } from './attachments.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
+import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/review.js';
 
 export interface RunOptions {
   display?: string;
@@ -106,5 +107,18 @@ export interface SessionHandle {
   refreshSkills(): Promise<SkillCommandInfo[]>;
   /** 斜杠调用技能:激活+展开+跑一整轮,远程侧是 deferred RPC。 */
   runSkill(name: string, args: string, options?: { display?: string }): Promise<void>;
+  /**
+   * `/review` 二级选择器的数据源(当前分支 + 其余本地分支)。git 在 server
+   * 侧跑——`--attach` 时仓库不在 UI 这台机器上;远程侧普通即时 RPC。
+   */
+  reviewTargets(): Promise<ReviewTargets>;
+  /** `/review` 提交选择器数据源(最近 N 个提交)。远程侧普通即时 RPC。 */
+  reviewCommits(): Promise<ReviewCommit[]>;
+  /**
+   * `/review` 跑一轮代码评审:server 侧收集 git 摘要、组稿罐装提示词后
+   * agent.run。失败以 reason 代码返回(不抛异常),UI 据此映射本地化提示;
+   * 远程侧是 deferred RPC(包 agent.run,与 runSkill 同理)。
+   */
+  startReview(scope: string, options?: { display?: string }): Promise<ReviewStartResult>;
   dispose(): Promise<void>;
 }

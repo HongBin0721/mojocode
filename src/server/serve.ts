@@ -286,6 +286,11 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return undefined;
       case 'refreshSkills':
         return session.refreshSkills();
+      // /review 的二级选择器数据源:快、不跑 agent,普通即时 RPC。
+      case 'reviewTargets':
+        return session.reviewTargets();
+      case 'reviewCommits':
+        return session.reviewCommits();
       case 'listProviderModels':
         return session.listProviderModels();
       // 兼容垫片:旧客户端(--attach 版本偏差)的裸 /model 仍发 listModels。
@@ -319,7 +324,9 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
                 args['args'] as string,
                 args['options'] as never,
               )
-            : session.agent.compact();
+            : call.method === 'startReview'
+              ? session.startReview(args['scope'] as string, args['options'] as never)
+              : session.agent.compact();
     void promise
       .then((value) => broadcast({ kind: 'call-result', callId: call.id, ok: true, value }))
       .catch((error: unknown) =>

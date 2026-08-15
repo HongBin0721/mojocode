@@ -43,6 +43,7 @@ import type { SessionHandle } from '../app/session-handle.js';
 import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
+import { ReviewPicker, type ReviewPickerRow } from './ReviewPicker.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { ModePicker, type ModeOption } from './ModePicker.js';
 import type { TodoItem } from '../tools/index.js';
@@ -79,6 +80,7 @@ import {
 import { supportedEfforts } from '../model/reasoning.js';
 import { getLocale, setLocale, t, type Locale, type MessageKey } from '../i18n/index.js';
 import { INIT_PROMPT } from '../agent/init.js';
+import { parseReviewArg, type ReviewFailure } from '../agent/review.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
 import { readClipboardImage } from '../app/clipboard.js';
@@ -98,6 +100,7 @@ function buildCommands(): SlashCommand[] {
   return [
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
+    { name: 'review', description: t('cmd.review'), selectorTitle: t('reviewopt.selectorTitle') },
     { name: 'plan', description: t('cmd.plan') },
     { name: 'goal', description: t('cmd.goal') },
     { name: 'models', aliases: ['model'], description: t('cmd.models') },
@@ -140,7 +143,7 @@ const THINK_DESCRIPTIONS: Record<ReasoningEffort, MessageKey> = {
 
 /** 运行中会和进行中的流互相踩踏的命令(改历史、换模型)。runCommand 入口
  * 已把别名归一为主名,这里只列主名。 */
-const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'models', 'provider', 'resume', 'fork', 'init']);
+const BUSY_BLOCKED_COMMANDS = new Set(['new', 'clear', 'compact', 'models', 'provider', 'resume', 'fork', 'init', 'review']);
 
 /**
  * 压缩进度条的预估摘要总长(字符)。摘要提示词要的是分节的事实性散文,
@@ -172,6 +175,24 @@ const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
   full: 'focusopt.full',
   compact: 'focusopt.compact',
   result: 'focusopt.result',
+};
+
+/**
+ * `/review` 失败原因 → 提示文案与级别。穷尽 Record:review.ts 新增失败
+ * 原因时编译期就会提醒补文案。"没有可评审的内容"是信息,其余是警告。
+ * git-error 的 {message} 填的是 stderr 摘要,仅供排查。
+ */
+const REVIEW_FAILURE_NOTICES: Record<ReviewFailure, { key: MessageKey; level: 'info' | 'warn' }> = {
+  'no-repo': { key: 'notice.reviewNoRepo', level: 'warn' },
+  'clean-tree': { key: 'notice.reviewCleanTree', level: 'info' },
+  'no-commits': { key: 'notice.reviewNoCommits', level: 'info' },
+  'no-diff': { key: 'notice.reviewNoDiff', level: 'info' },
+  'unknown-branch': { key: 'notice.reviewUnknownBranch', level: 'warn' },
+  'same-branch': { key: 'notice.reviewSameBranch', level: 'warn' },
+  'no-merge-base': { key: 'notice.reviewNoMergeBase', level: 'warn' },
+  'unknown-commit': { key: 'notice.reviewUnknownCommit', level: 'warn' },
+  'git-error': { key: 'notice.reviewGitError', level: 'warn' },
+  'bad-arg': { key: 'notice.reviewUsage', level: 'warn' },
 };
 
 /**
@@ -333,16 +354,26 @@ export function App(props: Props): JSX.Element {
   // 数据在打开前拉好;单组失败在选择器里就地标注,手动输入行永远兜底。
   const [modelsPicker, setModelsPicker] = createSignal<ProviderModels[] | undefined>(undefined);
   const [providerPicker, setProviderPicker] = createSignal<ProviderRow[] | undefined>(undefined);
+  // /review 选完预设后的第二级选择器(基准分支 / 提交),同上面的互斥渲染。
+  const [reviewPicker, setReviewPicker] = createSignal<
+    { kind: 'base' | 'commit'; title: string; rows: ReviewPickerRow[] } | undefined
+  >(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
   const [prefill, setPrefill] = createSignal<{ text: string } | undefined>(undefined);
   const clearPrefill = () => setPrefill(undefined);
+  // /review 第二级选择器 esc 返回预设层:请求 Input 重开 review 的二级
+  // 选择器。与 prefill 同一消费语义(新对象 + 回调清空)。
+  const [selectorRequest, setSelectorRequest] = createSignal<
+    { command: string; index?: number } | undefined
+  >(undefined);
+  const clearSelectorRequest = () => setSelectorRequest(undefined);
 
   /**
    * 有覆盖层占着屏幕底部——授权确认框、回退选择器、档位选项框、设置面板、
-   * 模型/厂商选择器取第一个成立的(见下方渲染处的 <Switch>)。它们渲染期间
-   * Input 与 Footer 都已卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要
-   * 拿它挡一下。
+   * 模型/厂商选择器、/review 的分支/提交选择器取第一个成立的(见下方渲染处
+   * 的 <Switch>)。它们渲染期间 Input 与 Footer 都已卸载,所以任何「靠 footer
+   * 回显反馈」的全局快捷键都要拿它挡一下。
    */
   const overlayOpen = () =>
     permission() !== undefined ||
@@ -350,7 +381,8 @@ export function App(props: Props): JSX.Element {
     settingsOpen() ||
     modePickerOpen() ||
     modelsPicker() !== undefined ||
-    providerPicker() !== undefined;
+    providerPicker() !== undefined ||
+    reviewPicker() !== undefined;
 
   /**
    * 把两轴档位写进本工作区的 `.mojocode/config.json`(底栏选项框与 /approvals
@@ -470,6 +502,7 @@ export function App(props: Props): JSX.Element {
     setRewind(undefined);
     setModelsPicker(undefined);
     setProviderPicker(undefined);
+    setReviewPicker(undefined);
     setPermission(request);
   };
 
@@ -516,6 +549,14 @@ export function App(props: Props): JSX.Element {
    */
   let submitPending = false;
   let submitGen = 0;
+  /**
+   * submitPending 当前属于一次评审启动(launchReview)。它与 @ 展开窗口
+   * 不同:没有 submitGen 那样的作废机制,esc 在 git 收集窗口内既取消不了
+   * 它、也不该清掉标志——清了会重新打开 busy 门,第二个 /review 撞上
+   * loop.ts 的防重入兜底退化成轮中注入。轮子转起来(isRunning 点亮)后
+   * esc 走正常的中断路径,不受此影响。
+   */
+  let reviewLaunchPending = false;
 
   const push = (item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
@@ -970,6 +1011,10 @@ export function App(props: Props): JSX.Element {
     // 注意不能就此返回——运行中提交的是引导消息,此时按 esc 要的是中断
     // 那一轮,只取消引导会表现为"esc 没反应,状态栏却灭了"。
     if (submitPending) {
+      // 例外:pending 属于评审启动的 git 收集窗口——没有可作废的提交,
+      // 清掉标志只会重新打开 busy 门(见 reviewLaunchPending 的注释)。
+      // 窗口次秒级,忽略这次 esc;轮子转起来后走下面的正常中断。
+      if (reviewLaunchPending && !session.agent.isRunning && !session.goal.busy) return;
       submitGen++;
       submitPending = false;
       if (!session.agent.isRunning && !session.goal.busy) {
@@ -1214,6 +1259,50 @@ export function App(props: Props): JSX.Element {
     ).then((models) => models.length);
   };
 
+  /**
+   * `/review <范围>` 的执行出口:预设选择器直选、第二级选择器(base/commit)
+   * 挑完、手打/回退重发走的是同一条路。display 统一按 `/review <范围>` 重组
+   * ——picker 路径没有"用户原文"可用,直打路径与原文等价。
+   */
+  const launchReview = (scopeArg: string) => {
+    // submitPending 与 handleSubmit 同一语义:本地进程内的 startReview 在
+    // agent.run 之前还有 collectReviewSummary 的异步窗口(最多四条串行 git
+    // 子进程),期间 isRunning 仍为 false——不占住的话,第二个 /review 能
+    // 穿过 BUSY_BLOCKED 拦截,撞上 loop.ts 的防重入兜底退化成轮中注入,
+    // 整份罐装提示词被灌进第一个评审的流里,且后到者的 finally 还会提前
+    // 清掉 running。远程侧无此窗口(callDeferred 同步置乐观 run 标志),
+    // 两条路共用这份保险。
+    submitPending = true;
+    reviewLaunchPending = true;
+    setRunning(true);
+    void session
+      .startReview(scopeArg, { display: `/review ${scopeArg}` })
+      .then((result) => {
+        if (result.ok) return;
+        const notice = REVIEW_FAILURE_NOTICES[result.reason];
+        if (!notice) return;
+        push({
+          kind: 'notice',
+          level: notice.level,
+          message: t(notice.key, {
+            branch: result.branch ?? '',
+            sha: result.sha ?? '',
+            message: result.detail ?? '',
+          }),
+        });
+      })
+      // startReview 的失败以 reason 返回,但 RPC 本身会 reject(传输层错误),
+      // 未捕获的 rejection 会掀掉整个 TUI——与 /init 同一条教训。
+      .catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: err.message }) });
+      })
+      .finally(() => {
+        submitPending = false;
+        reviewLaunchPending = false;
+        setRunning(false);
+      });
+  };
+
   const runCommand = async (raw: string) => {
     const [typed, ...rest] = raw.slice(1).trim().split(/\s+/);
     // 别名先归一为主名(未知的命令保持原样,走 default 分支的提示)。
@@ -1300,6 +1389,100 @@ export function App(props: Props): JSX.Element {
             push({ kind: 'notice', level: 'warn', message: t('notice.initFailed', { message: err.message }) });
           })
           .finally(() => setRunning(false));
+        break;
+      }
+
+      // 代码评审(/review):二级选择器选范围,server 侧组稿罐装提示词后
+      // 以一轮对话跑只读评审(见 bootstrap.startReview)。评审天然兼容只读
+      // 沙箱——它本来就不改文件,所以没有 /init 那道 canEverWrite 前置闸。
+      // 代码评审(/review):预设选择器(Codex 式)选四个预设之一,base/commit
+      // 再经第二级选择器挑分支/提交,custom 预填输入框补焦点文本;直打
+      // `/review base main` 这类(含回退重发)直接开跑。评审天然兼容只读沙箱。
+      case 'review': {
+        // 计划模式按设计必须以 exit_plan 收尾,而评审轮的产出是发现清单——
+        // 两条指令会把模型夹住。检查放在最前:裸命令、开选择器、预填之前
+        // 统统先拦。
+        if (planActive()) {
+          push({ kind: 'notice', level: 'warn', message: t('notice.reviewPlanMode') });
+          break;
+        }
+        // 裸 /review:非 git 仓库时选择器返回空表、回退成裸提交,这里再拉
+        // 一次 targets 把"没有仓库"和"用法不对"区分开;拉取失败如实报告——
+        // 吞成 undefined 会退化成误导性的用法提示(base 二级路径同理)。
+        if (!arg) {
+          const targets = await session.reviewTargets().catch((err: Error) => err);
+          if (targets instanceof Error) {
+            push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: targets.message }) });
+            break;
+          }
+          push({
+            kind: 'notice',
+            level: 'warn',
+            message: !targets.isRepo ? t('notice.reviewNoRepo') : t('notice.reviewUsage'),
+          });
+          break;
+        }
+        // 预设的裸关键字:开第二级选择器或预填输入框,不直接成范围。
+        if (arg === 'base' || arg === 'commit') {
+          let rows: ReviewPickerRow[] = [];
+          if (arg === 'base') {
+            // catch 到的错误要如实报告:吞成空表会把传输失败误报成"没有分支"。
+            const targets = await session.reviewTargets().catch((err: Error) => err);
+            if (targets instanceof Error) {
+              push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: targets.message }) });
+              break;
+            }
+            if (!targets.isRepo) {
+              push({ kind: 'notice', level: 'warn', message: t('notice.reviewNoRepo') });
+              break;
+            }
+            rows = targets.branches.map((b) => ({ value: b.name, head: b.name, detail: b.subject }));
+          } else {
+            const commits = await session.reviewCommits().catch((err: Error) => err);
+            if (commits instanceof Error) {
+              push({ kind: 'notice', level: 'warn', message: t('notice.reviewFailed', { message: commits.message }) });
+              break;
+            }
+            rows = commits.map((c) => ({
+              value: c.sha,
+              head: c.sha,
+              detail: `${c.subject}${c.date ? ` · ${c.date}` : ''}`,
+            }));
+          }
+          if (rows.length === 0) {
+            // 提交列表为空分两种:非仓库(reviewCommits 对非仓库静默给空表)
+            // 与真空仓——再探一次 targets 区分,别把"不是仓库"误报成"没有提交"。
+            if (arg === 'commit') {
+              const targets = await session.reviewTargets().catch(() => undefined);
+              if (targets && !targets.isRepo) {
+                push({ kind: 'notice', level: 'warn', message: t('notice.reviewNoRepo') });
+                break;
+              }
+            }
+            push({
+              kind: 'notice',
+              level: 'warn',
+              message: arg === 'base' ? t('notice.reviewNoBranches') : t('notice.reviewNoCommits'),
+            });
+            break;
+          }
+          setReviewPicker({
+            kind: arg,
+            title: t(arg === 'base' ? 'reviewpick.branchTitle' : 'reviewpick.commitTitle'),
+            rows,
+          });
+          break;
+        }
+        if (arg === 'custom') {
+          // 预填焦点文本的半成品:尾随空格保持命令菜单关闭,用户补完再提交。
+          setPrefill({ text: '/review custom ' });
+          break;
+        }
+        if (!parseReviewArg(arg)) {
+          push({ kind: 'notice', level: 'warn', message: t('notice.reviewUsage') });
+          break;
+        }
+        launchReview(arg);
         break;
       }
 
@@ -1829,6 +2012,25 @@ export function App(props: Props): JSX.Element {
           label: t(FOCUS_DESCRIPTIONS[m]),
           current: m === timelineMode(),
         })),
+      // /review 的预设选择器(Codex 式两行渲染):四个固定预设,顺序与 Codex
+      // 一致。base/commit 提交后在命令分支里再开第二级选择器选分支/提交;
+      // custom 提交后预填输入框。git 在 server 侧跑——--attach 时仓库不在 UI
+      // 这台机器上;非仓库返回空表,Input 的选择器对空表回退成裸提交,由命令
+      // 分支给出 no-repo 提示。
+      review: async (): Promise<CommandOption[]> => {
+        const targets = await session.reviewTargets().catch(() => undefined);
+        if (!targets?.isRepo) return [];
+        return [
+          { value: 'base', title: t('reviewopt.baseTitle'), label: t('reviewopt.baseDesc') },
+          {
+            value: 'uncommitted',
+            title: t('reviewopt.uncommittedTitle'),
+            label: t('reviewopt.uncommittedDesc'),
+          },
+          { value: 'commit', title: t('reviewopt.commitTitle'), label: t('reviewopt.commitDesc') },
+          { value: 'custom', title: t('reviewopt.customTitle'), label: t('reviewopt.customDesc') },
+        ];
+      },
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
           value: id,
@@ -1932,6 +2134,8 @@ export function App(props: Props): JSX.Element {
         onEscape={handleEscape}
         prefill={prefill()}
         onPrefillConsumed={clearPrefill}
+        requestSelector={selectorRequest()}
+        onSelectorConsumed={clearSelectorRequest}
         fileIndex={fileLister}
         readClipboardImage={readClipboardImage}
         onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
@@ -2087,8 +2291,9 @@ export function App(props: Props): JSX.Element {
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
             授权确认框 > 回退选择器 > 档位选项框 > 设置面板 > 模型/厂商选择器
-            > 常态输入框,按这个优先级取第一个成立的。用 Switch 而不是层层嵌套的
-            Show/fallback——后者每加一个覆盖层就多一级缩进,还得改上一个人的那支。 */}
+            > /review 的分支/提交选择器 > 常态输入框,按这个优先级取第一个成立
+            的。用 Switch 而不是层层嵌套的 Show/fallback——后者每加一个覆盖层
+            就多一级缩进,还得改上一个人的那支。 */}
         <Switch fallback={<InputArea />}>
           <Match when={permission()} keyed>
             {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
@@ -2142,6 +2347,28 @@ export function App(props: Props): JSX.Element {
                   void applyProviderSwitch(id, apiKey);
                 }}
                 onCancel={() => setProviderPicker(undefined)}
+              />
+            )}
+          </Match>
+          <Match when={reviewPicker()} keyed>
+            {(picker: { kind: 'base' | 'commit'; title: string; rows: ReviewPickerRow[] }) => (
+              <ReviewPicker
+                title={picker.title}
+                rows={picker.rows}
+                onPick={(value) => {
+                  setReviewPicker(undefined);
+                  launchReview(`${picker.kind} ${value}`);
+                }}
+                onCancel={() => {
+                  // esc 退回上一级:重开预设选择器,光标还原到刚才那个预设
+                  // (base=0 / commit=2)。Input 随本浮层关闭而重挂,请求在
+                  // 挂载效应里消费。
+                  setReviewPicker(undefined);
+                  setSelectorRequest({
+                    command: 'review',
+                    index: picker.kind === 'base' ? 0 : 2,
+                  });
+                }}
               />
             )}
           </Match>

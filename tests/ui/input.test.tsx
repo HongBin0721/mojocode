@@ -193,6 +193,51 @@ describe('Input 多选选择器', () => {
   });
 });
 
+describe('Input Codex 式两行预设选择器', () => {
+  const preset: SlashCommand = {
+    name: 'review',
+    description: '',
+    selectorTitle: 'Select a review preset',
+    options: () => [
+      { value: 'base', title: 'Review against a base branch', label: 'Finds the merge base' },
+      { value: 'uncommitted', title: 'Review uncommitted changes', label: 'Reviews staged files' },
+    ],
+  };
+
+  it('带 title 的选项渲染编号 + 标题行 + 缩进描述行,value 不展示', async () => {
+    const { submitted, ui: p } = setup([preset]);
+    const ui = await p;
+    await ui.type('/review');
+    await ui.press('return');
+    await ui.tick();
+    const out = ui.frame();
+    // 框标题用 selectorTitle,不再是 /review。
+    expect(out).toContain('Select a review preset');
+    expect(out).toContain('1. Review against a base branch');
+    expect(out).toContain('2. Review uncommitted changes');
+    expect(out).toContain('Finds the merge base');
+    // value 是机器串,不该出现。
+    expect(out).not.toContain('uncommitted —');
+    await ui.destroy();
+    expect(submitted).toEqual([]);
+  });
+
+  it('光标行高亮只在标题行;回车提交 /review base', async () => {
+    const { submitted, ui: p } = setup([preset]);
+    const ui = await p;
+    await ui.type('/review');
+    await ui.press('return');
+    await ui.tick();
+    // 首行(光标落 0 = base 预设)的标题行(含编号)是 accent 色,描述行与次行不是。
+    expect(accentTexts(ui, /Review against a base branch/)).toEqual([
+      '1. Review against a base branch',
+    ]);
+    await ui.press('return');
+    expect(submitted).toEqual(['/review base']);
+    await ui.destroy();
+  });
+});
+
 describe('@ 文件引用补全', () => {
   const FILES = ['src/ui/Input.tsx', 'src/agent/loop.ts', 'README.md'];
   const fileIndex = () => Promise.resolve(FILES);

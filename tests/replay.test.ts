@@ -6,6 +6,7 @@ import type { ModelMessage } from 'ai';
 import { collectRewindEntries, replayTimeline } from '../src/session/replay.js';
 import { wrapGuidance, unwrapGuidance } from '../src/agent/loop.js';
 import { INIT_PROMPT, INIT_PROMPT_MARKER } from '../src/agent/init.js';
+import { wrapSkillPrompt } from '../src/skills/invocation.js';
 import { expandAtReferences } from '../src/app/attachments.js';
 
 describe('replayTimeline', () => {
@@ -124,6 +125,15 @@ describe('replayTimeline', () => {
   it('/init 的完整指令还原为命令本身', () => {
     const items = replayTimeline([{ role: 'user', content: INIT_PROMPT }] as ModelMessage[]);
     expect(items).toEqual([{ kind: 'user', text: '/init' }]);
+  });
+
+  // /review 复用技能信封:罐装评审提示词进历史,回放与回退都还原成
+  // 当时敲的命令(含范围),重发即按新的 git 状态重跑。
+  it('/review 的罐装提示词经技能信封还原为命令本身', () => {
+    const persisted = wrapSkillPrompt('/review base main', 'Review the changes described below …');
+    const messages = [{ role: 'user', content: persisted }] as ModelMessage[];
+    expect(replayTimeline(messages)).toEqual([{ kind: 'user', text: '/review base main' }]);
+    expect(collectRewindEntries(messages)[0]?.text).toBe('/review base main');
   });
 
   // 方案在**输入**里,所以回放天然带得出来;`/plan <任务>` 不套 display,

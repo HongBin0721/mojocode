@@ -34,6 +34,16 @@ import { createSkillTool } from '../skills/tool.js';
 import { readSkillBody, type SkillCommandInfo, type SkillMeta } from '../skills/discovery.js';
 import { substituteArgs } from '../skills/substitute.js';
 import { wrapSkillPrompt } from '../skills/invocation.js';
+import {
+  buildReviewPrompt,
+  collectReviewCommits,
+  collectReviewSummary,
+  collectReviewTargets,
+  parseReviewArg,
+  type ReviewCommit,
+  type ReviewStartResult,
+  type ReviewTargets,
+} from '../agent/review.js';
 
 export interface Session {
   root: string;
@@ -113,6 +123,20 @@ export interface Session {
    * 原文,进时间线;缺省按 name/args 重组。
    */
   runSkill: (name: string, args: string, options?: { display?: string }) => Promise<void>;
+  /**
+   * `/review` 二级选择器的数据源(server 侧跑 git:当前分支 + 其余本地分支,
+   * 按最近提交排序)。远程侧普通 RPC——快、小、不跑 agent。
+   */
+  reviewTargets: () => Promise<ReviewTargets>;
+  /** `/review` 提交选择器的数据源:最近 N 个提交。远程侧普通即时 RPC。 */
+  reviewCommits: () => Promise<ReviewCommit[]>;
+  /**
+   * 以用户身份跑一轮代码评审(`/review`):权威解析范围 → 收集 git 摘要 →
+   * 组稿罐装提示词交给 agent.run(信封复用技能的 `<skill-command>`,回放
+   * 据此还原成命令原文)。失败以 reason 代码返回、不抛异常,UI 据此映射
+   * 本地化提示。远程侧是 deferred RPC(包 agent.run,可能跑几分钟)。
+   */
+  startReview: (scopeArg: string, options?: { display?: string }) => Promise<ReviewStartResult>;
   dispose: () => Promise<void>;
 }
 
@@ -611,6 +635,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
 
   /**
+   * `/review` 的执行侧。与 runSkill 的两点差异:不需要 gate.resumePending()
+   * (评审没有轮前的 allowed-tools 确认,turn-start 的总线监听已统一复位);
+   * 失败不抛异常而是带回 reason 代码——英文 git 错误串不该直接怼进时间线。
+   */
+  const startReview = async (
+    scopeArg: string,
+    options?: { display?: string },
+  ): Promise<ReviewStartResult> => {
+    const scope = parseReviewArg(scopeArg);
+    if (!scope) return { ok: false, reason: 'bad-arg' };
+    const collected = await collectReviewSummary(root, scope);
+    if (!collected.ok) return collected;
+    const display = options?.display ?? `/review ${scopeArg}`;
+    await agent.run(wrapSkillPrompt(display, buildReviewPrompt(scope, collected.summary)), {
+      display,
+    });
+    return { ok: true };
+  };
+
+  /**
    * 进入/退出计划模式,两轴始终不动。
    *
    * 退出 = 未批准就放弃,所以绝不能走 planReturn.perms:从 read-only+never
@@ -729,6 +773,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return skillManager.commandInfos();
     },
     runSkill,
+    reviewTargets: () => collectReviewTargets(root),
+    reviewCommits: () => collectReviewCommits(root),
+    startReview,
     dispose: async () => {
       goal.dispose();
       await Promise.all([...mcp.connections.map((c) => c.close()), lsp?.dispose()]);

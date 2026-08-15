@@ -92,7 +92,7 @@ export interface PermissionReply {
 }
 
 /** 这些方法可能一跑几小时:POST 立即 ack,完成经 SSE call-result 送达。 */
-export const DEFERRED_METHODS = new Set(['run', 'goalRun', 'compact', 'runSkill']);
+export const DEFERRED_METHODS = new Set(['run', 'goalRun', 'compact', 'runSkill', 'startReview']);
 
 export function toWireError(error: unknown): WireError {
   if (error instanceof Error) return { name: error.name, message: error.message };

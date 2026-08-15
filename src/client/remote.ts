@@ -36,6 +36,7 @@ import type { GoalStopReason } from '../core/events.js';
 import type { ProviderModels } from '../model/registry.js';
 import type { DoctorReport } from '../app/doctor.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
+import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/review.js';
 import { ProviderSwitchError } from '../app/bootstrap.js';
 import type { RunOptions, SessionHandle } from '../app/session-handle.js';
 import {
@@ -209,7 +210,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     });
     // 完成回执的历史刷新挂在 completion 上,ack 失败时一并收尾。
     const settled = completion.finally(() => {
-      if (method === 'run' || method === 'goalRun' || method === 'runSkill') {
+      if (method === 'run' || method === 'goalRun' || method === 'runSkill' || method === 'startReview') {
         optimistic.run = false;
         optimistic.goal = false;
       }
@@ -221,9 +222,9 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // 那时 call-result 帧可能先于 ack 的 fetch promise 落地——上面的 finally
     // 先清了标志,ack 的 .then 再把它置回 true,就永远没人清了。isRunning
     // 从此恒为真:命令全被 busy 拦、esc 永远走中断、提交一律退化成 inject。
-    // runSkill 同样占 run 标志:它就是一整轮 agent.run,漏了这里就复现
-    // "ack 迟到把标志置回、永远没人清"的卡死。
-    if (method === 'run' || method === 'runSkill') optimistic.run = true;
+    // runSkill / startReview 同样占 run 标志:它们就是一整轮 agent.run,漏了
+    // 这里就复现"ack 迟到把标志置回、永远没人清"的卡死。
+    if (method === 'run' || method === 'runSkill' || method === 'startReview') optimistic.run = true;
     if (method === 'goalRun') {
       optimistic.run = true;
       optimistic.goal = true;
@@ -576,6 +577,11 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // deferred:一整轮 agent.run,乐观 run 标志的置位/清除见 callDeferred。
     runSkill: (name, args, opts) =>
       callDeferred('runSkill', { name, args, options: opts }).then(() => undefined),
+    // /review:选择器数据源是普通即时 RPC;评审本身是 deferred(同 runSkill)。
+    reviewTargets: () => call<ReviewTargets>('reviewTargets'),
+    reviewCommits: () => call<ReviewCommit[]>('reviewCommits'),
+    startReview: (scope, opts) =>
+      callDeferred('startReview', { scope, options: opts }) as Promise<ReviewStartResult>,
     dispose: async () => {
       const wasClosed = closed;
       closed = true;
