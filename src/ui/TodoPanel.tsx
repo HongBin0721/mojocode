@@ -49,7 +49,9 @@ export function TodoPanel(props: { todos: TodoItem[]; columns: number }): JSX.El
   const width = () => Math.max(20, props.columns - WIDTH_SAFETY - 5 - 2);
 
   return (
-    <Box paddingLeft={2} flexDirection="column">
+    // marginBottom:面板与正下方的输入框隔一行;与时间线的间距归外层底部
+    // 固定区统一给出,这里不重复叠。
+    <Box paddingLeft={2} flexDirection="column" marginBottom={1}>
       {/* For 按引用重建:rows() 每次整体重算出新对象,行组件随之整体重建,
           PanelRowText 在组件体里读 props 因此安全(没有原位更新)。 */}
       <For each={rows()}>

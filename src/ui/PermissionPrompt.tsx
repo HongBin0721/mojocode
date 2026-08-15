@@ -139,12 +139,13 @@ export function PermissionPrompt(props: Props): JSX.Element {
   const isDiff = () => props.request.detail?.includes('@@') ?? false;
 
   return (
+    // 不设 marginTop:与上方(状态行或时间线)的分隔由 App 底部固定区的
+    // 外层容器统一给出一行,这里再叠一层缝就宽一倍。
     <Box
       flexDirection="column"
       borderStyle="round"
       borderColor={isPlan() ? theme.accent : theme.warn}
       paddingX={1}
-      marginTop={1}
     >
       <Text bold color={isPlan() ? theme.accent : theme.warn}>
         {isPlan() ? t('perm.planTitle') : t('perm.title')}

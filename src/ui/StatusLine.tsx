@@ -139,7 +139,10 @@ export function StatusLine(props: Props): JSX.Element {
   };
 
   return (
-    <Box marginTop={1}>
+    // marginBottom 而非 marginTop:与时间线的分隔由底部固定区的外层容器统一
+    // 给出;这里管的是与下方(待办面板/输入框)隔一行。marginTop 是它早年
+    // 还住在时间线 scrollbox 尾部时的遗留,搬出来后只会把缝叠成两行。
+    <Box marginBottom={1}>
       <Text color={color()}>{frame()} </Text>
       <Text color={color()} bold>
         {fittedLabel()}

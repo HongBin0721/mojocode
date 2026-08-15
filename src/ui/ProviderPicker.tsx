@@ -160,7 +160,8 @@ export function ProviderPicker(props: Props): JSX.Element {
   const visible = createMemo(() => props.rows.slice(windowStart(), windowStart() + WINDOW));
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    // 不设 marginTop:与时间线的分隔由 App 底部固定区的外层容器统一给出。
+    <Box flexDirection="column">
       <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
         <Text bold color={theme.accent}>
           {t('providerpicker.title')}

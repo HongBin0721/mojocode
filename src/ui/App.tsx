@@ -1906,7 +1906,10 @@ export function App(props: Props): JSX.Element {
    * 草稿没了,而且编译期毫无提示。
    */
   const InputArea = () => (
-    <Box flexDirection="column" marginTop={1}>
+    // 不设 marginTop:与时间线的分隔由外层底部固定区统一给出(一行)。这里
+    // 再叠一层的话,状态行/待办面板都不在的常态会空出两行——正是时间线与
+    // 输入框之间那道多出来的缝。与上方块的间距归上方块自己的 marginBottom。
+    <Box flexDirection="column">
       {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
           而不必敲 /goal 去问。授权确认框、回退选择器或设置面板打开时不渲染
           (它们走的是那串互斥分支的其他支)。 */}
@@ -2061,7 +2064,10 @@ export function App(props: Props): JSX.Element {
       </ScrollArea>
 
       {/* 底部固定区不参与收缩:空间不足时塌缩的是上面的时间线视口,
-          输入框与权限选项永远可见(矮终端保障,替代旧的 RESERVED_ROWS)。 */}
+          输入框与权限选项永远可见(矮终端保障,替代旧的 RESERVED_ROWS)。
+          这里的 marginTop 是时间线与下方内容(状态行/待办面板/输入框/各
+          覆盖层)之间**唯一**的分隔——子块一律不再自带顶部 margin,否则
+          缝叠成两行(时间线与输入框之间那道多出来的空行就是这么来的)。 */}
       <Box flexDirection="column" marginTop={1} flexShrink={0}>
         {/* 工作状态行:主流 CLI 的位置——时间线之下、输入框之上。 */}
         <Show when={work()}>
