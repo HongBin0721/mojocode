@@ -49,7 +49,7 @@ describe('reasoningMapping', () => {
   });
 
   it('glm 只有 thinking 开关:off 完整表达,档位只能粗粒度近似', () => {
-    const p = provider({ id: 'glm', model: 'glm-4.6' });
+    const p = provider({ id: 'glm', model: 'GLM-4.6' });
     expect(reasoningMapping(p, 'off')).toEqual({
       support: 'full',
       providerOptions: { glm: { thinking: { type: 'disabled' } } },
@@ -118,7 +118,7 @@ describe('providerOptionsKey', () => {
   });
 
   it('内置的连字符 provider 走 camelCase 键,家族判断仍按原 id', () => {
-    expect(reasoningMapping(provider({ id: 'glm-coding', model: 'glm-4.6' }), 'off')).toEqual({
+    expect(reasoningMapping(provider({ id: 'glm-coding', model: 'GLM-4.6' }), 'off')).toEqual({
       support: 'full',
       providerOptions: { glmCoding: { thinking: { type: 'disabled' } } },
     });
@@ -142,7 +142,7 @@ describe('supportedEfforts:档位与模型绑定', () => {
   });
 
   it('glm 只有开关:仅 auto 和 off 可选,伪档位不出现', () => {
-    expect(supportedEfforts(provider({ id: 'glm', model: 'glm-4.6' }))).toEqual(['auto', 'off']);
+    expect(supportedEfforts(provider({ id: 'glm', model: 'GLM-4.6' }))).toEqual(['auto', 'off']);
   });
 
   it('kimi-k3 无法关闭思考且没有 medium', () => {

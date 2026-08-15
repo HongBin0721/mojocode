@@ -54,11 +54,11 @@ describe('saveApiKey', () => {
     await saveApiKey('glm', 'old', { file });
     await fs.writeFile(
       file,
-      JSON.stringify({ providers: { glm: { apiKey: 'old', model: 'glm-5' } } }),
+      JSON.stringify({ providers: { glm: { apiKey: 'old', model: 'GLM-5' } } }),
     );
 
     await saveApiKey('glm', 'new', { file });
-    expect(await readConfig()).toEqual({ providers: { glm: { apiKey: 'new', model: 'glm-5' } } });
+    expect(await readConfig()).toEqual({ providers: { glm: { apiKey: 'new', model: 'GLM-5' } } });
   });
 
   it('can set the default provider in the same call', async () => {
@@ -113,7 +113,7 @@ describe('saveReasoningEffort', () => {
       file,
       JSON.stringify({
         reasoningEffort: 'low',
-        providers: { glm: { apiKey: 'g1', model: 'glm-5' } },
+        providers: { glm: { apiKey: 'g1', model: 'GLM-5' } },
       }),
     );
 
@@ -121,7 +121,7 @@ describe('saveReasoningEffort', () => {
 
     expect(await readConfig()).toEqual({
       reasoningEffort: 'low',
-      providers: { glm: { apiKey: 'g1', model: 'glm-5', reasoningEffort: 'high' } },
+      providers: { glm: { apiKey: 'g1', model: 'GLM-5', reasoningEffort: 'high' } },
     });
   });
 

@@ -261,7 +261,7 @@ server 只绑定 127.0.0.1，所有请求都要 Bearer token 鉴权（它能执�
 ```json
 {
   "provider": "glm",
-  "model": "glm-5.3",
+  "model": "GLM-5.3",
   "language": "zh-CN",
   "sandbox": "workspace-write",
   "approval": "untrusted",

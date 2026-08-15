@@ -18,7 +18,7 @@ describe('resolveProvider', () => {
   it('fills in the preset baseURL, model and context window', () => {
     const provider = resolveProvider(makeConfig({ provider: 'glm' }), { ZHIPU_API_KEY: 'k' });
     expect(provider.baseURL).toBe('https://open.bigmodel.cn/api/paas/v4');
-    expect(provider.model).toBe('glm-5.3');
+    expect(provider.model).toBe('GLM-5.3');
     expect(provider.contextWindow).toBe(1_000_000);
   });
 
@@ -40,15 +40,24 @@ describe('resolveProvider', () => {
   });
 
   it('lets top-level model win over the provider default', () => {
-    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'glm-5.2' }), {
+    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'GLM-5.2' }), {
       ZHIPU_API_KEY: 'k',
     });
-    expect(provider.model).toBe('glm-5.2');
+    expect(provider.model).toBe('GLM-5.2');
+    expect(provider.contextWindow).toBe(1_000_000);
+  });
+
+  it('normalizes legacy lowercase GLM model ids to the uppercase spelling', () => {
+    // 老配置/线上列表里的小写 id 归一为大写,才能对上预设的 contextWindows 键。
+    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'glm-5.3' }), {
+      ZHIPU_API_KEY: 'k',
+    });
+    expect(provider.model).toBe('GLM-5.3');
     expect(provider.contextWindow).toBe(1_000_000);
   });
 
   it('falls back to the provider default window for unknown models', () => {
-    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'glm-99-future' }), {
+    const provider = resolveProvider(makeConfig({ provider: 'glm', model: 'GLM-99-future' }), {
       ZHIPU_API_KEY: 'k',
     });
     expect(provider.contextWindow).toBe(128_000);

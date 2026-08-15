@@ -2,7 +2,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import type { LanguageModel } from 'ai';
 import { resolveProvider, type ResolvedProvider } from '../config/load.js';
-import { apiKeyFromEnv, isBuiltinProvider, PROVIDER_PRESETS } from '../config/providers.js';
+import { apiKeyFromEnv, isBuiltinProvider, normalizeModelId, PROVIDER_PRESETS } from '../config/providers.js';
 import type { Config } from '../config/schema.js';
 
 /**
@@ -138,7 +138,8 @@ export async function probeModels(
     status: res.status,
     models: json.data
       .filter((m): m is { id: string; owned_by?: string } => typeof m.id === 'string')
-      .map((m) => ({ id: m.id, ownedBy: m.owned_by }))
+      // GLM 系端点回的是小写 id,归一成与预设一致的大写拼写。
+      .map((m) => ({ id: normalizeModelId(provider.id, m.id), ownedBy: m.owned_by }))
       .sort((a, b) => a.id.localeCompare(b.id)),
   });
 }

@@ -12,7 +12,7 @@ import {
   type ReasoningEffort,
 } from './schema.js';
 import { globalConfigPath, projectConfigPath } from './paths.js';
-import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider } from './providers.js';
+import { PROVIDER_PRESETS, apiKeyFromEnv, isBuiltinProvider, normalizeModelId } from './providers.js';
 import { resolveSearchBackend } from './search.js';
 
 export interface LoadOptions {
@@ -256,7 +256,9 @@ export function resolveProvider(
     );
   }
 
-  const model = config.model ?? override.model ?? preset?.defaultModel;
+  const rawModel = config.model ?? override.model ?? preset?.defaultModel;
+  // GLM 系模型名归一为大写:老配置里的小写 id 也要能对上预设的 contextWindows 键。
+  const model = rawModel ? normalizeModelId(id, rawModel) : rawModel;
   if (!model && !options.probe) {
     throw new ConfigError(`No model for provider "${id}". Set providers.${id}.model or pass --model.`);
   }

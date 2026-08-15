@@ -84,7 +84,7 @@ describe('formatTranscript 保真度(退出 dump 是唯一留档)', () => {
     const turn = (over: Partial<Extract<TimelineItem, { kind: 'turn' }>>): TimelineItem => ({
       key: 't',
       kind: 'turn',
-      model: 'glm-5.2',
+      model: 'GLM-5.2',
       durationMs: 12_000,
       tokens: 3_000,
       ...over,

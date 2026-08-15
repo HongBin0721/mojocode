@@ -102,10 +102,10 @@ export const PROVIDER_PRESETS = {
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyEnv: ['ZHIPU_API_KEY', 'ZHIPUAI_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    defaultModel: 'glm-5.3',
+    defaultModel: 'GLM-5.3',
     contextWindows: {
-      'glm-5.3': 1_000_000,
-      'glm-5.2': 1_000_000,
+      'GLM-5.3': 1_000_000,
+      'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
     parallelToolCalls: true,
@@ -115,10 +115,10 @@ export const PROVIDER_PRESETS = {
     baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
     apiKeyEnv: ['ZHIPU_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
-    defaultModel: 'glm-5.3',
+    defaultModel: 'GLM-5.3',
     contextWindows: {
-      'glm-5.3': 1_000_000,
-      'glm-5.2': 1_000_000,
+      'GLM-5.3': 1_000_000,
+      'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
     parallelToolCalls: true,
@@ -128,10 +128,10 @@ export const PROVIDER_PRESETS = {
     baseURL: 'https://api.z.ai/api/paas/v4',
     apiKeyEnv: ['ZAI_API_KEY', 'ZHIPU_API_KEY'],
     keyUrl: 'https://z.ai/manage-apikey/apikey-list',
-    defaultModel: 'glm-5.3',
+    defaultModel: 'GLM-5.3',
     contextWindows: {
-      'glm-5.3': 1_000_000,
-      'glm-5.2': 1_000_000,
+      'GLM-5.3': 1_000_000,
+      'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
     parallelToolCalls: true,
@@ -144,6 +144,17 @@ export const BUILTIN_PROVIDER_IDS = Object.keys(PROVIDER_PRESETS) as BuiltinProv
 
 export function isBuiltinProvider(id: string): id is BuiltinProviderId {
   return id in PROVIDER_PRESETS;
+}
+
+/**
+ * GLM 系厂商的模型名官方拼写是大写(GLM-5.3),但线上 /models 返回的以及
+ * 老配置里存的是小写 id。统一归一为大写,否则大小写错位会让预设
+ * contextWindows 查不到(退回兜底窗口)、ensurePresetDefault 的精确匹配合并
+ * 出现重复行。厂商判断沿用 reasoning.ts 的家族前缀惯例(glm / glm-coding /
+ * glm-intl)。
+ */
+export function normalizeModelId(providerId: string, modelId: string): string {
+  return providerId.startsWith('glm') ? modelId.toUpperCase() : modelId;
 }
 
 /** 读取预设中列出的第一个非空环境变量。 */

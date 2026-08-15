@@ -31,7 +31,7 @@ describe('listProviderModels', () => {
       env: {},
       fetchImpl: routedFetch({
         'api.moonshot.cn': { ids: ['kimi-k3', 'kimi-k2.6'] },
-        'open.bigmodel.cn': { ids: ['glm-5.3'] },
+        'open.bigmodel.cn': { ids: ['GLM-5.3'] },
       }),
     });
     expect(groups.map((g) => g.providerId)).toEqual(['kimi', 'glm']);
@@ -40,7 +40,7 @@ describe('listProviderModels', () => {
     expect(groups[0]?.models.map((m) => m.id)).toEqual(['kimi-k2.6', 'kimi-k3']);
     // 内置预设携带已知上下文窗口(UI 换算行尾标注)。
     expect(groups[0]?.contextWindows?.['kimi-k3']).toBe(1_000_000);
-    expect(groups[1]?.models.map((m) => m.id)).toEqual(['glm-5.3']);
+    expect(groups[1]?.models.map((m) => m.id)).toEqual(['GLM-5.3']);
     expect(groups[1]?.error).toBeUndefined();
   });
 
@@ -55,20 +55,21 @@ describe('listProviderModels', () => {
     expect(groups[0]?.models.map((m) => m.id)).toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
   });
 
-  it('线上列表滞后时并入预设默认模型(GLM Coding Plan 选不到 glm-5.3 的场景)', async () => {
+  it('线上列表滞后时并入预设默认模型(GLM Coding Plan 选不到 GLM-5.3 的场景)', async () => {
     const config = configSchema.parse({
       provider: 'glm-coding',
       providers: { 'glm-coding': { apiKey: 'k' } },
     });
-    // 端点只回到 glm-5.2(实测 Coding Plan 上线初期如此)。
+    // 端点回的是小写 id 且列表滞后(实测 Coding Plan 上线初期如此):
+    // 归一为大写后,列表里没有的默认模型仍会被并入。
     const groups = await listProviderModels(config, {
       env: {},
       fetchImpl: routedFetch({ 'open.bigmodel.cn': { ids: ['glm-4.6', 'glm-5.2'] } }),
     });
     const group = groups[0]!;
-    expect(group.models.map((m) => m.id)).toEqual(['glm-4.6', 'glm-5.2', 'glm-5.3']);
+    expect(group.models.map((m) => m.id)).toEqual(['GLM-4.6', 'GLM-5.2', 'GLM-5.3']);
     // 并入的默认模型仍带预设的上下文窗口标注。
-    expect(group.contextWindows?.['glm-5.3']).toBe(1_000_000);
+    expect(group.contextWindows?.['GLM-5.3']).toBe(1_000_000);
     expect(group.error).toBeUndefined();
   });
 
@@ -78,7 +79,7 @@ describe('listProviderModels', () => {
       label: 'GLM',
       baseURL: 'https://open.bigmodel.cn/api/coding/paas/v4',
       apiKey: 'k',
-      model: 'glm-5.2',
+      model: 'GLM-5.2',
       headers: {},
       contextWindow: 128_000,
       parallelToolCalls: true,
@@ -86,9 +87,9 @@ describe('listProviderModels', () => {
       sdk: 'openai-compatible',
     };
     const merged = await listModels(builtin, {
-      fetchImpl: routedFetch({ 'open.bigmodel.cn': { ids: ['glm-5.2'] } }),
+      fetchImpl: routedFetch({ 'open.bigmodel.cn': { ids: ['GLM-5.2'] } }),
     });
-    expect(merged.map((m) => m.id)).toEqual(['glm-5.2', 'glm-5.3']);
+    expect(merged.map((m) => m.id)).toEqual(['GLM-5.2', 'GLM-5.3']);
 
     const custom: Parameters<typeof listModels>[0] = {
       ...builtin,
@@ -110,13 +111,13 @@ describe('listProviderModels', () => {
       env: { MY_GLM_KEY: 'glm-key' },
       fetchImpl: routedFetch({
         'api.moonshot.cn': { ids: ['kimi-k3'] },
-        'open.bigmodel.cn': { ids: ['glm-5.3'] },
+        'open.bigmodel.cn': { ids: ['GLM-5.3'] },
       }),
     });
     // resolveProvider 支持 providers.glm.apiKeyEnv 指自定义变量,能切过去
     // 的厂商就必须能被列出来。
     expect(groups.map((g) => g.providerId)).toEqual(['kimi', 'glm']);
-    expect(groups[1]?.models.map((m) => m.id)).toEqual(['glm-5.3']);
+    expect(groups[1]?.models.map((m) => m.id)).toEqual(['GLM-5.3']);
   });
 
   it('共享 env 变量扫进的兄弟厂商被判 401 时整组丢弃', async () => {
@@ -127,7 +128,7 @@ describe('listProviderModels', () => {
       env: { ZHIPU_API_KEY: 'coding-plan-key' },
       fetchImpl: routedFetch({
         'api.moonshot.cn': { ids: ['kimi-k3'] },
-        'open.bigmodel.cn/api/coding': { ids: ['glm-5.3'] },
+        'open.bigmodel.cn/api/coding': { ids: ['GLM-5.3'] },
         'open.bigmodel.cn/api/paas': { status: 401 },
         'api.z.ai': { status: 401 },
       }),
@@ -214,7 +215,7 @@ describe('listProviderModels', () => {
     const group = groups[0]!;
     expect(group.error).toContain('500');
     expect(group.models.length).toBeGreaterThan(0);
-    expect(group.models[0]?.id).toBe('glm-5.3');
+    expect(group.models[0]?.id).toBe('GLM-5.3');
   });
 
   it('探测失败且无预设兜底(自定义端点)时 models 为空、原因仍在', async () => {

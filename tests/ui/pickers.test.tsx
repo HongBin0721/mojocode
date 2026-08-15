@@ -38,7 +38,7 @@ const pickerGroups = [
   {
     providerId: 'glm',
     label: 'GLM',
-    models: [{ id: 'glm-5.3' }, { id: 'glm-5.2' }],
+    models: [{ id: 'GLM-5.3' }, { id: 'GLM-5.2' }],
   },
 ];
 
@@ -87,15 +87,15 @@ describe('ModelsPicker', () => {
       ),
       { width: 60, height: 16 },
     );
-    await ui.type('glm-5.3');
+    await ui.type('GLM-5.3');
     const frame = ui.frame();
-    expect(frame).toContain('glm-5.3');
+    expect(frame).toContain('GLM-5.3');
     expect(frame).not.toContain('kimi-k3');
-    expect(frame).not.toContain('glm-5.2');
+    expect(frame).not.toContain('GLM-5.2');
 
     // 光标跳到首个匹配行,回车即选 glm 组的模型。
     await ui.press('return');
-    expect(picked).toEqual([['glm', 'glm-5.3']]);
+    expect(picked).toEqual([['glm', 'GLM-5.3']]);
     await ui.destroy();
   });
 
@@ -115,7 +115,7 @@ describe('ModelsPicker', () => {
     await ui.type('kimi');
     expect(ui.frame()).toContain('kimi-k3');
     expect(ui.frame()).toContain('kimi-k2.6');
-    expect(ui.frame()).not.toContain('glm-5.3');
+    expect(ui.frame()).not.toContain('GLM-5.3');
 
     // 清词重搜:没有匹配时提示,esc 先清搜索再关闭。
     await ui.press('backspace');
@@ -164,12 +164,12 @@ describe('ModelsPicker', () => {
     );
     // 光标在 kimi-k2.6(序号 2);下移一次到 GLM 组头(序号 3)。
     await ui.press('down');
-    expect(ui.frame()).toContain('glm-5.3');
+    expect(ui.frame()).toContain('GLM-5.3');
     await ui.press('return');
     // 折叠后 GLM 组只留组头,模型行消失。
-    expect(ui.frame()).not.toContain('glm-5.3');
+    expect(ui.frame()).not.toContain('GLM-5.3');
     await ui.press('return');
-    expect(ui.frame()).toContain('glm-5.3');
+    expect(ui.frame()).toContain('GLM-5.3');
     await ui.destroy();
   });
 
@@ -193,7 +193,7 @@ describe('ModelsPicker', () => {
     await ui.press('return');
     // esc 清词后 GLM 组的模型行必须还在——搜索中的折叠切换被忽略。
     await ui.press('escape');
-    expect(ui.frame()).toContain('glm-5.3');
+    expect(ui.frame()).toContain('GLM-5.3');
     await ui.destroy();
   });
 
@@ -215,9 +215,9 @@ describe('ModelsPicker', () => {
     // 光标序号 2 → 下移到垫底的手动行(序号 6)。
     for (let i = 0; i < 4; i++) await ui.press('down');
     await ui.press('return');
-    await ui.type('glm-5.3-air');
+    await ui.type('GLM-5.3-air');
     await ui.press('return');
-    expect(picked).toEqual([['kimi', 'glm-5.3-air']]);
+    expect(picked).toEqual([['kimi', 'GLM-5.3-air']]);
     await ui.destroy();
   });
 
@@ -327,7 +327,7 @@ describe('ModelPicker', () => {
       () => (
         <ModelPicker
           title="Models"
-          models={[{ id: 'glm-5.2' }]}
+          models={[{ id: 'GLM-5.2' }]}
           allowManual={true}
           onPick={(id) => picked.push(id)}
           onCancel={() => {}}
@@ -340,9 +340,9 @@ describe('ModelPicker', () => {
     // 下移到手动输入行并回车,进入内嵌输入态。
     await ui.press('down');
     await ui.press('return');
-    await ui.type('glm-5.3-air');
+    await ui.type('GLM-5.3-air');
     await ui.press('return');
-    expect(picked).toEqual(['glm-5.3-air']);
+    expect(picked).toEqual(['GLM-5.3-air']);
     await ui.destroy();
   });
 

@@ -539,11 +539,11 @@ describe('子任务过程记录(kind: task)', () => {
 
 describe('轮末用量记录(kind: usage)', () => {
   it('saveUsage / readUsage 往返;open() 恢复回放不受影响', async () => {
-    const store = await SessionStore.create({ root: '/w', provider: 'glm-coding', model: 'glm-5.2', dir });
+    const store = await SessionStore.create({ root: '/w', provider: 'glm-coding', model: 'GLM-5.2', dir });
     await store.save([msg('user', '你好'), msg('assistant', '在')]);
     await store.saveUsage({
       provider: 'glm-coding',
-      model: 'glm-5.2',
+      model: 'GLM-5.2',
       inputTokens: 45_600,
       outputTokens: 800,
       cachedInputTokens: 12_300,
