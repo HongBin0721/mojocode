@@ -672,36 +672,10 @@ export function Input(props: Props): JSX.Element {
   return (
     <Show when={selector()} keyed fallback={
       <Box flexDirection="column">
-        <Box borderStyle="round" borderColor={borderColor()} paddingX={1}>
-          <Text color={promptColor()}>{modeStyle().glyph} </Text>
-          <Show
-            when={value().length > 0}
-            fallback={
-              <Text>
-                {!props.disabled ? <Text inverse> </Text> : null}
-                <Text color={theme.dim}>{props.placeholder}</Text>
-              </Text>
-            }
-          >
-            <Box flexDirection="column">
-              <For each={lines()}>
-                {(line, i) => (
-                  <Text>
-                    {i() === cursorRow() ? (
-                      <>
-                        {line.slice(0, cursorCol())}
-                        <Text inverse>{line[cursorCol()] ?? ' '}</Text>
-                        {line.slice(cursorCol() + 1)}
-                      </>
-                    ) : (
-                      line || ' '
-                    )}
-                  </Text>
-                )}
-              </For>
-            </Box>
-          </Show>
-        </Box>
+        {/* 两个补全菜单都渲染在输入框上方:菜单向下展开会把输入框顶离屏幕
+            底部(敲一个 `/` 输入框就跳一下),向上展开则只是压缩时间线,
+            输入框与 Footer 始终贴底不动。菜单块内顺序不变——moreAbove 在
+            顶部、提示行在底部,提示行因此正好贴住输入框边框。 */}
         <Show when={matches().length > 0}>
           {/* 滚轮挂在容器上,整块菜单区域都是命中区(事件从行上冒泡过来)。 */}
           <Box
@@ -782,6 +756,38 @@ export function Input(props: Props): JSX.Element {
             </Show>
           </Box>
         </Show>
+        <Box borderStyle="round" borderColor={borderColor()} paddingX={1}>
+          <Text color={promptColor()}>{modeStyle().glyph} </Text>
+          <Show
+            when={value().length > 0}
+            fallback={
+              <Text>
+                {!props.disabled ? <Text inverse> </Text> : null}
+                <Text color={theme.dim}>{props.placeholder}</Text>
+              </Text>
+            }
+          >
+            <Box flexDirection="column">
+              <For each={lines()}>
+                {(line, i) => (
+                  <Text>
+                    {i() === cursorRow() ? (
+                      <>
+                        {line.slice(0, cursorCol())}
+                        <Text inverse>{line[cursorCol()] ?? ' '}</Text>
+                        {line.slice(cursorCol() + 1)}
+                      </>
+                    ) : (
+                      line || ' '
+                    )}
+                  </Text>
+                )}
+              </For>
+            </Box>
+          </Show>
+        </Box>
+        {/* 状态提示行(已附图片/换行说明)是输入框自身的附属说明而非弹出
+            菜单,保持在输入框下方——它们常驻整个编辑期间,不会开关跳变。 */}
         <Show when={pastedImages().size > 0}>
           <Box paddingLeft={2}>
             <Text color={theme.dim}>{t('input.imagesAttached', { n: pastedImages().size })}</Text>

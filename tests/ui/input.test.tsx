@@ -491,8 +491,10 @@ describe('滚轮滚列表', () => {
     const ui = await p;
     await ui.type('/');
 
-    // 第 0 行是输入框那一块,在菜单容器之外。
-    await ui.scroll(4, 0, 'down');
+    // 菜单在输入框上方:输入框边框那行(`╭` 起头)在菜单容器之外。
+    const y = ui.frame().split('\n').findIndex((line) => line.includes('╭'));
+    expect(y).toBeGreaterThanOrEqual(0);
+    await ui.scroll(4, y, 'down');
     await ui.press('return');
 
     expect(submitted).toEqual(['/cmd01']);
