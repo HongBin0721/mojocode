@@ -1,0 +1,148 @@
+import { resolveProvider, type ResolvedProvider } from '../../config/load.js';
+import { PROVIDER_PRESETS, isBuiltinProvider } from '../../config/providers.js';
+import type { Config } from '../../config/schema.js';
+import { t } from '../../i18n/index.js';
+import { probeModels } from '../../model/registry.js';
+import type { DoctorCheck } from './types.js';
+import { NETWORK_TIMEOUT_MS, mask } from './util.js';
+
+export async function providerChecks(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  offline: boolean,
+  fetchImpl?: typeof fetch,
+): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+  const id = config.provider;
+  const preset = isBuiltinProvider(id) ? PROVIDER_PRESETS[id] : undefined;
+  const override = config.providers[id] ?? {};
+
+  // 完整解析可能因为缺 key / 缺 baseURL / 缺 model 失败——那些都是要报告的
+  // 结论,而不是中止体检的理由。失败时退回逐项展示已知信息。
+  let resolved: ResolvedProvider | undefined;
+  let resolveError: string | undefined;
+  try {
+    resolved = resolveProvider(config, env);
+  } catch (error) {
+    resolveError = error instanceof Error ? error.message : String(error);
+  }
+
+  const baseURL = resolved?.baseURL ?? override.baseURL ?? preset?.baseURL;
+  checks.push({
+    id: 'provider',
+    label: t('doctor.check.provider'),
+    level: baseURL ? 'ok' : 'fail',
+    detail: baseURL
+      ? `${id} · ${resolved?.label ?? override.label ?? preset?.label ?? id} · ${baseURL}`
+      : id,
+    ...(baseURL ? {} : { hint: t('doctor.providerUnknown', { list: Object.keys(PROVIDER_PRESETS).join(', ') }) }),
+  });
+
+  // 顺序要和 resolveProvider 一致:自定义的 apiKeyEnv 先试,没设值时**仍然**
+  // 回落到预设那几个变量。只列自定义那一个的话,密钥其实来自 DEEPSEEK_API_KEY
+  // 时这一行会没有来源可写,缺密钥时给的提示也会漏掉真正管用的变量名。
+  const envNames = [
+    ...(override.apiKeyEnv ? [override.apiKeyEnv] : []),
+    ...(preset?.apiKeyEnv ?? []).filter((name) => name !== override.apiKeyEnv),
+  ];
+  const envName = envNames.find((name) => env[name]?.trim());
+  const keySource = override.apiKey
+    ? t('doctor.keyFromConfig', { path: `providers.${id}.apiKey` })
+    : envName
+      ? t('doctor.keyFromEnv', { name: envName })
+      : undefined;
+  const apiKey = resolved?.apiKey ?? override.apiKey ?? (envName ? env[envName]?.trim() : undefined);
+  checks.push({
+    id: 'apiKey',
+    label: t('doctor.check.apiKey'),
+    level: apiKey ? 'ok' : 'fail',
+    detail: apiKey ? `${keySource ?? ''} ${mask(apiKey)}`.trim() : t('doctor.keyMissing'),
+    ...(apiKey
+      ? {}
+      : {
+          hint: t('doctor.keyHint', {
+            envs: envNames.length > 0 ? envNames.join(' | ') : `providers.${id}.apiKey`,
+          }),
+        }),
+  });
+
+  const model = resolved?.model ?? config.model ?? override.model ?? preset?.defaultModel;
+  checks.push({
+    id: 'model',
+    label: t('doctor.check.model'),
+    level: model ? 'ok' : 'fail',
+    detail: model
+      ? `${model} · ${t('doctor.contextWindow', { n: String(resolved?.contextWindow ?? config.maxContext ?? override.contextWindow ?? preset?.defaultContextWindow ?? 0) })}`
+      : t('doctor.modelMissing'),
+    ...(model ? {} : { hint: t('doctor.modelHint', { id }) }),
+  });
+
+  if (!resolved) {
+    // baseURL/key/model 三行已经把原因说清楚了;这里只在还有别的解析错误时补一条。
+    if (resolveError && apiKey && baseURL && model) {
+      checks.push({
+        id: 'providerResolve',
+        label: t('doctor.check.provider'),
+        level: 'fail',
+        detail: resolveError,
+      });
+    }
+    return checks;
+  }
+
+  if (offline) {
+    checks.push({
+      id: 'endpoint',
+      label: t('doctor.check.endpoint'),
+      level: 'info',
+      detail: t('doctor.skippedOffline'),
+    });
+    return checks;
+  }
+
+  const target = resolved;
+  const probe = await probeModels(target, {
+    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+    ...(fetchImpl ? { fetchImpl } : {}),
+  });
+  const ms = `${probe.durationMs}ms`;
+
+  if (probe.ok) {
+    const models = probe.models ?? [];
+    checks.push({
+      id: 'endpoint',
+      label: t('doctor.check.endpoint'),
+      level: 'ok',
+      detail: t('doctor.endpointOk', { n: String(models.length), ms }),
+    });
+    // 端点给了列表却没有当前模型:多半是模型 id 过期(README 反复强调的坑)。
+    if (models.length > 0 && !models.some((m) => m.id === target.model)) {
+      checks.push({
+        id: 'modelListed',
+        label: t('doctor.check.modelListed'),
+        level: 'warn',
+        detail: t('doctor.modelUnlisted', { model: target.model }),
+        hint: t('doctor.modelUnlistedHint', { id: target.id }),
+      });
+    }
+    return checks;
+  }
+
+  // 401/403 是密钥问题,必修;404/405 与形状不对(200 但没有 data 数组)只说明
+  // 这个端点不提供模型列表,对话本身可能完全正常(自建网关常见),报告为告警。
+  const status = probe.status;
+  const authFailure = status === 401 || status === 403;
+  const noListing = status === 404 || status === 405 || status === 200;
+  checks.push({
+    id: 'endpoint',
+    label: t('doctor.check.endpoint'),
+    level: authFailure || !noListing ? 'fail' : 'warn',
+    detail: `${probe.error ?? ''} · ${ms}`,
+    hint: authFailure
+      ? t('doctor.endpointAuthHint', { id: target.id })
+      : noListing
+        ? t('doctor.endpointNoListingHint')
+        : t('doctor.endpointFailHint'),
+  });
+  return checks;
+}
