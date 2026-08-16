@@ -1445,9 +1445,9 @@ html.platform-darwin .app-overlay {
 }
 .composer-box:focus-within {
   border-color: var(--color-border-hover);
-  background: var(--color-input-focused);
   box-shadow: 0 0 0 1px var(--color-border-hover);
 }
+/* 聚焦只抬边框,底色保持不变(不换 input-focused 深底) */
 /* 拖附件悬停:品牌色边框 + 内发光(ZCode file-drag 态) */
 .composer-box-dragging {
   border-color: var(--color-brand);
