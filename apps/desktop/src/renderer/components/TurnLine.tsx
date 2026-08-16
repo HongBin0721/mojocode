@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { useLocale, t } from '../i18n/index.js';
 import { formatDuration, formatTokens, percent } from '../utils/format.js';
 
 export function TurnLine({
@@ -19,8 +20,11 @@ export function TurnLine({
   inputTokens?: number;
   cachedTokens?: number;
 }) {
+  useLocale(); // 语言切换时缓存段文案重算。
   const cacheNote =
-    cachedTokens !== undefined && inputTokens ? ` · ${percent(cachedTokens, inputTokens)}% cache` : '';
+    cachedTokens !== undefined && inputTokens
+      ? t('turn.cacheHit', { percent: percent(cachedTokens, inputTokens) })
+      : '';
   return (
     <div className="turn-line">
       {model} · {formatDuration(durationMs)} · {formatTokens(tokens)} tokens{cacheNote}

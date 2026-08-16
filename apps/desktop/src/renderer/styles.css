@@ -438,11 +438,6 @@ html.platform-darwin .app-overlay {
   container: chat / inline-size;
 }
 
-.review-pane-slot {
-  flex: none;
-  min-width: 0;
-}
-
 /* 会话列内容行:默认全宽留边,≥864/≥1136 容器宽时按 ZCode 公式收窄居中 */
 .conv-col {
   width: 100%;
@@ -594,6 +589,11 @@ html.platform-darwin .app-overlay {
 .banner-title {
   font-weight: 600;
   color: var(--color-foreground-subtle);
+}
+.banner-model {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-foreground-subtlest);
 }
 .banner-mode {
   padding: 1px 8px;
