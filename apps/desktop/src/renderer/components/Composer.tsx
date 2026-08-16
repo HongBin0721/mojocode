@@ -306,24 +306,25 @@ export function Composer() {
                 />
               </MenuPopover>
             ) : null}
-            {snapshot ? (
-              <MenuPopover
-                label={
-                  <span className="composer-tool">
-                    {snapshot.provider.model}
-                    <span className="composer-caret">⌄</span>
-                  </span>
-                }
-                title={t('modelMenu.title')}
-                width={360}
-                requestOpen={modelMenuRequest}
-                placement="top"
-              >
-                <ModelMenuList />
-              </MenuPopover>
-            ) : null}
           </div>
           <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
+          {/* 模型选择器:发送键左侧(ZCode 的 betweenCancelAndSubmitAction 位) */}
+          {snapshot ? (
+            <MenuPopover
+              label={
+                <span className="composer-tool">
+                  {snapshot.provider.model}
+                  <span className="composer-caret">⌄</span>
+                </span>
+              }
+              title={t('modelMenu.title')}
+              width={360}
+              requestOpen={modelMenuRequest}
+              placement="top"
+            >
+              <ModelMenuList />
+            </MenuPopover>
+          ) : null}
           <button
             type="button"
             className="composer-send"
