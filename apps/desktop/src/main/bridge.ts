@@ -177,6 +177,8 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return session.setPermissions(request.permissions);
       case 'setPlan':
         return session.setPlan(request.active);
+      case 'setReasoningEffort':
+        return session.setReasoningEffort(request.level);
       case 'listSessions':
         return session.listSessions();
       case 'listProviderModels':

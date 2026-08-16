@@ -16,7 +16,7 @@
 
 import type { serializeEvent, StateSnapshot } from '@core/protocol';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '@core/events';
-import type { Permissions } from '@core/schema';
+import type { Permissions, ReasoningEffort } from '@core/schema';
 import type { ImageAttachment } from '@core/attachments';
 import type { TimelineItem } from '@core/types';
 
@@ -101,6 +101,7 @@ export type RpcRequest =
   | { kind: 'switch'; change: { provider?: string; model?: string; apiKey?: string } }
   | { kind: 'setPermissions'; permissions: Permissions }
   | { kind: 'setPlan'; active: boolean }
+  | { kind: 'setReasoningEffort'; level: ReasoningEffort }
   | { kind: 'listSessions' }
   | { kind: 'listProviderModels' }
   | { kind: 'runSkill'; name: string; args: string; display?: string }

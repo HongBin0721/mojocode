@@ -20,10 +20,12 @@ import {
   type CommandEntry,
 } from '../commands/index.js';
 import { cyclePermissionsRpc, isDangerousMode, permissionBadgeLabel, permissionMenuEntries } from '../commands/permissions.js';
+import { reasoningMenuEntries, setReasoningRpc } from '../commands/reasoning.js';
 import { SlashMenu } from './SlashMenu.js';
 import { MenuPopover } from './Menu.js';
 import { ModelMenuList } from './ModelMenu.js';
 import { PermissionMenuList } from './PermissionMenu.js';
+import { ReasoningMenuList } from './ReasoningMenu.js';
 
 /** 剪贴板/拖入的图片文件 → ImageAttachment(base64)。 */
 async function toAttachment(file: File, index: number): Promise<ImageAttachment> {
@@ -78,6 +80,7 @@ export function Composer() {
   const flash = useFlash(badge);
   const dangerous = mode ? isDangerousMode(mode) : false;
   const permissionEntries = mode ? permissionMenuEntries(mode) : [];
+  const effort = snapshot?.provider.reasoningEffort;
 
   const slash = slashState(text);
   const entries = useMemo(() => {
@@ -303,6 +306,25 @@ export function Composer() {
                     if (id === 'plan') rpc({ kind: 'setPlan', active: true });
                     else rpc({ kind: 'setPermissions', permissions: presetById(id) });
                   }}
+                />
+              </MenuPopover>
+            ) : null}
+            {/* 思考强度:左组第二位(ZCode 的 Reasoning effort 位) */}
+            {effort ? (
+              <MenuPopover
+                label={
+                  <span className="composer-tool" title={t('reasoningMenu.title')}>
+                    <span aria-hidden>✦</span>
+                    {effort}
+                  </span>
+                }
+                title={t('reasoningMenu.title')}
+                width={280}
+                placement="top"
+              >
+                <ReasoningMenuList
+                  entries={reasoningMenuEntries(effort)}
+                  onPick={(level) => rpc(setReasoningRpc(level))}
                 />
               </MenuPopover>
             ) : null}
