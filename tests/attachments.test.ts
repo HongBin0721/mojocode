@@ -126,13 +126,38 @@ describe('expandAtReferences / unwrapAttachments', () => {
     ]);
   });
 
+  // absolutePath 是 sandbox 的 realpath 结果(macOS 的 /var → /private/var)。
+  const realImg = async (): Promise<string> => fs.realpath(path.join(root, 'img.png'));
+
   it('@图片附成 images,不进文本信封,expanded 与原文相等', async () => {
     const text = '看这张图 @img.png';
     const result = await expandAtReferences(text, { root });
     expect(result.expanded).toBe(text);
     expect(result.attached).toEqual(['img.png']);
     expect(result.images).toEqual([
-      { mediaType: 'image/png', data: PNG_BYTES.toString('base64'), filename: 'img.png' },
+      {
+        mediaType: 'image/png',
+        data: PNG_BYTES.toString('base64'),
+        filename: 'img.png',
+        absolutePath: await realImg(),
+      },
+    ]);
+  });
+
+  // reference 模式(当前模型不吃图):只记路径不读内容——data 是哨兵空串,
+  // 消费方(Agent.prepareUserMessage)据此走文件引用降级。
+  it('reference 模式下 @图片只记路径,data 为空串', async () => {
+    const text = '看这张图 @img.png';
+    const result = await expandAtReferences(text, { root, imageMode: 'reference' });
+    expect(result.expanded).toBe(text);
+    expect(result.attached).toEqual(['img.png']);
+    expect(result.images).toEqual([
+      {
+        mediaType: 'image/png',
+        data: '',
+        filename: 'img.png',
+        absolutePath: await realImg(),
+      },
     ]);
   });
 

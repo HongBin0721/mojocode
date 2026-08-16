@@ -1,3 +1,4 @@
+import type { LanguageModel } from 'ai';
 import type { PermissionGate } from '../permissions/gate.js';
 import type { EventBus } from '../core/events.js';
 import type { Permissions, PermissionRules } from '../config/schema.js';
@@ -28,6 +29,13 @@ export interface ToolContext {
    * (与 bootstrap 里 GoalController 的 evaluatorModel 同一手法)。
    */
   searchBackend: () => ResolvedSearchBackend | undefined;
+  /**
+   * view_image 工具的视觉模型(读图返回文字描述)。惰性 getter 而非构造
+   * 好的实例,理由同 searchBackend:visionModel 解析依赖 config 与当前
+   * provider,两者都会被 switchProvider 就地改。解析不出(无配置且 provider
+   * 预设没有 visionModel)时为 undefined——工具随之不注册。
+   */
+  visionModel: () => LanguageModel | undefined;
   /**
    * 方案获批后退出计划模式并还原两轴权限,返回还原到的组合。由 bootstrap
    * 注入(它才够得着系统提示词重建与会话持久化);目前只有 exit_plan 调用。

@@ -56,6 +56,10 @@ async function setup(options?: { isRunning?: boolean }) {
       plan: false,
       statusBar: [],
       permissions: { denyPath: [] },
+      // 让 test provider 被判为视觉模型:@图按 inline 展开(直发语义),
+      // 与本文件"图片原样进 options.images"的断言一致。reference 模式的
+      // 降级链路由 agent-loop.test.ts 的非视觉 describe 覆盖。
+      providers: { test: { vision: true } },
     },
     provider,
     agent: {
@@ -145,7 +149,12 @@ describe('提交时展开 @文件引用', () => {
     expect(text).toBe('看图 @img.png');
     expect(options?.display).toBeUndefined();
     expect(options?.images).toEqual([
-      { mediaType: 'image/png', data: PNG_BYTES.toString('base64'), filename: 'img.png' },
+      {
+        mediaType: 'image/png',
+        data: PNG_BYTES.toString('base64'),
+        filename: 'img.png',
+        absolutePath: await fs.realpath(path.join(root, 'img.png')),
+      },
     ]);
     await ui.destroy();
   });

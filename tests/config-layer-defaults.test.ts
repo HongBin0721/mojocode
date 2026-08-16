@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadRawConfig } from '../src/config/load.js';
+import { isVisionModel } from '../src/config/providers.js';
 import {
   configSchema,
   lspConfigSchema,
@@ -120,5 +121,60 @@ describe('分层 schema 与全量 schema 保持同步(parity)', () => {
     expect(partialConfigSchema.parse({})).toEqual({});
     expect(searchLayerSchema.parse({})).toEqual({});
     expect(lspLayerSchema.parse({})).toEqual({});
+  });
+});
+
+describe('visionModel 配置层', () => {
+  let home: string;
+  let root: string;
+
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-ld-home-'));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-ld-root-'));
+    process.env.HOME = home;
+  });
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('MOJOCODE_VISION_MODEL 环境变量进入顶层配置', async () => {
+    const { config } = await loadRawConfig({ root, env: { MOJOCODE_VISION_MODEL: 'glm-4.5v' } });
+    expect(config.visionModel).toBe('glm-4.5v');
+  });
+
+  it('未设置时无幻影默认值——回落预设的判断在消费侧而非配置层', async () => {
+    const { config } = await loadRawConfig({ root, env: {} });
+    expect(config.visionModel).toBeUndefined();
+  });
+
+  it('providers.<id>.vision 显式覆盖视觉判定', async () => {
+    const parsed = configSchema.parse({
+      provider: 'deepseek',
+      providers: { deepseek: { vision: true } },
+    });
+    expect(parsed.providers.deepseek?.vision).toBe(true);
+  });
+});
+
+describe('isVisionModel 语义', () => {
+  it('override 优先于一切,两个方向都生效', () => {
+    expect(isVisionModel('glm', 'GLM-5.3', false)).toBe(false);
+    expect(isVisionModel('deepseek', 'deepseek-v4-flash', true)).toBe(true);
+  });
+
+  it('GLM 前缀表大小写不敏感,覆盖变体后缀', () => {
+    expect(isVisionModel('glm', 'glm-4.6v')).toBe(true);
+    expect(isVisionModel('glm-coding', 'GLM-4.6V-TURBO')).toBe(true);
+    expect(isVisionModel('glm', 'GLM-5.3')).toBe(false);
+  });
+
+  it('deepseek 空表显式非视觉;kimi 无表乐观直发', () => {
+    expect(isVisionModel('deepseek', 'deepseek-v4-pro')).toBe(false);
+    expect(isVisionModel('kimi', 'kimi-k2.6')).toBe(true);
+  });
+
+  it('自定义 provider 一无所知,乐观沿用旧版直发行为', () => {
+    expect(isVisionModel('my-proxy', 'some-model')).toBe(true);
   });
 });

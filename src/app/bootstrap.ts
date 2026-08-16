@@ -4,6 +4,12 @@ import { GoalController } from '../agent/goal.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
 import { resolveSearchBackend } from '../config/search.js';
+import { imagesDir } from '../config/paths.js';
+import {
+  providerModelIsVision,
+  resolveVisionModelId,
+} from '../config/providers.js';
+import { createViewImageTool } from '../tools/view-image.js';
 import {
   planReturnFor,
   type Config,
@@ -292,14 +298,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 惰性 getter,理由同下方 GoalController 的 evaluatorModel:config 会被
     // switchProvider/applyPermissions 就地修改,现取现算才拿到当下的值。
     searchBackend: () => resolveSearchBackend(config, process.env),
+    // view_image 的视觉模型:顶层 visionModel 覆盖,缺省回落内置预设
+    // (GLM 系给 glm-4.6v;deepseek SDK 的转换器丢图片 part,一律不解析,
+    // 见 resolveVisionModelId)。原样发往端点、不经 normalizeModelId——同
+    // taskProvider 的先例;provider 是下方 switchProvider 会重赋的闭包
+    // 变量,现取现建才不会打向被换掉的服务端。解析不出则工具不注册。
+    visionModel: () => {
+      const id = resolveVisionModelId(provider.id, config);
+      return id === undefined ? undefined : createModel({ ...provider, model: id });
+    },
     // applyPermissions 在下方才定义,但这个回调要到工具执行时才被调用,那时
     // 早已就绪——与上面 snapshotState 闭包 gate/store 是同一手法。
     exitPlanMode: (): Permissions => {
       applyPermissions(planReturn.perms, { plan: false, promoted: planReturn.promoted });
       return planReturn.perms;
     },
-    extraReadRoots: () => [...skillActivation.extraReadRoots],
+    extraReadRoots: () => [imagesDir(), ...skillActivation.extraReadRoots],
   };
+  // 粘贴图的落盘目录(view_image 的只读扩根之一)。提前建好使 resolveReadable
+  // 的 realpath 比对稳定;失败不打扰——目录不存在时扩根会被跳过,降级
+  // 落盘那一刻的 mkdir 才是真正的兜底。
+  void fs.mkdir(imagesDir(), { recursive: true }).catch(() => {});
 
   const skillManager = new SkillManager({ root });
 
@@ -358,7 +377,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // skill 留下是安全的:它只返回文本、登记只读扩根,子 agent 激活不确认,
     // 所以永远不会在 explore 里弹出确认框——这个耦合破了就得把它移出白名单。
     const picked: ToolSet = {};
-    for (const name of ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'skill']) {
+    for (const name of ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'view_image', 'skill']) {
       const t_ = (general as ToolSet)[name];
       if (t_) picked[name] = t_;
     }
@@ -377,6 +396,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         permissions: { sandbox: config.sandbox, approval: config.approval },
         plan: false,
         webSearch: webSearchAvailable,
+        viewImage: viewImageFor(taskProvider()),
       },
       config.systemPromptAppend,
     );
@@ -448,6 +468,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
   // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
   const webSearchAvailable = 'web_search' in tools;
+  let viewImageAvailable = 'view_image' in tools;
+  /**
+   * /provider 切换后同步 view_image 的注册状态(照 syncSkillTool 的原地改键:
+   * tools 与运行中的 Agent 共享引用,重建对象它看不见)。web_search 是启动时
+   * 的一次性事实(搜索后端不随 provider 切换),view_image 的解析随 provider
+   * 变——不同步会让信封和系统提示词指着一个 execute 会抛错的工具(或反之,
+   * 视觉模型降级到"读不到"的信封直到重启)。
+   */
+  const syncViewImageTool = (): void => {
+    const want = toolContext.visionModel() !== undefined;
+    viewImageAvailable = want;
+    if (want) (tools as ToolSet).view_image = createViewImageTool(toolContext);
+    else delete (tools as ToolSet).view_image;
+  };
+  /**
+   * view_image 的系统提示词陈述条件:工具已注册,**且**该提示词对应的模型
+   * 自己看不了图——视觉主力模型收到的是内联图片,再说"你看不到图"只会
+   * 让它对着已经在手上的图去调工具。子代理按 taskProvider() 的模型判定。
+   */
+  const viewImageFor = (p: ResolvedProvider): boolean =>
+    viewImageAvailable && !providerModelIsVision(p, config);
 
   let skillDigest = skillManager.digest();
   /**
@@ -487,6 +528,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         permissions: { sandbox: config.sandbox, approval: config.approval },
         plan: config.plan,
         webSearch: webSearchAvailable,
+        viewImage: viewImageFor(provider),
       },
       config.systemPromptAppend,
     ),
@@ -569,6 +611,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     config.model = next.model;
     provider = next;
     agent.updateModel(createModel(next), next);
+    // 视觉模型的可解析性随 provider 变(deepseek/无预设的端点解析不出):
+    // 同步工具注册,信封与后续系统提示词重建才与新 provider 一致。
+    syncViewImageTool();
     // meta 的 provider/model 现在纯粹是给会话列表看的("这段对话用的什么
     // 模型"),不跟着切就会一直停在创建时的值。
     store.setModel(next.id, next.model);
@@ -596,7 +641,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     agent.updateSystemPrompt(
       buildSystemPrompt(
         env,
-        { permissions, plan: opts.plan, webSearch: webSearchAvailable },
+        { permissions, plan: opts.plan, webSearch: webSearchAvailable, viewImage: viewImageFor(provider) },
         config.systemPromptAppend,
       ),
     );
@@ -812,6 +857,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
             permissions: { sandbox: config.sandbox, approval: config.approval },
             plan: config.plan,
             webSearch: webSearchAvailable,
+            viewImage: viewImageFor(provider),
           },
           config.systemPromptAppend,
         ),

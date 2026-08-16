@@ -120,6 +120,8 @@ export interface PromptPermissions {
   plan: boolean;
   /** web_search 是否注册了(取决于搜索后端有没有 key)。web_fetch 恒在。 */
   webSearch?: boolean;
+  /** view_image 是否注册了(取决于有没有解析出视觉模型)。 */
+  viewImage?: boolean;
 }
 
 export function buildSystemPrompt(
@@ -142,6 +144,9 @@ export function buildSystemPrompt(
             approval === 'never' ? ' — nothing outside the sandbox can be escalated; it just fails' : ''
           }`,
       `- Web tools: ${perms.webSearch ? 'web_search and web_fetch' : 'web_fetch'} available; each new domain needs the user's approval unless previously allowed`,
+      perms.viewImage
+        ? '- Images: user messages may reference attached image files by path; use the view_image tool to read one (you cannot see images directly)'
+        : '',
       env.projectFiles.length > 0 ? `- Top-level entries: ${env.projectFiles.join(', ')}` : '',
     ]
       .filter(Boolean)

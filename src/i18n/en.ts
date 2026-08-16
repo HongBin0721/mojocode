@@ -115,6 +115,7 @@ export const en = {
   'sum.webSearch': '{n} results via {backend}',
   'sum.webSearchEmpty': 'no results',
   'sum.webFetch': 'fetched {chars} chars',
+  'sum.viewImage': 'viewed image, {chars} chars',
   'sum.webFetchUnsupported': 'unsupported content type',
   'sum.webFetchStatus': 'HTTP {status}',
   'sum.webTimeout': 'timed out',
@@ -208,7 +209,14 @@ export const en = {
   'notice.imageTooLarge': 'Clipboard image is too large (5MB max).',
   'notice.imagesTooLarge': 'Pending images exceed the total size limit (10MB max).',
   'notice.tooManyImages': 'Too many pending images ({n} max).',
-  'notice.providerNoVision': 'This provider ignores images — the model will not see them.',
+  'notice.imagesDeferred':
+    'The current model cannot view images directly; they were attached as file references the model reads with the view_image tool.',
+  'notice.imagesDeferredNoTool':
+    'The current model cannot view images directly and no vision model is configured — attached images are saved as files but cannot be read.',
+  'notice.imageSaveFailed':
+    'Some attached images could not be saved and were dropped from the message.',
+  'notice.providerNoVision':
+    'The deepseek SDK silently drops image parts — the model will not see them.',
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
   'notice.cannedBusy': 'A review/cleanup command is still preparing — send messages in a moment.',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
@@ -418,6 +426,7 @@ export const en = {
   'doctor.check.provider': 'Provider',
   'doctor.check.apiKey': 'API key',
   'doctor.check.model': 'Model',
+  'doctor.check.vision': 'Vision model',
   'doctor.check.endpoint': 'Endpoint',
   'doctor.check.modelListed': 'Model listing',
   'doctor.check.mode': 'Mode',
@@ -446,6 +455,11 @@ export const en = {
   'doctor.contextWindow': 'context {n}',
   'doctor.modelMissing': 'not configured',
   'doctor.modelHint': 'Set providers.{id}.model or pass --model.',
+  'doctor.visionOk': '{model} (reads images for the view_image tool)',
+  'doctor.visionNotNeeded': 'current model accepts images directly',
+  'doctor.visionNone': 'no vision model — attached images degrade to unread file references',
+  'doctor.visionNoneHint':
+    'Set visionModel (or MOJOCODE_VISION_MODEL) to a multimodal model id of this provider ({id}) — check its docs for which models accept image input.',
   'doctor.skippedOffline': 'skipped (--offline)',
   'doctor.endpointOk': 'reachable · {n} models · {ms}',
   'doctor.modelUnlisted': 'the endpoint does not list "{model}"',

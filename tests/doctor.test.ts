@@ -88,6 +88,46 @@ describe('collectDoctor', () => {
     expect(report.healthy).toBe(false);
   });
 
+  it('vision 检查:GLM 预设自带视觉模型为 ok;deepseek 无视觉模型为 warn', async () => {
+    const glm = await collectDoctor(
+      input({
+        config: configSchema.parse({ provider: 'glm' }),
+        env: { ZHIPU_API_KEY: 'zhipu-key' },
+      }),
+    );
+    const glmVision = find(glm, 'vision');
+    expect(glmVision?.level).toBe('ok');
+    expect(glmVision?.detail).toContain('glm-4.6v');
+
+    // deepseek 主模型非视觉且无任何视觉模型可解析:降级后模型读不到图,告警指路。
+    const ds = await collectDoctor(input());
+    const dsVision = find(ds, 'vision');
+    expect(dsVision?.level).toBe('warn');
+    expect(dsVision?.hint).toContain('visionModel');
+
+    // deepseek SDK 的转换器静默丢弃图片 part,显式配置 visionModel 也不放行
+    // ——拦截在解析层,配了只会换来幻觉描述。
+    const configured = await collectDoctor(
+      input({ config: configSchema.parse({ provider: 'deepseek', visionModel: 'glm-4.6v' }) }),
+    );
+    expect(find(configured, 'vision')?.level).toBe('warn');
+  });
+
+  it('vision 检查:当前模型本身吃图时,无视觉模型也只报 info', async () => {
+    // providers.deepseek.vision 显式覆盖判定(deepseek 无预设视觉模型)——
+    // 图片直发不需要 view_image,这是唯一不告警的非视觉模型之外的情形。
+    const report = await collectDoctor(
+      input({
+        config: configSchema.parse({
+          provider: 'deepseek',
+          providers: { deepseek: { vision: true } },
+        }),
+      }),
+    );
+    expect(find(report, 'vision')?.level).toBe('info');
+    expect(find(report, 'vision')?.hint).toBeUndefined();
+  });
+
   it('未知服务商:baseURL 无从得知,报为异常', async () => {
     const report = await collectDoctor(
       input({ config: configSchema.parse({ provider: 'nope' }), env: {} }),

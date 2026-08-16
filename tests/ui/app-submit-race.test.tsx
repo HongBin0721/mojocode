@@ -23,6 +23,14 @@ const { mockExpand, deferred } = vi.hoisted(() => {
 vi.mock('../../src/app/attachments.js', () => ({
   expandAtReferences: mockExpand,
   warnableSkips: () => [],
+  // image-defer.ts(loop 的 import 链)按扩展名表反查落盘扩展名,给真表。
+  IMAGE_MEDIA_TYPES: {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  },
 }));
 
 

@@ -54,7 +54,7 @@ import {
   type StatusSegment,
   type TimelineMode,
 } from '../config/schema.js';
-import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from '../config/providers.js';
+import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, providerModelIsVision } from '../config/providers.js';
 import { ModelsPicker } from './ModelsPicker.js';
 import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
 import type { ProviderModels } from '../model/registry.js';
@@ -666,6 +666,13 @@ export function App(props: Props): JSX.Element {
         const result = await expandAtReferences(text, {
           root: session.root,
           denyPath: session.config.permissions.denyPath,
+          // 非视觉模型直接以引用模式展开 @图:省掉纯 JS 降采样(大截图要
+          // 几百毫秒 CPU)。判定与 Agent.prepareUserMessage 共用
+          // providerModelIsVision;粘贴图没有引用模式,降级发生在 Agent 侧
+          // (落盘 + 信封)。
+          imageMode: providerModelIsVision(session.provider, session.config)
+            ? 'inline'
+            : 'reference',
         });
         expanded = result.expanded;
         images.push(...result.images);
@@ -688,11 +695,6 @@ export function App(props: Props): JSX.Element {
         return;
       }
       submitGate.clearPending();
-      // deepseek SDK 会静默丢弃图片 part(只发无人读的 warning),
-      // 用户不提示的话会以为模型看到了图。
-      if (images.length > 0 && session.provider.sdk === 'deepseek') {
-        push({ kind: 'notice', level: 'warn', message: t('notice.providerNoVision') });
-      }
       // 工作中提交 → 注入进行中的一轮作为引导;时间线显示原文。inject
       // 落空(展开期间那一轮恰好结束)则顺势降级为新一轮。
       if (await session.agent.inject(expanded, images.length > 0 ? images : undefined)) {

@@ -163,6 +163,11 @@ export const providerConfigSchema = z.object({
   parallelToolCalls: z.boolean().optional(),
   /** 该 provider 专属的思考强度,覆盖顶层 `reasoningEffort`。 */
   reasoningEffort: reasoningEffortSchema.optional(),
+  /**
+   * 显式覆盖 isVisionModel 对该 provider 各模型的视觉判定,true/false 都生效
+   * (预设前缀表判错时的人工纠偏)。不写则按预设的 visionModels 表走。
+   */
+  vision: z.boolean().optional(),
   label: z.string().optional(),
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
@@ -325,6 +330,13 @@ export const configSchema = z.object({
    */
   taskModel: z.string().optional(),
   /**
+   * view_image 工具(读图返回文字描述)用的视觉模型 id(与会话同一个
+   * provider)。不填则回落内置预设的 visionModel(GLM 系为 glm-4.6v);当前
+   * 模型不支持图片直发时,消息里的图片会降级为文件引用、由本工具按需读取。
+   * 同 goalModel/taskModel,自定义覆盖绝不预置具体 id。
+   */
+  visionModel: z.string().optional(),
+  /**
    * 子 agent 单次任务的步数上限,缺省 50(不随 maxSteps 的"默认无上限"走:
    * 子任务无人值守、结论会被当定论引用,必须有界);显式设了 maxSteps 则
    * 沿用它。撞上限时报告会被标记不完整——调研型子任务给更小的值能更早止损。
@@ -389,6 +401,7 @@ export const partialConfigSchema = z.object({
   goalModel: z.string().optional(),
   goalMaxTurns: z.number().int().positive().max(100).optional(),
   taskModel: z.string().optional(),
+  visionModel: z.string().optional(),
   taskMaxSteps: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
   reasoningEffort: reasoningEffortSchema.optional(),

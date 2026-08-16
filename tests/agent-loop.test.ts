@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { EventBus } from '../src/core/events.js';
 
 const { mockStreamText, mockCompactMessages, mockShouldCompact, mockEstimateTokens } =
@@ -62,7 +65,13 @@ function makeAgent(
       reasoningEffort: 'auto',
       ...providerOverrides,
     } as never,
-    config: { maxSteps: 24, temperature: 0, compactThreshold: 0.8, ...configOverrides } as never,
+    config: {
+      maxSteps: 24,
+      temperature: 0,
+      compactThreshold: 0.8,
+      providers: { test: { vision: true } },
+      ...configOverrides,
+    } as never,
     systemPrompt: 'sys',
     tools: {},
     bus,
@@ -84,8 +93,8 @@ describe('引导消息注入', () => {
     installDefaultStream();
     const { agent } = makeAgent();
     // mock 不调用 prepareStep,等价于注入发生在最后一步开始之后。
-    onStream = (call) => {
-      if (call === 1) expect(agent.inject('末步后的引导')).toBe(true);
+    onStream = async (call) => {
+      if (call === 1) expect(await agent.inject('末步后的引导')).toBe(true);
     };
     await agent.run('你好');
 
@@ -106,7 +115,7 @@ describe('引导消息注入', () => {
     mockStreamText.mockImplementation(
       (opts: { prepareStep: (i: { messages: unknown[] }) => Promise<{ messages?: Array<{ content: unknown }> }> }) => ({
         fullStream: (async function* () {
-          agentRef.inject('中途引导');
+          await agentRef.inject('中途引导');
           const step1 = await opts.prepareStep({ messages: [{ role: 'user', content: '你好' }] });
           prepared.push(step1);
           // SDK 语义:上一步 prepareStep 返回的消息会带入下一步的输入。
@@ -133,7 +142,7 @@ describe('引导消息注入', () => {
     mockStreamText.mockImplementation(
       (opts: { prepareStep: (i: { messages: unknown[] }) => Promise<unknown> }) => ({
         fullStream: (async function* () {
-          agentRef.inject('要记住的引导');
+          await agentRef.inject('要记住的引导');
           await opts.prepareStep({ messages: [{ role: 'user', content: '你好' }] });
           agentRef.abort();
           throw new Error('stream torn down');
@@ -180,8 +189,8 @@ describe('图片附件', () => {
   it('运行中注入带图片的引导:包装文本 + file part 落入历史', async () => {
     installDefaultStream();
     const { agent } = makeAgent();
-    onStream = (call) => {
-      if (call === 1) expect(agent.inject('中途看图', [IMG])).toBe(true);
+    onStream = async (call) => {
+      if (call === 1) expect(await agent.inject('中途看图', [IMG])).toBe(true);
     };
     await agent.run('你好');
 
@@ -221,6 +230,96 @@ describe('图片附件', () => {
 
     expect(starts[0]).toEqual({ type: 'turn-start', userText: '看图', imageCount: 1 });
     expect(JSON.stringify(starts[0])).not.toContain(IMG.data);
+  });
+});
+
+describe('非视觉模型图片降级', () => {
+  // makeAgent 的 'test' 是非内置 provider——新语义下乐观直发(同旧版行为);
+  // 这里显式 override 关掉视觉,验证 prepareUserMessage 的降级链路。
+  // HOME 指到临时目录:image-defer 的默认落盘目录 ~/.mojocode/images 从这解出。
+  let home: string;
+  let prevHome: string | undefined;
+
+  beforeAll(async () => {
+    prevHome = process.env.HOME;
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-loop-home-'));
+    process.env.HOME = home;
+  });
+  afterAll(async () => {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const IMG = { mediaType: 'image/png', data: 'aVNBCg==', filename: 'clipboard-1.png' };
+
+  it('带图 run:历史是纯字符串,含信封与落盘路径,磁盘文件存在,发出 notice', async () => {
+    installDefaultStream();
+    // makeAgent 的 tools 恒为 {}——没有 view_image,信封走"无法直接查看"分支。
+    const { agent, events, bus } = makeAgent({}, { providers: { test: { vision: false } } });
+    const notices: string[] = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push(e.message);
+    });
+    await agent.run('看这张图', { images: [IMG] });
+
+    const content = agent.history[0]!.content;
+    expect(typeof content).toBe('string');
+    expect(content).toContain('看这张图');
+    expect(content).toContain('[Attached images — this model cannot view them directly]');
+    const line = (content as string).split('\n').find((l) => l.startsWith('- '))!;
+    const saved = line.slice(2, line.indexOf(' ('));
+    expect(saved.startsWith(path.join(home, '.mojocode', 'images'))).toBe(true);
+    expect((await fs.readFile(saved)).toString('base64')).toBe(IMG.data);
+    expect(events).toContain('notice');
+    // 文案按 locale 渲染,断言只锚定"恰好一条"(无工具分支不发第二条,
+    // 失败分支的 warn 用例在 image-defer 语义下由 deferred<total 触发)。
+    expect(notices).toHaveLength(1);
+  });
+
+  it('带工具时信封提示模型用 view_image 读取', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({}, { providers: { test: { vision: false } } });
+    (agent as unknown as { options: { tools: Record<string, unknown> } }).options.tools.view_image = {};
+    await agent.run('看这张图', { images: [IMG] });
+    expect(agent.history[0]!.content).toContain('readable with the view_image tool');
+  });
+
+  it('absolutePath 的 @图零落盘,信封引用原路径', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({}, { providers: { test: { vision: false } } });
+    await agent.run('看这张图', {
+      images: [{ mediaType: 'image/png', data: '', filename: 'shot.png', absolutePath: '/w/shot.png' }],
+    });
+    expect(agent.history[0]!.content).toContain('- /w/shot.png (image/png)');
+    // 引用模式(data 空串)在视觉模型下也必须降级——直发空数据是坏消息。
+    const vision = makeAgent();
+    await vision.agent.run('看这张图', {
+      images: [{ mediaType: 'image/png', data: '', filename: 'shot.png', absolutePath: '/w/shot.png' }],
+    });
+    expect(vision.agent.history[0]!.content).toContain('- /w/shot.png (image/png)');
+  });
+
+  it('运行中重入 run 带图 → 消息降级且绝不静默丢弃', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent({}, { providers: { test: { vision: false } } });
+    let rerun!: Promise<void>;
+    onStream = (call) => {
+      if (call === 1) rerun = agent.run('重入消息', { images: [IMG] });
+    };
+    await agent.run('你好');
+    // 重入的 run 内含真实写盘 IO,必须等它收尾再断言。
+    await rerun;
+
+    // 无论落在引导队列还是(降级写盘窗口内轮收尾时)顺势开了新轮,消息都
+    // 必须在历史里且带降级信封——重入分支绝不能静默丢弃。
+    const message = agent.history.find(
+      (m) =>
+        m.role === 'user' &&
+        typeof m.content === 'string' &&
+        (m.content as string).includes('重入消息'),
+    );
+    expect(message?.content).toContain('this model cannot view them directly');
   });
 });
 
@@ -487,8 +586,8 @@ describe('轮末事件', () => {
     });
     const { agent, bus } = makeAgent();
     agentRef = agent;
-    onStream = (call) => {
-      if (call === 1) agentRef.inject('末步后的引导');
+    onStream = async (call) => {
+      if (call === 1) await agentRef.inject('末步后的引导');
     };
     const turnEnd: Array<{ input?: number; cached?: number }> = [];
     bus.on((e) => {
@@ -505,8 +604,8 @@ describe('轮末事件', () => {
     installDefaultStream();
     const { agent, events } = makeAgent();
     // 末步之后注入引导 → run() 会再起一个流续跑同一轮。
-    onStream = (call) => {
-      if (call === 1) agent.inject('末步后的引导');
+    onStream = async (call) => {
+      if (call === 1) await agent.inject('末步后的引导');
     };
     await agent.run('你好');
 
@@ -639,7 +738,7 @@ describe('轮末事件', () => {
             return;
           }
           // 末步之后注入引导,逼出续跑的流 2。
-          agentRef.inject('续跑指引');
+          await agentRef.inject('续跑指引');
           yield { type: 'finish', totalUsage: {}, finishReason: 'tool-calls' };
         })(),
         responseMessages: Promise.resolve([]),

@@ -8,7 +8,7 @@ import type { SessionHandle } from './app/session-handle.js';
 import { connectRemote } from './client/remote.js';
 import { createPermissionBroker, startServer } from './server/serve.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
-import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS } from './config/providers.js';
+import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, providerModelIsVision } from './config/providers.js';
 import {
   approvalPolicySchema,
   presetById,
@@ -720,6 +720,12 @@ async function runMain(flags: MainFlags): Promise<void> {
       const result = await expandAtReferences(prompt, {
         root: session.root,
         denyPath: session.config.permissions.denyPath,
+        // 非视觉模型以引用模式展开 @图(判定与 Agent.prepareUserMessage 共用
+        // providerModelIsVision,理由见 App.tsx 的同款注释);粘贴图 headless
+        // 不支持,无需处理。
+        imageMode: providerModelIsVision(session.provider, session.config)
+          ? 'inline'
+          : 'reference',
       });
       const warnable = warnableSkips(result);
       if (warnable.length > 0) {
@@ -732,9 +738,6 @@ async function runMain(flags: MainFlags): Promise<void> {
         });
       }
       images = result.images;
-      if (images.length > 0 && session.provider.sdk === 'deepseek') {
-        session.bus.emit({ type: 'notice', level: 'warn', message: t('notice.providerNoVision') });
-      }
       if (result.expanded !== prompt) {
         display = prompt;
         prompt = result.expanded;

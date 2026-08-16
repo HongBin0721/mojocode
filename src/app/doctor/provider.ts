@@ -1,5 +1,11 @@
 import { resolveProvider, type ResolvedProvider } from '../../config/load.js';
-import { PROVIDER_PRESETS, isBuiltinProvider, normalizeModelId } from '../../config/providers.js';
+import {
+  PROVIDER_PRESETS,
+  isBuiltinProvider,
+  isVisionModel,
+  normalizeModelId,
+  resolveVisionModelId,
+} from '../../config/providers.js';
 import type { Config } from '../../config/schema.js';
 import { t } from '../../i18n/index.js';
 import { probeModels } from '../../model/registry.js';
@@ -96,6 +102,28 @@ export async function providerChecks(
       ? `${model} · ${t('doctor.contextWindow', { n: String(contextWindow) })}`
       : t('doctor.modelMissing'),
     ...(model ? {} : { hint: t('doctor.modelHint', { id }) }),
+  });
+
+  // view_image 的视觉模型(本地解析,不联网)。当前模型不吃图且无视觉模型可
+  // 用时,贴图只会降级为"模型读不到"的文件引用——值得一条告警指路。
+  const visionId = resolveVisionModelId(id, config);
+  const currentIsVision = model !== undefined && isVisionModel(id, model, override.vision);
+  checks.push({
+    id: 'vision',
+    label: t('doctor.check.vision'),
+    level: visionId ? 'ok' : currentIsVision ? 'info' : 'warn',
+    detail: visionId
+      ? t('doctor.visionOk', { model: visionId })
+      : currentIsVision
+        ? t('doctor.visionNotNeeded')
+        : t('doctor.visionNone'),
+    ...(visionId || currentIsVision
+      ? {}
+      : {
+          // 指引只推荐"该服务商自己的"多模态模型——报一个 glm 的 id 给
+          // deepseek/kimi 用户,照做只会换来 404 或静默幻觉。
+          hint: t('doctor.visionNoneHint', { id }),
+        }),
   });
 
   if (!resolved) {

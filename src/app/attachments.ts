@@ -20,15 +20,18 @@ const ATTACHMENTS_HEADER = '\n\n[Attached files, referenced with @ in the messag
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_TOTAL_BYTES = 256 * 1024;
 
-/** 图片的体积上限,与文本独立(base64 后约 1.37 倍,还会随快照整份重写)。 */
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/**
+ * 图片的体积上限,与文本独立(base64 后约 1.37 倍,还会随快照整份重写)。
+ * 双向约束:能内联附上的图,降级后也必须能被 view_image 读回——两处共用。
+ */
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024;
 
 /**
  * 按扩展名识别的图片类型。SVG 刻意留在文本路径:它是 XML,模型直接读
  * 效果更好,且不少服务商拒收 image/svg+xml。
  */
-const IMAGE_MEDIA_TYPES: Record<string, string> = {
+export const IMAGE_MEDIA_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -46,6 +49,11 @@ export interface ImageAttachment {
   data: string;
   /** @ 引用的相对路径,或 clipboard-N.png;作为 FilePart 的 filename 发出。 */
   filename?: string;
+  /**
+   * @ 引用图片在工作区里的绝对路径(realpath 过)。非视觉链路据此引用
+   * 原文件而不落盘;粘贴图没有此字段,降级时写到 ~/.mojocode/images/。
+   */
+  absolutePath?: string;
 }
 
 /**
@@ -85,7 +93,7 @@ export interface ExpandResult {
  */
 export async function expandAtReferences(
   text: string,
-  options: { root: string; denyPath?: string[] },
+  options: { root: string; denyPath?: string[]; imageMode?: 'inline' | 'reference' },
 ): Promise<ExpandResult> {
   const attached: string[] = [];
   const skipped: { path: string; reason: string }[] = [];
@@ -112,6 +120,19 @@ export async function expandAtReferences(
           });
           continue;
         }
+        // 引用模式(当前模型不吃图,直发会被服务端拒单):只记路径不读内容,
+        // 消费方(Agent)见 data 空串即走文件引用降级。省掉纯 JS 降采样——
+        // 大截图要几百毫秒 CPU,而视觉链路根本用不上这份内存拷贝。
+        if (options.imageMode === 'reference') {
+          attached.push(resolved.relative);
+          images.push({
+            mediaType: imageType,
+            data: '',
+            filename: resolved.relative,
+            absolutePath: resolved.absolute,
+          });
+          continue;
+        }
         const buffer = await fs.readFile(resolved.absolute);
         // 先降采样再计入总量:缩完通常只剩几分之一,按原始体积算会把
         // 本来放得下的几张图挡在门外。
@@ -126,7 +147,7 @@ export async function expandAtReferences(
         }
         totalImageBytes += bytes;
         attached.push(resolved.relative);
-        images.push({ ...shrunk, filename: resolved.relative });
+        images.push({ ...shrunk, filename: resolved.relative, absolutePath: resolved.absolute });
         continue;
       }
       if (stat.size > MAX_FILE_BYTES) {

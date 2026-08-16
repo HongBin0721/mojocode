@@ -33,6 +33,18 @@ export interface ProviderPreset {
    * 名字碰巧带同样前缀的自定义条目(如 glm-proxy),改写它发往端点的 id。
    */
   normalizeModelId?: (id: string) => string;
+  /**
+   * 能直接接收图片输入的模型 id 表(大小写不敏感的前缀匹配,覆盖 -turbo
+   * 等变体)。isVisionModel 据此判定当前模型是否走图片直发;不在表里的
+   * provider 保守判非视觉——降级为文件引用是安全方向,永远不会被拒单。
+   */
+  visionModels?: readonly string[];
+  /**
+   * 该 provider 下 view_image 工具缺省使用的视觉模型 id(起点默认,顶层
+   * config 的 visionModel / MOJOCODE_VISION_MODEL 可覆盖)。原样发往端点,
+   * 不经 normalizeModelId——同 taskModel 的先例。
+   */
+  visionModel?: string;
   /** 使用专用的 @ai-sdk/deepseek 包,而不是 openai-compatible。 */
   sdk?: 'deepseek';
 }
@@ -92,6 +104,9 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['DEEPSEEK_API_KEY'],
     keyUrl: 'https://platform.deepseek.com/api_keys',
     defaultModel: 'deepseek-v4-flash',
+    // 显式空表:deepseek 全系纯文本,且专用 SDK 会静默丢弃图片 part——
+    // isVisionModel 对它乐观直发只会换来无声幻觉。
+    visionModels: [],
     contextWindows: {
       'deepseek-v4-flash': 1_000_000,
       'deepseek-v4-pro': 1_000_000,
@@ -110,6 +125,8 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
     normalizeModelId: (id) => id.toUpperCase(),
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -124,6 +141,8 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
     normalizeModelId: (id) => id.toUpperCase(),
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -138,6 +157,8 @@ export const PROVIDER_PRESETS = {
     keyUrl: 'https://z.ai/manage-apikey/apikey-list',
     defaultModel: 'GLM-5.3',
     normalizeModelId: (id) => id.toUpperCase(),
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
       'GLM-5.2': 1_000_000,
@@ -168,6 +189,57 @@ export function normalizeModelId(providerId: string, modelId: string): string {
     ? PROVIDER_PRESETS[providerId]
     : undefined;
   return preset?.normalizeModelId ? preset.normalizeModelId(modelId) : modelId;
+}
+
+/**
+ * 当前模型能否直接接收图片输入。config 的 providers.<id>.vision 显式覆盖
+ * 优先(两个方向都生效——把误判的视觉模型拉回直发,或把漏登的判成视觉);
+ * 否则查预设的 visionModels 前缀表。匹配必须大小写不敏感:normalizeModelId
+ * 会把 GLM 系 id 归一成大写(GLM-4.6V-TURBO),小写表直接 startsWith 会全漏。
+ *
+ * 无表的来源分两类,方向相反:**内置**厂商我们了解(deepseek/kimi 显式给
+ * 空表——deepseek SDK 还会静默丢弃图片 part,判乐观就是纯幻觉),按表走,
+ * 表空即非视觉;**自定义**端点一无所知,乐观返回 true 沿用旧版直发行为——
+ * 降级为文件引用在解析不出 visionModel 时图就永远读不到,比一次可见的
+ * 服务端报错更糟,报错至少能指引用户用 providers.<id>.vision 关掉。
+ */
+export function isVisionModel(providerId: string, modelId: string, override?: boolean): boolean {
+  if (override !== undefined) return override;
+  if (!isBuiltinProvider(providerId)) return true;
+  const preset: ProviderPreset | undefined = PROVIDER_PRESETS[providerId];
+  const entries = preset?.visionModels;
+  if (!entries) return true;
+  const id = modelId.toLowerCase();
+  return entries.some((entry) => id.startsWith(entry.toLowerCase()));
+}
+
+/**
+ * isVisionModel 的调用面便捷版:判定某个已解析 provider 的当前模型。
+ * 结构化参数(而非 ResolvedProvider)避免与 load.ts 循环依赖。四处调用点
+ * (agent 循环、TUI/headless 的 @图展开模式、doctor)共用,防止表达式漂移。
+ */
+export function providerModelIsVision(
+  provider: { id: string; model: string },
+  config: { providers?: Record<string, { vision?: boolean }> },
+): boolean {
+  return isVisionModel(provider.id, provider.model, config.providers?.[provider.id]?.vision);
+}
+
+/**
+ * view_image 工具的视觉模型 id 解析:顶层 visionModel 覆盖,缺省回落内置
+ * 预设的 visionModel。deepseek SDK 的转换器会静默丢弃图片 part(node_modules
+ * 里 user-content 循环只保留 text),配了也只是幻觉描述,直接不解析。
+ * 返回 undefined 表示工具不注册。
+ */
+export function resolveVisionModelId(
+  providerId: string,
+  config: { visionModel?: string },
+): string | undefined {
+  const preset: ProviderPreset | undefined = isBuiltinProvider(providerId)
+    ? PROVIDER_PRESETS[providerId]
+    : undefined;
+  if (preset?.sdk === 'deepseek') return undefined;
+  return config.visionModel ?? preset?.visionModel;
 }
 
 /** 读取预设中列出的第一个非空环境变量。 */

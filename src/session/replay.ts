@@ -3,6 +3,7 @@ import type { NewTimelineItem } from '../ui/types.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { unwrapGuidance } from '../agent/loop.js';
 import { unwrapAttachments } from '../app/attachments.js';
+import { unwrapImagesEnvelope } from '../app/image-defer.js';
 import { isInitPrompt } from '../agent/init.js';
 import { unwrapSkillPrompt } from '../skills/invocation.js';
 import { t } from '../i18n/index.js';
@@ -159,10 +160,11 @@ export function collectRewindEntries(messages: ModelMessage[]): RewindEntry[] {
   return entries.reverse();
 }
 
-/** 依次解开引导包装与 @ 附件信封,还原用户当时输入的原文。 */
+/** 依次解开引导包装、@ 附件信封与图片降级信封,还原用户当时输入的原文。 */
 function unwrapUserText(text: string): string {
   const inner = unwrapGuidance(text) ?? text;
-  return unwrapAttachments(inner) ?? inner;
+  const unattached = unwrapAttachments(inner) ?? inner;
+  return unwrapImagesEnvelope(unattached) ?? unattached;
 }
 
 /**

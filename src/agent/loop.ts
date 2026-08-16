@@ -8,8 +8,10 @@ import {
 } from 'ai';
 import type { ContextUsage, EventBus, UsageSnapshot } from '../core/events.js';
 import type { ImageAttachment } from '../app/attachments.js';
+import { deferImagesForModel } from '../app/image-defer.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
+import { providerModelIsVision } from '../config/providers.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { mergeProviderOptions, providerOptionsKey, reasoningMapping } from '../model/reasoning.js';
 import { compactMessages, estimateTokens, shouldCompact } from './compact.js';
@@ -215,9 +217,16 @@ export class Agent {
    * 运行中插入一条引导消息,在下一个步骤边界(当前模型输出/工具调用
    * 完成后)注入对话。空闲时调用返回 false——调用方应转为发起新一轮。
    */
-  inject(text: string, images?: ImageAttachment[]): boolean {
+  async inject(text: string, images?: ImageAttachment[]): Promise<boolean> {
     if (!this.isRunning) return false;
-    this.pendingGuidance.push({ text, images });
+    const prepared = await this.prepareUserMessage(text, images);
+    // 降级写盘期间这一轮可能已经收尾——run() 开头会清空 pendingGuidance,
+    // 晚到的入队会被静默吞掉,而时间线已显示"引导已排队"。二次检查失败
+    // 返回 false,让调用方自然转成新一轮。提交面已被串行化(UI 的
+    // submitGate / 客户端 RPC 队列),不存在与新一轮 run 的并发竞争。
+    if (!this.isRunning) return false;
+    this.pendingGuidance.push({ text: prepared.text, images: prepared.images });
+    this.emitImageNotices(prepared, images?.length ?? 0);
     return true;
   }
 
@@ -260,16 +269,62 @@ export class Agent {
     this.options.onHistoryChange?.(this.messages);
   }
 
+  /**
+   * 用户消息入历史前的图片降级判定。无图走零开销快路径;当前模型不吃图
+   * (isVisionModel,config 可显式覆盖)或存在引用模式的空数据图(@图在
+   * reference 模式展开)时,图片转为文件引用——@图引用原路径、粘贴图落盘
+   * ~/.mojocode/images/,信封由 deferImagesForModel 注入。视觉模型零扰动。
+   *
+   * notice 不在这里发:inject 的写盘窗口内轮可能收尾而入队失败,消息改走
+   * 新一轮时会再过一遍本函数——提前发的 notice 就重复了。调用方在消息
+   * 确定生效(push/入队)后调 emitImageNotices。
+   */
+  private async prepareUserMessage(
+    text: string,
+    images?: ImageAttachment[],
+  ): Promise<{ text: string; images?: ImageAttachment[]; deferred: number; viewImageTool: boolean }> {
+    const viewImageTool = 'view_image' in this.options.tools;
+    if (!images || images.length === 0) return { text, images, deferred: 0, viewImageTool };
+    const { provider, config } = this.options;
+    const vision = providerModelIsVision(provider, config);
+    if (vision && provider.sdk === 'deepseek') {
+      // deepseek SDK 的转换器静默丢弃图片 part,直发(override 误开或自定义
+      // deepseek 端点)比降级更安静才是事故:至少告诉用户模型没看到图。
+      this.options.bus.emit({ type: 'notice', level: 'warn', message: t('notice.providerNoVision') });
+    }
+    if (vision && images.every((image) => image.data)) {
+      return { text, images, deferred: 0, viewImageTool };
+    }
+    const result = await deferImagesForModel(text, images, { viewImageTool });
+    return { text: result.text, images: undefined, deferred: result.deferred, viewImageTool };
+  }
+
+  /** 图片降级的用户提示,在消息确定生效后发:deferred>0 报降级方式,有失败报 warn。 */
+  private emitImageNotices(prepared: { deferred: number; viewImageTool: boolean }, total: number): void {
+    if (total === 0) return;
+    if (prepared.deferred > 0) {
+      this.options.bus.emit({
+        type: 'notice',
+        level: 'info',
+        message: t(prepared.viewImageTool ? 'notice.imagesDeferred' : 'notice.imagesDeferredNoTool'),
+      });
+    }
+    if (prepared.deferred < total) {
+      // 全失败时 deferred 为 0、上面的 info 不发,这条 warn 是唯一提示——
+      // 图悄悄从消息里消失比降级失败本身严重。
+      this.options.bus.emit({ type: 'notice', level: 'warn', message: t('notice.imageSaveFailed') });
+    }
+  }
+
   async run(
     userText: string,
     options?: { display?: string; images?: ImageAttachment[] },
   ): Promise<void> {
     // 防重入兜底:已在运行时转为注入引导,绝不能并发起第二个流
-    // (两个流共享 this.messages,controller 也会被覆盖)。
-    if (this.isRunning) {
-      this.inject(userText, options?.images);
-      return;
-    }
+    // (两个流共享 this.messages,controller 也会被覆盖)。inject 的降级
+    // 写盘期间轮可能收尾而入队失败——此时 isRunning 必已为 false,顺势
+    // 落到下方的正常开轮路径,消息绝不静默丢弃。
+    if (this.isRunning && (await this.inject(userText, options?.images))) return;
     const { bus } = this.options;
     bus.emit({
       type: 'turn-start',
@@ -293,7 +348,9 @@ export class Agent {
       // `/compact` 的调用方自己呈现。
       if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
       await this.maybeCompact();
-      this.messages.push({ role: 'user', content: buildUserContent(userText, options?.images) });
+      const prepared = await this.prepareUserMessage(userText, options?.images);
+      this.messages.push({ role: 'user', content: buildUserContent(prepared.text, prepared.images) });
+      this.emitImageNotices(prepared, options?.images?.length ?? 0);
       let finish = await this.stream();
 
       // 末步开始之后注入的引导等不到下一个 prepareStep——立即作为新的

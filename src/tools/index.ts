@@ -4,6 +4,7 @@ import { createFileTools } from './files.js';
 import { createSearchTools } from './search.js';
 import { createBashTool } from './bash.js';
 import { createWebTools } from './web.js';
+import { createViewTools } from './view-image.js';
 import { createTodoTool, TodoStore } from './todo.js';
 import { createExitPlanTool } from './plan.js';
 import type { ToolContext } from './context.js';
@@ -25,6 +26,8 @@ export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet 
     bash: createBashTool(ctx),
     // web_fetch 恒在;web_search 仅在解析出搜索后端(有 key)时注册。
     ...createWebTools(ctx),
+    // view_image 仅在解析出视觉模型(config 或 provider 预设)时注册。
+    ...createViewTools(ctx),
     todo: createTodoTool(todos),
     exit_plan: createExitPlanTool(ctx),
   };
@@ -75,6 +78,8 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
         return t('sum.webFetchStatus', { status: String(o.status) });
       }
       return t('sum.webFetch', { chars: String((o.content as string | undefined)?.length ?? 0) });
+    case 'view_image':
+      return t('sum.viewImage', { chars: String((o.description as string | undefined)?.length ?? 0) });
     case 'todo':
       return t('sum.todo', { done: Number(o.completed), total: Number(o.total) });
     // 报告正文已喂给模型(通常还会被转述),摘要只报规模。被截停/出错时

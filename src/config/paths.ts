@@ -28,6 +28,15 @@ export function sessionsDir(): string {
   return path.join(globalDir(), 'sessions');
 }
 
+/**
+ * `~/.mojocode/images`——非视觉模型下粘贴图片的落盘目录(消息里引用路径,
+ * view_image 工具按需读取)。经 extraReadRoots 成为只读扩根:图片不属于
+ * 工作区,写进项目目录会污染仓库。
+ */
+export function imagesDir(): string {
+  return path.join(globalDir(), 'images');
+}
+
 export function logPath(): string {
   return path.join(globalDir(), 'debug.log');
 }

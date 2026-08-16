@@ -23,6 +23,13 @@ const deflate = promisify(zlib.deflate);
 /** 长边上限,取服务商侧的缩放阈值,超出部分是纯浪费。 */
 export const MAX_IMAGE_DIMENSION = 1568;
 
+/**
+ * PNG 解码的像素总数上限(约 25MP = 100MB RGBA)。文件体积上限挡不住
+ * zlib 高压缩比炸弹,解码路径的三份大分配(inflate 原始行、unfilter、
+ * RGBA 缓冲)叠起来是像素数的十几倍,超限直接放弃降采样。
+ */
+const MAX_DECODE_PIXELS = 25_000_000;
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export interface RawImage {
@@ -123,6 +130,10 @@ async function decodePng(buffer: Buffer): Promise<Bitmap | undefined> {
       if (bitDepth !== 8 || interlace !== 0) return undefined;
       if (![0, 2, 4, 6].includes(colorType)) return undefined;
       if (width === 0 || height === 0) return undefined;
+      // 解压炸弹闸门:文件体积有 5MB 上限,但 zlib 可把几百 KB 膨胀成几百
+      // MP——inflate/unfilter/像素缓冲三份大分配叠加足以 OOM 整个进程。
+      // 超限放弃降采样(原样交还调用方),绝不解码。
+      if (width * height > MAX_DECODE_PIXELS) return undefined;
     } else if (type === 'IDAT') {
       idat.push(buffer.subarray(start, end));
     } else if (type === 'IEND') {

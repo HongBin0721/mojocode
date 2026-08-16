@@ -599,6 +599,7 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 |---|---|---|
 | `taskModel` | 会话当前模型 | 子 agent 用的模型 id（与会话同一个服务商）。调研型子任务换个便宜的模型很划算。也可用 `MOJOCODE_TASK_MODEL` 覆盖 |
 | `taskMaxSteps` | `50` | 子 agent 单次任务的步数上限。独立默认——不随 `maxSteps` 的「默认无上限」走，子任务无人值守、报告会被当定论，必须有界；显式设了 `maxSteps` 则沿用它。调研型子任务给更小的值能更早止损 |
+| `visionModel` | 服务商预设 | `view_image` 工具读图用的多模态模型 id（与会话同一个服务商；GLM 系预设为 `glm-4.6v`）。也可用 `MOJOCODE_VISION_MODEL` 覆盖。当前模型不能直接接收图片时，粘贴/`@` 引用的图片会降级为文件引用（`@`图沿用原路径、粘贴图落到 `~/.mojocode/images/`），模型需要看图时调 `view_image` 换取文字描述；未配置视觉模型时工具不注册，贴图仍降级但模型读不到（doctor 会提示）。视觉判定的兜底方向：内置服务商按预设的 `visionModels` 表（deepseek 为显式空表——其专用 SDK 还会静默丢弃图片 part，配了 visionModel 也不会放行）；**自定义服务商一无所知，乐观沿用图片直发**（服务端报错可见、可用 `providers.<id>.vision: false` 关掉），预设判错时同样用该键显式覆盖 |
 
 与模式无关、始终生效的硬约束：
 
