@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EventBus, type PermissionRequest } from '../src/core/events.js';
 import type { StateSnapshot } from '../src/server/protocol.js';
 import { t } from '../src/i18n/index.js';
@@ -433,6 +436,51 @@ describe('server ↔ remote client', () => {
   it('resumeSession 的 ProviderSwitchError 过线后类型复原', async () => {
     const { remote } = await boot();
     await expect(remote.resumeSession('deadbeef')).rejects.toBeInstanceOf(ProviderSwitchError);
+  });
+
+  it('listSessions:按工作区过滤、updatedAt 倒序(GUI 侧栏数据源)', async () => {    const home = mkdtempSync(join(tmpdir(), 'mojocode-listsessions-'));
+    const dir = join(home, '.mojocode', 'sessions');
+    mkdirSync(dir, { recursive: true });
+    const meta = (id: string, root: string, updatedAt: string, title: string) => {
+      writeFileSync(join(dir, `${id}.jsonl`), '');
+      writeFileSync(
+        join(dir, `${id}.meta.json`),
+        JSON.stringify({
+          id,
+          root,
+          provider: 'kimi',
+          model: 'kimi-k2',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt,
+          title,
+          messageCount: 2,
+        }),
+      );
+    };
+    meta('sess-old', '/tmp/fake-root', '2026-01-01T00:00:00Z', 'first');
+    meta('sess-new', '/tmp/fake-root', '2026-01-02T00:00:00Z', 'second');
+    meta('sess-other', '/other/root', '2026-01-03T00:00:00Z', '别的仓库');
+    vi.stubEnv('HOME', home);
+    try {
+      const { remote } = await boot();
+      const sessions = await remote.listSessions();
+      expect(sessions.map((m) => m.id)).toEqual(['sess-new', 'sess-old']);
+      expect(sessions[0]).toMatchObject({ title: 'second', root: '/tmp/fake-root', messageCount: 2 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('workspaceStatus/fileDiff:GUI Review 面板的只读 RPC 过线', async () => {
+    // dispatch 直接调收集器(读 session.root,不经 Session 成员),fake 的
+    // root 是 /tmp/fake-root(非 git 仓库)——协议层验证 RPC 通与失败形状,
+    // 数据正确性由 tests/workspace.test.ts 的真实 git 夹具覆盖。
+    const { remote } = await boot();
+    const status = await remote.workspaceStatus();
+    expect(status).toMatchObject({ ok: false, entries: [], additions: 0, deletions: 0 });
+
+    const diff = await remote.fileDiff('a.ts');
+    expect(diff).toMatchObject({ ok: false, reason: 'no-repo', path: 'a.ts' });
   });
 
   it('鉴权:缺 token 一律 401', async () => {

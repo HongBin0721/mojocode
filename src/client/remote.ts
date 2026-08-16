@@ -33,6 +33,8 @@ import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { GoalStopReason } from '../core/events.js';
+import type { SessionMeta } from '../session/store.js';
+import type { FileDiff, WorkspaceStatus } from '../agent/workspace.js';
 import type { ProviderModels } from '../model/registry.js';
 import type { DoctorReport } from '../app/doctor.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
@@ -83,6 +85,17 @@ export interface RemoteOptions {
 export interface RemoteSession extends SessionHandle {
   /** 仅测试/诊断用:当前镜像快照。 */
   readonly snapshot: StateSnapshot;
+  /**
+   * 本工作区的会话列表(GUI 侧栏;serve 的 `listSessions` 只读 RPC)。
+   * 不进 SessionHandle——那是 TUI 的窄接口,TUI 在拉起 server 之前本地读
+   * store,不需要 RPC;远程 GUI 才有这条路径。旧 server 返回
+   * `unknown method`,调用方自行降级。
+   */
+  listSessions(): Promise<SessionMeta[]>;
+  /** 工作区 pending 变更(GUI Review 面板;同为 GUI 专属只读 RPC)。 */
+  workspaceStatus(): Promise<WorkspaceStatus>;
+  /** 单文件 diff(vs HEAD;untracked 为全新增补丁)。 */
+  fileDiff(path: string): Promise<FileDiff>;
 }
 
 export async function connectRemote(options: RemoteOptions): Promise<RemoteSession> {
@@ -544,6 +557,9 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       }
     },
     forkSession: () => call<{ id: string }>('forkSession'),
+    listSessions: () => call<SessionMeta[]>('listSessions'),
+    workspaceStatus: () => call<WorkspaceStatus>('workspaceStatus'),
+    fileDiff: (path: string) => call<FileDiff>('fileDiff', { path }),
     switch: async (change) => {
       // 刚就地输入的 key 只允许在可信传输上过线:loopback(受管子进程的默认
       // 形态)或 https。`serve --host` + `--attach` 是明文 HTTP,把 key 发出去

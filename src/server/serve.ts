@@ -22,6 +22,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Session } from '../app/bootstrap.js';
+import { SessionStore } from '../session/store.js';
+import { collectFileDiff, collectWorkspaceStatus } from '../agent/workspace.js';
 import type { PermissionAsker, PermissionDecision, PermissionRequest } from '../core/events.js';
 import {
   DEFERRED_METHODS,
@@ -282,6 +284,16 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         const forked = await session.forkSession();
         return { id: forked.id };
       }
+      // GUI 侧栏的会话列表:TUI 在拉起 server 之前本地读 store,远程客户端
+      // 没有那条路径——按当前工作区过滤、updatedAt 倒序,纯只读。旧 client
+      // 从不调用,零影响。
+      case 'listSessions':
+        return SessionStore.list(session.root);
+      // GUI Review 面板:pending 变更列表与单文件 diff(vs HEAD),只读收集。
+      case 'workspaceStatus':
+        return collectWorkspaceStatus(session.root);
+      case 'fileDiff':
+        return collectFileDiff(session.root, args['path'] as string);
       case 'refreshEnvironment':
         await session.refreshEnvironment();
         return undefined;

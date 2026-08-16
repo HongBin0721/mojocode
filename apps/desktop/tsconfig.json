@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "useDefineForClassFields": true,
+    "noEmit": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      // 跨包源码引用(与 electron.vite.config.ts 的 resolve.alias 保持一致):
+      // 白名单只收已核对过的模块 —— renderer 侧新增条目前必须确认目标是
+      // 纯数据/纯类型(无 node:fs、无 execa),否则浏览器构建直接报错。
+      "@core/protocol": ["../../src/server/protocol.ts"],
+      "@core/events": ["../../src/core/events.ts"],
+      "@core/types": ["../../src/ui/types.ts"],
+      "@core/timeline-data": ["../../src/ui/timeline-data.ts"],
+      "@core/schema": ["../../src/config/schema.ts"],
+      "@core/attachments": ["../../src/app/attachments.ts"],
+      "@core/remote": ["../../src/client/remote.ts"],
+      "@core/replay": ["../../src/session/replay.ts"],
+      "@core/i18n": ["../../src/i18n/index.ts"],
+      "@core/session-store": ["../../src/session/store.ts"]
+    }
+  },
+  "include": ["src/main", "src/preload", "src/shared", "tests/*.ts"]
+}
