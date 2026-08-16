@@ -93,28 +93,33 @@ describe('tailWithinRows', () => {
     expect(renderedHeight(out, 80)).toBeLessThanOrEqual(3);
   });
 
-  it('稳态窗口高度精确钉在预算上,不随行滑动摆动(抖动回归)', () => {
-    // 逐 delta 喂入折成多行的长中文段落(思考的典型形态)。内容填满预算后,
-    // 窗口渲染高度必须恒等于 maxRows:按整行丢弃时,高度会随行滑动在几个
-    // 值之间来回摆,粘底 scrollbox 里上方时间线整条跟着上下跳。
-    const paras = Array.from(
-      { length: 12 },
-      (_, i) => `第${i}段:` + '这是一段模拟思考的长内容,没有任何换行符,会按终端宽度折成多个物理行。'.repeat(2),
-    );
-    const full = paras.join('\n\n');
-    let acc = '';
-    const heights: number[] = [];
-    for (let i = 0; i < full.length; i += 3) {
-      acc += full.slice(i, i + 3);
-      // 纯 Text 渲染的行数 = 每行按宽度折行后的行数之和(输出里只有被截断
-      // 的首行是预折行的,完整行仍靠渲染时折)。
-      const out = tailWithinRows(acc, 5, 80, { markdown: false });
-      heights.push(out.split('\n').reduce((n, line) => n + renderedRows(line, 80), 0));
-    }
-    const firstFull = heights.indexOf(5);
-    expect(firstFull).toBeGreaterThan(0);
-    for (const h of heights.slice(firstFull)) expect(h).toBe(5);
-  });
+  // 逐 delta 全量重排是 O(n²),CI 的 ubuntu+Bun 比本地慢 5 倍以上,默认 5s 必超时。
+  it(
+    '稳态窗口高度精确钉在预算上,不随行滑动摆动(抖动回归)',
+    () => {
+      // 逐 delta 喂入折成多行的长中文段落(思考的典型形态)。内容填满预算后,
+      // 窗口渲染高度必须恒等于 maxRows:按整行丢弃时,高度会随行滑动在几个
+      // 值之间来回摆,粘底 scrollbox 里上方时间线整条跟着上下跳。
+      const paras = Array.from(
+        { length: 12 },
+        (_, i) => `第${i}段:` + '这是一段模拟思考的长内容,没有任何换行符,会按终端宽度折成多个物理行。'.repeat(2),
+      );
+      const full = paras.join('\n\n');
+      let acc = '';
+      const heights: number[] = [];
+      for (let i = 0; i < full.length; i += 3) {
+        acc += full.slice(i, i + 3);
+        // 纯 Text 渲染的行数 = 每行按宽度折行后的行数之和(输出里只有被截断
+        // 的首行是预折行的,完整行仍靠渲染时折)。
+        const out = tailWithinRows(acc, 5, 80, { markdown: false });
+        heights.push(out.split('\n').reduce((n, line) => n + renderedRows(line, 80), 0));
+      }
+      const firstFull = heights.indexOf(5);
+      expect(firstFull).toBeGreaterThan(0);
+      for (const h of heights.slice(firstFull)) expect(h).toBe(5);
+    },
+    20_000,
+  );
 
   it('markdown 模式围栏行按 0 行计,围栏滑过窗口高度不塌', () => {
     // 流式代码块:闭栏滑进窗口时,若围栏按 1 行计,窗口会瞬时矮一行。
