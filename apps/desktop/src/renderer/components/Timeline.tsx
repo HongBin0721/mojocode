@@ -1,7 +1,7 @@
 /**
  * 时间线滚动区:定稿条目(items,不可变、memo)+ 尾部的活动区(流式文本、
  * 进行中的工具行)。自动粘底:用户上滚翻历史时暂停跟随,滚回底部恢复。
- * 空会话(还没有任何用户/助手条目)渲染 ZCode 式空状态:时段问候 + M 水印。
+ * 空会话(还没有任何用户/助手条目)渲染 ZCode 式空状态:时段问候居中。
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -12,21 +12,12 @@ import { formatDuration } from '../utils/format.js';
 import { TimelineItemView } from './TimelineItemView.js';
 import { Markdown } from './Markdown.js';
 
-/** 空状态:按时段问候(ZCode 同款);右下角大号 M 水印,底部渐隐。 */
+/** 空状态:按时段问候(ZCode 同款),居中。 */
 function EmptyState() {
   useLocale();
   return (
     <div className="empty-state">
       <div className="empty-greeting">{t(currentGreetingKey())}</div>
-      <svg className="empty-watermark" viewBox="0 0 100 80" fill="none" aria-hidden>
-        <path
-          d="M10 72 V10 L50 58 L90 10 V72"
-          stroke="currentColor"
-          strokeWidth="9"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
     </div>
   );
 }

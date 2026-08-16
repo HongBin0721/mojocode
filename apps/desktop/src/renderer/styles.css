@@ -8,7 +8,9 @@
 :root {
   /* ---- 表面:ZCode dark 的 neutral 灰阶 ---- */
   --color-background: #171717; /* neutral-900 主区 */
-  --color-background-alt: rgba(38, 38, 38, 0.6); /* vibrancy 上的 tint(neutral-800 60%) */
+  /* vibrancy 上的 tint:重遮蔽(92%)——60% 透明度在亮色壁纸下会透白发灰,
+   * 近实心才能稳定读作深色,又保留一丝毛玻璃层次 */
+  --color-background-alt: rgba(23, 23, 23, 0.92);
   --color-sidebar: #0a0a0a; /* neutral-950 侧栏 */
   --color-card: #262626; /* neutral-800 卡片/输入/浮层 */
   --color-card-selected: #404040; /* neutral-700 */
@@ -606,7 +608,7 @@ html.platform-darwin .app-overlay {
   color: var(--color-foreground-subtlest);
 }
 
-/* ---- 空状态:时段问候 + 右下角 M 水印 ---- */
+/* ---- 空状态:时段问候居中 ---- */
 
 .empty-state {
   position: relative;
@@ -620,17 +622,6 @@ html.platform-darwin .app-overlay {
   font-size: 22px;
   font-weight: 600;
   color: var(--color-foreground-subtle);
-}
-.empty-watermark {
-  position: absolute;
-  right: 12px;
-  bottom: 0;
-  width: min(300px, 42%);
-  color: var(--color-foreground-subtlest);
-  opacity: 0.6;
-  pointer-events: none;
-  -webkit-mask-image: linear-gradient(to top, black 25%, transparent 82%);
-  mask-image: linear-gradient(to top, black 25%, transparent 82%);
 }
 
 /* ---- markdown ---- */
