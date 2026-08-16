@@ -68,7 +68,12 @@ export function Toolbar() {
       ) : null}
       {snapshot ? (
         <MenuPopover
-          label={<span className="badge-model">{snapshot.provider.model}</span>}
+          label={
+            <span className="badge-model">
+              {snapshot.provider.model}
+              <span className="badge-caret">⌄</span>
+            </span>
+          }
           title={t('modelMenu.title')}
           width={360}
           requestOpen={modelMenuRequest}
@@ -76,13 +81,8 @@ export function Toolbar() {
           <ModelMenuList />
         </MenuPopover>
       ) : null}
-      <span className={`dot dot-${connection}`} title={t(`connection.${connection}` as 'connection.connected')} />
-      {snapshot ? (
-        <span className={`badge ${snapshot.agent.isRunning ? 'badge-run' : ''}`}>
-          {snapshot.agent.isRunning ? t('badge.running') : t('badge.idle')}
-        </span>
-      ) : null}
       <span className="toolbar-spacer" />
+      <span className={`dot dot-${connection}`} title={t(`connection.${connection}` as 'connection.connected')} />
       <button
         type="button"
         className="locale-toggle"

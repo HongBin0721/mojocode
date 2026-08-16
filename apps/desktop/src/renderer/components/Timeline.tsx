@@ -81,10 +81,12 @@ export function Timeline() {
 
   return (
     <div className="timeline" ref={scrollRef} onScroll={onScroll}>
-      {items.map((item) => (
-        <TimelineItemView key={item.key} item={item} />
-      ))}
-      <ActiveArea />
+      <div className="timeline-inner">
+        {items.map((item) => (
+          <TimelineItemView key={item.key} item={item} />
+        ))}
+        <ActiveArea />
+      </div>
       <div ref={bottomRef} />
     </div>
   );

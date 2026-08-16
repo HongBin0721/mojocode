@@ -5,7 +5,7 @@
  * 参数态);粘贴图片;运行中变「中断」。`/xxx args` 形态的提交按命令分发。
  */
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImageAttachment } from '@core/attachments';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { t, useLocale } from '../i18n/index.js';
@@ -171,60 +171,74 @@ export function Composer() {
     }
   };
 
+  // 高度自适应:按内容收缩/增长,封顶 200px(超出内部滚动)。
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [text]);
+
+  // Codex 式单一圆形按钮:空闲 = 发送(↑),运行中 = 停止(■)。
+  const primaryAction = () => {
+    if (running) rpc({ kind: 'abort' });
+    else submit();
+  };
+
   return (
     <div className="composer">
       {menuVisible ? (
         <SlashMenu entries={entries} cursor={safeCursor} onHover={setCursor} onPick={pickFromMenu} />
       ) : null}
-      {images.length > 0 ? (
-        <div className="composer-images">
-          {images.map((image, index) => (
-            <span key={index} className="composer-image-chip">
-              🖼 {image.filename ?? image.mediaType}
-              <button
-                type="button"
-                className="chip-remove"
-                onClick={() => setImages(images.filter((_, i) => i !== index))}
-              >
-                ×
-              </button>
-            </span>
-          ))}
+      <div className={`composer-box${running ? ' composer-box-running' : ''}`}>
+        {images.length > 0 ? (
+          <div className="composer-images">
+            {images.map((image, index) => (
+              <span key={index} className="composer-image-chip">
+                🖼 {image.filename ?? image.mediaType}
+                <button
+                  type="button"
+                  className="chip-remove"
+                  onClick={() => setImages(images.filter((_, i) => i !== index))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <textarea
+          ref={textareaRef}
+          value={text}
+          placeholder={running ? t('composer.placeholderRunning') : t('composer.placeholder')}
+          onChange={(e) => {
+            setText(e.target.value);
+            // 新的过滤结果出来前重置光标与压制(Esc 只压一次输入态)。
+            setCursor(0);
+            if (slashState(e.target.value).query !== slash.query) setSuppressed(false);
+          }}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData.files).filter((file) =>
+              file.type.startsWith('image/'),
+            );
+            if (files.length === 0) return;
+            e.preventDefault();
+            void Promise.all(files.map((file, index) => toAttachment(file, index))).then(setImages);
+          }}
+          onKeyDown={onKeyDown}
+        />
+        <div className="composer-box-row">
+          <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
+          <button
+            type="button"
+            className="composer-send"
+            disabled={running ? connection !== 'connected' : !canSend}
+            title={running ? t('composer.abort') : t('composer.send')}
+            onClick={primaryAction}
+          >
+            {running ? '■' : '↑'}
+          </button>
         </div>
-      ) : null}
-      <textarea
-        ref={textareaRef}
-        value={text}
-        placeholder={running ? t('composer.placeholderRunning') : t('composer.placeholder')}
-        onChange={(e) => {
-          setText(e.target.value);
-          // 新的过滤结果出来前重置光标与压制(Esc 只压一次输入态)。
-          setCursor(0);
-          if (slashState(e.target.value).query !== slash.query) setSuppressed(false);
-        }}
-        onPaste={(e) => {
-          const files = Array.from(e.clipboardData.files).filter((file) =>
-            file.type.startsWith('image/'),
-          );
-          if (files.length === 0) return;
-          e.preventDefault();
-          void Promise.all(files.map((file, index) => toAttachment(file, index))).then(setImages);
-        }}
-        onKeyDown={onKeyDown}
-      />
-      <div className="composer-actions">
-        <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
-        <button
-          type="button"
-          className="btn-danger"
-          disabled={!running || connection !== 'connected'}
-          onClick={() => rpc({ kind: 'abort' })}
-        >
-          {t('composer.abort')}
-        </button>
-        <button type="button" className="btn-primary" disabled={!canSend} onClick={submit}>
-          {t('composer.send')}
-        </button>
       </div>
     </div>
   );
