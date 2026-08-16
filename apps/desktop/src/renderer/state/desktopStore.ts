@@ -15,7 +15,7 @@ export interface DesktopStore {
   permission: PermissionRequest | undefined;
   /** undefined = 尚未收到(server 过旧,侧栏降级提示);[] = 无会话。 */
   sessions: SessionMetaSummary[] | undefined;
-  /** 模型菜单的外部触发计数(/models 命令 → Toolbar 的菜单打开),每次 +1。 */
+  /** 模型菜单的外部触发计数(/models 命令 → Composer 工具栏的菜单打开),每次 +1。 */
   modelMenuRequest: number;
 
   applySnapshot(snapshot: StateSnapshot): void;

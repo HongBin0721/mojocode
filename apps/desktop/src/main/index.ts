@@ -49,6 +49,22 @@ const bridgeReady = new Promise<Bridge>((resolve) => {
   resolveBridge = resolve;
 });
 
+/**
+ * 窗口视觉选项(ZCode 桌面端同款,仅 darwin):隐藏标题栏 + 红绿灯内嵌到
+ * 内容区(22,23),底色透明 + under-window vibrancy——内容层的
+ * --color-background-alt 半透明 tint 压在毛玻璃上。非 darwin 保持原生框。
+ */
+function windowVisualOptions(): Electron.BrowserWindowConstructorOptions {
+  if (process.platform !== 'darwin') return {};
+  return {
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 22, y: 23 },
+    backgroundColor: '#00000000',
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
+  };
+}
+
 const createWindow = (): void => {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -57,6 +73,7 @@ const createWindow = (): void => {
     minHeight: 480,
     title: 'mojocode',
     show: false,
+    ...windowVisualOptions(),
     webPreferences: {
       preload: join(appDir, '../preload/index.js'),
       contextIsolation: true,

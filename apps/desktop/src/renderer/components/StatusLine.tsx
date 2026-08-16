@@ -37,7 +37,7 @@ export function StatusLine() {
   const bar = '▰'.repeat(Math.min(12, filled)) + '▱'.repeat(Math.max(0, 12 - filled));
 
   return (
-    <div className="status-line">
+    <div className="status-line conv-col">
       <span className={`work work-${work.phase}`}>
         {t(PHASE_KEYS[work.phase])}
         {work.detail ? ` · ${work.detail}` : ''}

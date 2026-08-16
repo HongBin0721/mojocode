@@ -1,6 +1,7 @@
 /**
- * 工具栏下拉菜单容器:锚定徽章下方的浮层,点击外部/Esc 关闭。滚动内容
- * 限高。纯展示,条目内容由使用者填。
+ * 下拉菜单容器:锚定触发器旁的浮层,点击外部/Esc 关闭。滚动内容限高。
+ * 纯展示,条目内容由使用者填。placement 决定向下(默认,侧栏等顶部位置)
+ * 还是向上(Composer 工具栏,菜单得朝输入框上方弹)。
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -11,6 +12,7 @@ export function MenuPopover({
   children,
   width,
   requestOpen,
+  placement = 'bottom',
 }: {
   /** 触发按钮的文案(徽章)。 */
   label: React.ReactNode;
@@ -20,6 +22,8 @@ export function MenuPopover({
   width?: number;
   /** 外部触发打开(/models 命令):计数变化时打开。 */
   requestOpen?: number;
+  /** 浮层弹出方向:bottom 在触发器下方(默认),top 在上方。 */
+  placement?: 'bottom' | 'top';
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -47,11 +51,14 @@ export function MenuPopover({
 
   return (
     <div className="menu-root" ref={rootRef}>
-      <button type="button" className="toolbar-badge" onClick={() => setOpen(!open)}>
+      <button type="button" className="menu-trigger" onClick={() => setOpen(!open)}>
         {label}
       </button>
       {open ? (
-        <div className="menu-popover" style={width ? { width: `${width}px` } : undefined}>
+        <div
+          className={`menu-popover ${placement === 'top' ? 'menu-popover-up' : ''}`}
+          style={width ? { width: `${width}px` } : undefined}
+        >
           {title ? <div className="menu-title">{title}</div> : null}
           {children}
         </div>

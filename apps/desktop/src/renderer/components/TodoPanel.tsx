@@ -13,7 +13,7 @@ export function TodoPanel() {
   const todos = useDesktopStore((s) => s.snapshot?.todos);
   if (!todos || todos.length === 0) return null;
   return (
-    <div className="todo-panel">
+    <div className="todo-panel conv-col">
       <div className="todo-panel-title">{t('todo.title')}</div>
       <TodoList todos={todos} />
     </div>

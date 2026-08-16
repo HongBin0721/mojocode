@@ -71,7 +71,7 @@ preload 的源码改动当前不会触发自动重建**(electron-vite 的 watch 
   `node_modules` 的运行时依赖,`ELECTRON_RUN_AS_NODE=1 process.execPath` 充当
   Node)已验证可行路径,配置在正式分发时落地,当前仅 dev 模式。
 
-## 已实现(M1–M4 + Codex 对齐 M-A/B/C)
+## 已实现(M1–M4 + Codex 对齐 M-A/B/C + ZCode 对齐 M-D)
 
 - M1 Electron 壳 + IPC 桥(状态/事件/连接/权限通道,RPC 白名单)
 - M2 时间线(timelineReducer 移植自 TUI 的 timeline-controller)+ Composer
@@ -85,4 +85,22 @@ preload 的源码改动当前不会触发自动重建**(electron-vite 的 watch 
   按需 diff(带行号)+ **点击行评论**(转 run RPC,运行中注入当前轮);
   server 侧新增只读 `workspaceStatus`/`fileDiff` RPC(src/agent/workspace.ts)
 - M-C 时间线 write/edit 卡走 DiffView;窄窗(<960px)面板转覆盖式抽屉
+- M-D ZCode 桌面端视觉/布局对齐(规格提取自 ZCode 3.7.7 产物):
+  - 窗口:mac 隐藏标题栏 + 红绿灯内嵌 (22,23) + 透明底 + under-window
+    vibrancy(`<html>.platform-darwin`);preload 暴露 `platform`
+  - 设计令牌全面换为 ZCode 语义命名(--color-*:neutral 灰阶 + sky 品牌,
+    层级用白色低透明度叠层表达),仅深色;14px 滚动条/圆角体系(气泡 12、
+    输入块 16、菜单 12)
+  - 布局:删 Toolbar——权限档/模型选择器迁入 Composer 工具栏,语言/连接
+    状态迁入侧栏底部 Settings 菜单;侧栏 264px 可拖宽(264~50vw,双击复位,
+    localStorage 持久化)、⌘B 折叠(收起时主区顶部补拖拽浮层)
+  - 消息形态:用户消息右对齐气泡(右上 2px 尾巴),助手平铺;流式文本
+    fade-in(0.9s ZCode 缓动);会话列宽度改容器查询(<864 全宽 / ≥864
+    max-w-4xl / ≥1136 max-w-6xl 居中)
+  - 空状态:时段问候(5/9/12/14/18/23 六档)+ 右下 M 水印(底部渐隐)
+  - 审批卡:ZCode 编号选项制——数字键直选、↑↓/Tab 移动高亮、Enter 确认,
+    「需要权限」标题 + mono 命令行 + 底部键位提示;plan 仍两键
+  - Composer:rounded-2xl 外框(focus-within 抬边框换底色)+ 内嵌 textarea
+    卡 + 品牌色发送/停止钮;拖入图片变附件(品牌色边框 + 覆盖 pill)
+
 

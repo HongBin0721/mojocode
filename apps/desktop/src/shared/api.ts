@@ -24,6 +24,8 @@ export interface MojocodeDesktopApi {
   rpc(request: RpcRequest): Promise<unknown>;
   /** 订阅下行通道,载荷类型按通道推导。返回退订函数。 */
   on<C extends PushChannel>(channel: C, listener: (payload: PushPayloads[C]) => void): () => void;
+  /** 主进程平台('darwin' 等):侧栏红绿灯让位 / drag region 仅 mac 需要。 */
+  readonly platform: string;
 }
 
 /** 各通道的载荷类型(on 的 listener 参数由此推导)。 */

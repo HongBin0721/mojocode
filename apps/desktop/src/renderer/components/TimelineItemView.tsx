@@ -1,6 +1,6 @@
 /**
- * 单条时间线条目:按 kind 分发(M3 会给 tool 的 diff 输出加 DiffView、
- * 给 exit_plan 加 PlanCard)。
+ * 单条时间线条目:按 kind 分发。用户消息是右对齐气泡(ZCode 形态),助手
+ * 消息平铺 markdown,工具折叠卡,diff/plan/todo 各有专门渲染。
  */
 
 import React, { memo } from 'react';
@@ -17,10 +17,9 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
     case 'user':
       return (
         <div className="entry entry-user">
-          <div className="entry-role">›</div>
-          <div className="entry-body">
+          <div className="entry-bubble">
             {item.text.split('\n').map((line, index) => (
-              <div key={index}>{line || ' '}</div>
+              <div key={index}>{line || ' '}</div>
             ))}
           </div>
         </div>
@@ -28,7 +27,6 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
     case 'assistant':
       return (
         <div className={`entry entry-assistant ${item.continuation ? 'entry-continuation' : ''}`}>
-          {item.continuation ? null : <div className="entry-bullet">●</div>}
           <div className="entry-body">
             <Markdown text={item.text} />
           </div>

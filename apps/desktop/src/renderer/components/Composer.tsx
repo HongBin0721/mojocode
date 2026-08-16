@@ -1,12 +1,15 @@
 /**
- * 输入区(Codex 式):多行 textarea,Enter 提交 / Shift+Enter 换行;
- * `Shift+Tab` 循环权限档(read-only→ask→auto→full-access→plan,逻辑在
- * commands/permissions.ts);`/` 开头弹命令菜单(内置 + 技能,空格后进入
- * 参数态);粘贴图片;运行中变「中断」。`/xxx args` 形态的提交按命令分发。
+ * 输入区(ZCode 式输入块):rounded-2xl 外框(focus-within 抬边框/换底色)
+ * 内嵌 rounded-xl textarea 卡;底部工具栏左侧是模式切换(权限档菜单)与
+ * 模型选择器(原顶栏的两个入口迁到这里),右侧品牌色发送/停止钮。
+ *
+ * 键盘:Enter 提交 / Shift+Enter 换行;`Shift+Tab` 循环权限档;`/` 开头弹
+ * 命令菜单;粘贴与拖入图片 → 缩略图附件 chips(拖入非图片忽略)。
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImageAttachment } from '@core/attachments';
+import { presetById } from '@core/schema';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { t, useLocale } from '../i18n/index.js';
 import {
@@ -16,10 +19,13 @@ import {
   slashState,
   type CommandEntry,
 } from '../commands/index.js';
-import { cyclePermissionsRpc } from '../commands/permissions.js';
+import { cyclePermissionsRpc, isDangerousMode, permissionBadgeLabel, permissionMenuEntries } from '../commands/permissions.js';
 import { SlashMenu } from './SlashMenu.js';
+import { MenuPopover } from './Menu.js';
+import { ModelMenuList } from './ModelMenu.js';
+import { PermissionMenuList } from './PermissionMenu.js';
 
-/** 剪贴板里的图片文件 → ImageAttachment(base64)。 */
+/** 剪贴板/拖入的图片文件 → ImageAttachment(base64)。 */
 async function toAttachment(file: File, index: number): Promise<ImageAttachment> {
   const buffer = await file.arrayBuffer();
   let binary = '';
@@ -34,19 +40,44 @@ async function toAttachment(file: File, index: number): Promise<ImageAttachment>
 const rpc = (request: Parameters<typeof window.mojocode.rpc>[0]) =>
   void window.mojocode.rpc(request).catch((error: unknown) => console.error('RPC 失败', error));
 
+/** 模式值变化时品牌色环闪 2s(原顶栏徽章闪动的迁入)。 */
+function useFlash(value: string | undefined): boolean {
+  const [flash, setFlash] = useState(false);
+  const prev = useRef(value);
+  useEffect(() => {
+    if (prev.current !== undefined && prev.current !== value) {
+      setFlash(true);
+      const timer = setTimeout(() => setFlash(false), 2000);
+      prev.current = value;
+      return () => clearTimeout(timer);
+    }
+    prev.current = value;
+    return;
+  }, [value]);
+  return flash;
+}
+
 export function Composer() {
   useLocale();
   const connection = useDesktopStore((s) => s.connection);
   const snapshot = useDesktopStore((s) => s.snapshot);
   const requestModelsMenu = useDesktopStore((s) => s.requestModelsMenu);
+  const modelMenuRequest = useDesktopStore((s) => s.modelMenuRequest);
   const [text, setText] = useState('');
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [cursor, setCursor] = useState(0);
   const [suppressed, setSuppressed] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const running = snapshot?.agent.isRunning ?? false;
   const canSend = connection === 'connected' && (text.trim().length > 0 || images.length > 0);
+
+  const mode = snapshot?.config;
+  const badge = mode ? permissionBadgeLabel(mode) : undefined;
+  const flash = useFlash(badge);
+  const dangerous = mode ? isDangerousMode(mode) : false;
+  const permissionEntries = mode ? permissionMenuEntries(mode) : [];
 
   const slash = slashState(text);
   const entries = useMemo(() => {
@@ -137,7 +168,7 @@ export function Composer() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Shift+Tab:权限档循环(Codex 同款按键)。
+    // Shift+Tab:权限档循环(Codex/ZCode 同款按键)。
     if (e.key === 'Tab' && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       if (snapshot) rpc(cyclePermissionsRpc(snapshot.config));
@@ -171,31 +202,53 @@ export function Composer() {
     }
   };
 
-  // 高度自适应:按内容收缩/增长,封顶 200px(超出内部滚动)。
+  // 高度自适应:按内容收缩/增长,封顶 156px(超出内部滚动)。
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 156)}px`;
   }, [text]);
 
-  // Codex 式单一圆形按钮:空闲 = 发送(↑),运行中 = 停止(■)。
   const primaryAction = () => {
     if (running) rpc({ kind: 'abort' });
     else submit();
   };
 
+  /** 拖入:仅接受图片(与粘贴同路径);非图片静默忽略。 */
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const files = Array.from(e.dataTransfer.files).filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    void Promise.all(files.map((file, index) => toAttachment(file, index))).then(setImages);
+  };
+
   return (
-    <div className="composer">
+    <div className="composer conv-col">
       {menuVisible ? (
         <SlashMenu entries={entries} cursor={safeCursor} onHover={setCursor} onPick={pickFromMenu} />
       ) : null}
-      <div className={`composer-box${running ? ' composer-box-running' : ''}`}>
+      <div
+        className={`composer-box${dragging ? ' composer-box-dragging' : ''}`}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) {
+            e.preventDefault();
+            setDragging(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setDragging(false);
+        }}
+        onDrop={onDrop}
+      >
         {images.length > 0 ? (
-          <div className="composer-images">
+          <div className="composer-attachments">
             {images.map((image, index) => (
-              <span key={index} className="composer-image-chip">
-                🖼 {image.filename ?? image.mediaType}
+              <span key={index} className="attachment-chip">
+                <img className="attachment-thumb" src={`data:${image.mediaType};base64,${image.data}`} alt="" />
+                <span className="attachment-name">{image.filename ?? image.mediaType}</span>
                 <button
                   type="button"
                   className="chip-remove"
@@ -227,7 +280,49 @@ export function Composer() {
           }}
           onKeyDown={onKeyDown}
         />
-        <div className="composer-box-row">
+        <div className="composer-toolbar">
+          <div className="composer-tools">
+            {mode ? (
+              <MenuPopover
+                label={
+                  <span
+                    className={`composer-tool ${dangerous ? 'composer-tool-danger' : ''} ${
+                      flash ? 'composer-tool-flash' : ''
+                    }`}
+                  >
+                    {badge}
+                  </span>
+                }
+                title={t('permissionMenu.title')}
+                width={320}
+                placement="top"
+              >
+                <PermissionMenuList
+                  entries={permissionEntries}
+                  onPick={(id) => {
+                    if (id === 'plan') rpc({ kind: 'setPlan', active: true });
+                    else rpc({ kind: 'setPermissions', permissions: presetById(id) });
+                  }}
+                />
+              </MenuPopover>
+            ) : null}
+            {snapshot ? (
+              <MenuPopover
+                label={
+                  <span className="composer-tool">
+                    {snapshot.provider.model}
+                    <span className="composer-caret">⌄</span>
+                  </span>
+                }
+                title={t('modelMenu.title')}
+                width={360}
+                requestOpen={modelMenuRequest}
+                placement="top"
+              >
+                <ModelMenuList />
+              </MenuPopover>
+            ) : null}
+          </div>
           <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
           <button
             type="button"
@@ -239,6 +334,11 @@ export function Composer() {
             {running ? '■' : '↑'}
           </button>
         </div>
+        {dragging ? (
+          <div className="composer-drag-overlay">
+            <span className="composer-drag-pill">{t('composer.dropHint')}</span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * 审批卡组件测试:tool 形态(四档决策 + diff 视图)与 plan 形态(两键 +
- * markdown 正文)。onDecide 经 props 注入,不触碰桥。
+ * 审批卡组件测试:tool 形态(编号选项 + 四档决策 + diff 视图 + 键盘流)、
+ * plan 形态(两键 + markdown 正文)。onDecide 经 props 注入,不触碰桥。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -30,8 +30,13 @@ const toolRequest: PermissionRequest = {
   risk: 'write',
 };
 
+/** 卡片根元素(挂载即聚焦,键盘事件打给它)。 */
+function card(): HTMLElement {
+  return screen.getByTestId('permission-card');
+}
+
 describe('PermissionCard', () => {
-  it('tool 形态:diff detail 走 DiffView,四档按钮各回调正确', async () => {
+  it('tool 形态:diff detail 走 DiffView,编号选项点击各回调正确', async () => {
     const onDecide = vi.fn<(decision: PermissionDecision) => void>();
     render(<PermissionCard request={toolRequest} onDecide={onDecide} />);
     const user = userEvent.setup();
@@ -42,24 +47,48 @@ describe('PermissionCard', () => {
     expect(screen.getByText('+added line')).toBeTruthy();
     expect(screen.getByText('-removed line')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: '允许一次' }));
-    await user.click(screen.getByRole('button', { name: '本会话始终允许' }));
-    await user.click(screen.getByRole('button', { name: '始终允许(写入工作区)' }));
-    await user.click(screen.getByRole('button', { name: '拒绝' }));
+    await user.click(screen.getByRole('option', { name: /允许一次/ }));
+    await user.click(screen.getByRole('option', { name: /本会话始终允许/ }));
+    await user.click(screen.getByRole('option', { name: /始终允许\(写入工作区\)/ }));
+    await user.click(screen.getByRole('option', { name: /拒绝/ }));
     expect(onDecide).toHaveBeenNthCalledWith(1, { type: 'allow' });
     expect(onDecide).toHaveBeenNthCalledWith(2, { type: 'allow-always', rule: 'Edit(src/a.ts)' });
     expect(onDecide).toHaveBeenNthCalledWith(3, { type: 'allow-persist', rule: 'Edit(src/a.ts)' });
     expect(onDecide).toHaveBeenNthCalledWith(4, { type: 'deny' });
   });
 
-  it('无 suggestedRule 时只显示 单次/拒绝 两档', async () => {
+  it('数字键直选:1=允许,4=拒绝(ZCode 快捷键)', async () => {
+    const onDecide = vi.fn<(decision: PermissionDecision) => void>();
+    render(<PermissionCard request={toolRequest} onDecide={onDecide} />);
+    const user = userEvent.setup();
+    await user.keyboard('1');
+    await user.keyboard('4');
+    expect(onDecide).toHaveBeenNthCalledWith(1, { type: 'allow' });
+    expect(onDecide).toHaveBeenNthCalledWith(2, { type: 'deny' });
+  });
+
+  it('方向键移动高亮,Enter 确认高亮项', async () => {
+    const onDecide = vi.fn<(decision: PermissionDecision) => void>();
+    render(<PermissionCard request={toolRequest} onDecide={onDecide} />);
+    const user = userEvent.setup();
+    await user.keyboard('{ArrowDown}{ArrowDown}'); // 高亮 3=allow-persist
+    expect(card().querySelectorAll('[aria-selected="true"]')).toHaveLength(1);
+    await user.keyboard('{Enter}');
+    expect(onDecide).toHaveBeenCalledWith({ type: 'allow-persist', rule: 'Edit(src/a.ts)' });
+  });
+
+  it('无 suggestedRule 时只显示 单次/拒绝 两档,数字键 2=拒绝', async () => {
     const onDecide = vi.fn<(decision: PermissionDecision) => void>();
     const request: PermissionRequest = { ...toolRequest, suggestedRule: undefined, detail: 'npm test' };
     render(<PermissionCard request={request} onDecide={onDecide} />);
-    expect(screen.queryByRole('button', { name: '本会话始终允许' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '始终允许(写入工作区)' })).toBeNull();
-    // 非 diff 的 detail 按命令文本展示。
+    expect(screen.queryByRole('option', { name: /本会话始终允许/ })).toBeNull();
+    expect(screen.queryByRole('option', { name: /始终允许/ })).toBeNull();
+    // 非 diff 的 detail 按命令文本展示;标题行是「需要权限」+ mono 子标题。
+    expect(screen.getByText('需要权限')).toBeTruthy();
     expect(screen.getByText('npm test')).toBeTruthy();
+    const user = userEvent.setup();
+    await user.keyboard('2');
+    expect(onDecide).toHaveBeenCalledWith({ type: 'deny' });
   });
 
   it('plan 形态:markdown 正文 + 批准/驳回两键', async () => {
