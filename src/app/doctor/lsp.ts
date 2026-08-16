@@ -1,9 +1,9 @@
 import { LspClient } from '../../lsp/client.js';
-import { resolveLspServers, type LspRuntimeStatus } from '../../lsp/manager.js';
+import { HANDSHAKE_GRACE_MS, resolveLspServers, type LspRuntimeStatus } from '../../lsp/manager.js';
 import type { Config } from '../../config/schema.js';
 import { t } from '../../i18n/index.js';
 import type { DoctorCheck } from './types.js';
-import { NETWORK_TIMEOUT_MS, findCommand } from './util.js';
+import { findCommand } from './util.js';
 
 /**
  * LSP 分节:列出合并后(内置 + 用户配置)的每个服务器。
@@ -94,7 +94,10 @@ export async function lspChecks(
         command: found,
         args: def.args,
         root,
-        initTimeoutMs: NETWORK_TIMEOUT_MS,
+        // 握手预算与会话同源(lsp.timeoutMs + 握手宽限),而非联网检查的 8s:
+        // 用户为慢速的 rust-analyzer 调大 timeoutMs 时,这里不该还卡在硬编码
+        // 上限,报"握手失败"而会话内其实健康。
+        initTimeoutMs: config.lsp.timeoutMs + HANDSHAKE_GRACE_MS,
       });
       try {
         await client.ready();

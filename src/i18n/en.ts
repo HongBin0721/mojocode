@@ -441,6 +441,7 @@ export const en = {
   'doctor.keyFromEnv': 'from ${name}',
   'doctor.keyFromConfig': 'from {path}',
   'doctor.keyMissing': 'not configured',
+  'doctor.keyNotRequired': 'not required (custom endpoint)',
   'doctor.keyHint': 'Run `mojocode auth`, or set {envs}.',
   'doctor.contextWindow': 'context {n}',
   'doctor.modelMissing': 'not configured',

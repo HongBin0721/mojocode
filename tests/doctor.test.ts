@@ -10,6 +10,7 @@ import {
   type DoctorReport,
 } from '../src/app/doctor.js';
 import { configSchema } from '../src/config/schema.js';
+import { nodeMinMajor } from '../src/config/version.js';
 import { setLocale } from '../src/i18n/index.js';
 
 let dir: string;
@@ -166,6 +167,48 @@ describe('collectDoctor', () => {
     expect(hint).toContain('DEEPSEEK_API_KEY');
   });
 
+  it('自定义端点无 key(Ollama/vLLM)不算缺陷,整体仍健康', async () => {
+    // resolveProvider 允许无凭据的自定义 provider;apiKey 行曾无条件判 fail,
+    // healthy=false 会让 CI 门禁对一份完全能用的配置退出 1。
+    const report = await collectDoctor(
+      input({
+        env: {},
+        config: configSchema.parse({
+          provider: 'ollama',
+          providers: { ollama: { baseURL: 'http://127.0.0.1:11434/v1', model: 'qwen3:8b' } },
+        }),
+      }),
+    );
+    expect(find(report, 'provider')?.level).toBe('ok');
+    const key = find(report, 'apiKey');
+    expect(key?.level).toBe('ok');
+    expect(key?.detail).toContain('not required');
+    expect(key?.hint).toBeUndefined();
+    expect(report.healthy).toBe(true);
+  });
+
+  it('解析失败(缺 key)时,窗口展示仍走 per-model 表,不退到默认值', async () => {
+    const report = await collectDoctor(
+      input({
+        env: {},
+        config: configSchema.parse({ provider: 'deepseek', model: 'deepseek-v4-flash' }),
+      }),
+    );
+    expect(find(report, 'apiKey')?.level).toBe('fail');
+    expect(find(report, 'model')?.detail).toContain('1000000');
+  });
+
+  it('GLM 老配置的小写 model id 归一后才查 per-model 窗口', async () => {
+    const report = await collectDoctor(
+      input({
+        env: {},
+        config: configSchema.parse({ provider: 'glm', model: 'glm-5.3' }),
+      }),
+    );
+    expect(find(report, 'model')?.detail).toContain('GLM-5.3');
+    expect(find(report, 'model')?.detail).toContain('1000000');
+  });
+
   it('统计会话数量与占用', async () => {
     const sessions = path.join(dir, 'sessions');
     await fs.mkdir(sessions, { recursive: true });
@@ -308,6 +351,30 @@ describe('compareVersions', () => {
   it('预发布版小于同号正式版', () => {
     expect(compareVersions('1.0.0-beta.1', '1.0.0')).toBe(-1);
     expect(compareVersions('1.0.0', '1.0.0-beta.1')).toBe(1);
+  });
+
+  it('预发布标识符逐段比:数字按数值、恒小于字母段,字母段按字典序', () => {
+    expect(compareVersions('1.0.0-beta.1', '1.0.0-beta.2')).toBe(-1);
+    expect(compareVersions('1.0.0-beta.2', '1.0.0-beta.10')).toBe(-1); // 数值比,不是字典序
+    expect(compareVersions('1.0.0-2', '1.0.0-rc')).toBe(-1);
+    expect(compareVersions('1.0.0-alpha.3', '1.0.0-beta.1')).toBe(-1);
+    expect(compareVersions('1.0.0-beta.1', '1.0.0-beta.1')).toBe(0);
+  });
+
+  it('前缀相同的预发布:标识符更多的一方更大', () => {
+    expect(compareVersions('1.0.0-beta', '1.0.0-beta.1')).toBe(-1);
+    expect(compareVersions('1.0.0-beta.1', '1.0.0-beta')).toBe(1);
+  });
+});
+
+describe('nodeMinMajor', () => {
+  it('Node 下限取自 package.json 的 engines.node,不再写死', async () => {
+    const pkg = JSON.parse(
+      await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { engines?: { node?: string } };
+    const expected = Number(pkg.engines?.node?.match(/>=\s*v?(\d+)/)?.[1]);
+    expect(Number.isFinite(expected)).toBe(true);
+    expect(nodeMinMajor()).toBe(expected);
   });
 });
 

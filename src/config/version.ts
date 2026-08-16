@@ -46,17 +46,35 @@ export function packageRoot(): string {
   return findPackage()?.dir ?? path.dirname(fileURLToPath(import.meta.url));
 }
 
-let found: { dir: string; version: string } | null | undefined;
+/**
+ * engines.node 要求的最低 Node 主版本。读 package.json 而非写死字面量:
+ * floor 抬高时 CLAUDE.md 要求 engines/CI/README 三处同步,doctor 的检查
+ * 提示不该是第四份要手改的地方(曾经写死 20,而 floor 早已抬到 22)。
+ * 读不到(单二进制)时退回已知下限——那里运行的是打包进来的 Bun,
+ * 本检查不适用,纯兜底。
+ */
+export function nodeMinMajor(): number {
+  const floor = findPackage()?.enginesNode?.match(/>=\s*v?(\d+)/)?.[1];
+  const major = floor !== undefined ? Number.parseInt(floor, 10) : NaN;
+  return Number.isFinite(major) && major > 0 ? major : 22;
+}
 
-function findPackage(): { dir: string; version: string } | undefined {
+let found: { dir: string; version: string; enginesNode?: string } | null | undefined;
+
+function findPackage(): { dir: string; version: string; enginesNode?: string } | undefined {
   if (found !== undefined) return found ?? undefined;
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (;;) {
     try {
       const raw = fs.readFileSync(path.join(dir, 'package.json'), 'utf8');
-      const json = JSON.parse(raw) as { name?: unknown; version?: unknown };
+      const json = JSON.parse(raw) as { name?: unknown; version?: unknown; engines?: unknown };
       if (json.name === APP_NAME && typeof json.version === 'string') {
-        found = { dir, version: json.version };
+        const engines = (json.engines ?? {}) as { node?: unknown };
+        found = {
+          dir,
+          version: json.version,
+          enginesNode: typeof engines.node === 'string' ? engines.node : undefined,
+        };
         return found;
       }
     } catch {

@@ -419,6 +419,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'doctor.keyFromEnv': '来自环境变量 ${name}',
   'doctor.keyFromConfig': '来自 {path}',
   'doctor.keyMissing': '未配置',
+  'doctor.keyNotRequired': '无需密钥（自定义端点）',
   'doctor.keyHint': '运行 `mojocode auth`，或设置 {envs}。',
   'doctor.contextWindow': '上下文 {n}',
   'doctor.modelMissing': '未配置',

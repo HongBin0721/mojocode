@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { sessionsDir as defaultSessionsDir } from '../../config/paths.js';
 import type { Config } from '../../config/schema.js';
 import { t } from '../../i18n/index.js';
 import type { DoctorCheck } from './types.js';

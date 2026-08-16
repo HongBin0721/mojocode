@@ -1,12 +1,11 @@
 import os from 'node:os';
 import process from 'node:process';
 import { APP_NAME } from '../../config/paths.js';
-import { REPO_URL, isCompiledBinary, packageRoot } from '../../config/version.js';
+import { REPO_URL, isCompiledBinary, nodeMinMajor, packageRoot } from '../../config/version.js';
 import { t } from '../../i18n/index.js';
 import type { DoctorCheck } from './types.js';
 import { NETWORK_TIMEOUT_MS, compareVersions } from './util.js';
 
-const NODE_MIN_MAJOR = 20;
 const REGISTRY_URL = `https://registry.npmjs.org/${APP_NAME}/latest`;
 
 export async function envChecks(opts: {
@@ -52,13 +51,16 @@ export async function envChecks(opts: {
     });
   } else {
     const major = Number(process.versions.node.split('.')[0]);
-    const tooOld = Number.isFinite(major) && major < NODE_MIN_MAJOR;
+    // 下限取自 package.json 的 engines.node(与 CI/README 同源),不再写死——
+    // 曾写死 20 而 floor 已抬到 22,给必崩的运行时开了绿灯。
+    const required = nodeMinMajor();
+    const tooOld = Number.isFinite(major) && major < required;
     checks.push({
       id: 'node',
       label: t('doctor.check.node'),
       level: tooOld ? 'fail' : 'ok',
       detail: `v${process.versions.node}`,
-      ...(tooOld ? { hint: t('doctor.nodeTooOld', { required: String(NODE_MIN_MAJOR) }) } : {}),
+      ...(tooOld ? { hint: t('doctor.nodeTooOld', { required: String(required) }) } : {}),
     });
   }
 

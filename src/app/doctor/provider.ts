@@ -1,5 +1,5 @@
 import { resolveProvider, type ResolvedProvider } from '../../config/load.js';
-import { PROVIDER_PRESETS, isBuiltinProvider } from '../../config/providers.js';
+import { PROVIDER_PRESETS, isBuiltinProvider, normalizeModelId } from '../../config/providers.js';
 import type { Config } from '../../config/schema.js';
 import { t } from '../../i18n/index.js';
 import { probeModels } from '../../model/registry.js';
@@ -52,27 +52,48 @@ export async function providerChecks(
       ? t('doctor.keyFromEnv', { name: envName })
       : undefined;
   const apiKey = resolved?.apiKey ?? override.apiKey ?? (envName ? env[envName]?.trim() : undefined);
+  // 无 key 是否算缺陷要和 resolveProvider 同判:只有内置厂商(有预设)和声明了
+  // apiKeyEnv 的自定义条目才必须要 key——本地 Ollama/vLLM 端点本来就不需要
+  // 凭据,若在此判 fail,healthy=false 会让 `mojocode doctor` 的 CI 门禁用法
+  // 对一份完全能用的配置退出 1。
+  const keyRequired = preset !== undefined || override.apiKeyEnv !== undefined;
   checks.push({
     id: 'apiKey',
     label: t('doctor.check.apiKey'),
-    level: apiKey ? 'ok' : 'fail',
-    detail: apiKey ? `${keySource ?? ''} ${mask(apiKey)}`.trim() : t('doctor.keyMissing'),
-    ...(apiKey
-      ? {}
-      : {
+    level: apiKey ? 'ok' : keyRequired ? 'fail' : 'ok',
+    detail: apiKey
+      ? `${keySource ?? ''} ${mask(apiKey)}`.trim()
+      : keyRequired
+        ? t('doctor.keyMissing')
+        : t('doctor.keyNotRequired'),
+    ...(!apiKey && keyRequired
+      ? {
           hint: t('doctor.keyHint', {
             envs: envNames.length > 0 ? envNames.join(' | ') : `providers.${id}.apiKey`,
           }),
-        }),
+        }
+      : {}),
   });
 
-  const model = resolved?.model ?? config.model ?? override.model ?? preset?.defaultModel;
+  // model 也要过 normalizeModelId(GLM 老配置的小写 id),否则下面的
+  // contextWindows 查表会落空。
+  const rawModel = resolved?.model ?? config.model ?? override.model ?? preset?.defaultModel;
+  const model = rawModel ? normalizeModelId(id, rawModel) : rawModel;
+  // 窗口兜底链要和 resolveProvider 完全同序(per-model 表 → 默认值 → 128k),
+  // 否则解析失败时展示的数字和修好问题后实际用的窗口对不上。
+  const contextWindow =
+    resolved?.contextWindow ??
+    config.maxContext ??
+    override.contextWindow ??
+    preset?.contextWindows[model as keyof typeof preset.contextWindows] ??
+    preset?.defaultContextWindow ??
+    128_000;
   checks.push({
     id: 'model',
     label: t('doctor.check.model'),
     level: model ? 'ok' : 'fail',
     detail: model
-      ? `${model} · ${t('doctor.contextWindow', { n: String(resolved?.contextWindow ?? config.maxContext ?? override.contextWindow ?? preset?.defaultContextWindow ?? 0) })}`
+      ? `${model} · ${t('doctor.contextWindow', { n: String(contextWindow) })}`
       : t('doctor.modelMissing'),
     ...(model ? {} : { hint: t('doctor.modelHint', { id }) }),
   });

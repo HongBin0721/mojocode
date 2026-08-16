@@ -38,8 +38,8 @@ export interface LspRuntimeStatus {
 
 /** 单次回喂最多带多少条诊断——一个坏改动能炸出几百条,全带上只会淹掉重点。 */
 const MAX_ITEMS = 20;
-/** timeoutMs 之外再宽限这么久,留给首次调用的服务器握手。 */
-const HANDSHAKE_GRACE_MS = 5000;
+/** timeoutMs 之外再宽限这么久,留给首次调用的服务器握手。doctor 的握手探针也用它拼同款预算。 */
+export const HANDSHAKE_GRACE_MS = 5000;
 /** 单条消息的长度上限(rust-analyzer 的多行长解释常见)。 */
 const MAX_MESSAGE_CHARS = 500;
 
