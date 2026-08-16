@@ -46,6 +46,11 @@ npm test             # vitest(bridge / reducer / 组件)
 npm run build        # 三端产物 → out/
 ```
 
+dev 模式的热更边界:renderer 走 vite HMR(改组件/样式即时生效);**main 与
+preload 的源码改动当前不会触发自动重建**(electron-vite 的 watch 未覆盖,
+产物仍是旧的),改完这两处必须重启 `npm run dev`。preload 加载的是
+`out/preload/index.js`,排查下行推送问题时先确认产物时间戳。
+
 常用环境变量:
 
 - `MOJOCODE_CLI_JS` — 覆盖 CLI 入口路径(默认:向上找到仓库根的 `dist/cli.js`)
