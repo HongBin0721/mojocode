@@ -309,25 +309,6 @@ export function Composer() {
                 />
               </MenuPopover>
             ) : null}
-            {/* 思考强度:左组第二位(ZCode 的 Reasoning effort 位) */}
-            {effort ? (
-              <MenuPopover
-                label={
-                  <span className="composer-tool" title={t('reasoningMenu.title')}>
-                    <span aria-hidden>✦</span>
-                    {effort}
-                  </span>
-                }
-                title={t('reasoningMenu.title')}
-                width={280}
-                placement="top"
-              >
-                <ReasoningMenuList
-                  entries={reasoningMenuEntries(effort)}
-                  onPick={(level) => rpc(setReasoningRpc(level))}
-                />
-              </MenuPopover>
-            ) : null}
           </div>
           <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
           {/* 模型选择器:发送键左侧(ZCode 的 betweenCancelAndSubmitAction 位) */}
@@ -347,6 +328,25 @@ export function Composer() {
               <ModelMenuList />
             </MenuPopover>
           ) : null}
+                      {/* 思考强度:模型选择器右侧、发送键左侧(ZCode 顺序) */}
+            {effort ? (
+              <MenuPopover
+                label={
+                  <span className="composer-tool" title={t('reasoningMenu.title')}>
+                    <span aria-hidden>✦</span>
+                    {effort}
+                  </span>
+                }
+                title={t('reasoningMenu.title')}
+                width={280}
+                placement="top"
+              >
+                <ReasoningMenuList
+                  entries={reasoningMenuEntries(effort)}
+                  onPick={(level) => rpc(setReasoningRpc(level))}
+                />
+              </MenuPopover>
+            ) : null}
           <button
             type="button"
             className="composer-send"
