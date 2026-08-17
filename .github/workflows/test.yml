@@ -1,5 +1,6 @@
 # push/PR 质量门:Node 矩阵跑 typecheck + 核心测试;bun job 跑 UI 测试
-# (OpenTUI 原生渲染需 FFI,只能在 Bun 下跑)+ 单二进制冒烟。
+# (OpenTUI 原生渲染需 FFI,只能在 Bun 下跑)+ 单二进制冒烟;
+# desktop job 跑 GUI 独立包(apps/desktop)的 typecheck + 测试。
 name: test
 
 on:
@@ -58,7 +59,32 @@ jobs:
             process.stdin.on('data', (c) => (d += c));
             process.stdin.on('end', () => {
               const r = JSON.parse(d);
-              const node = r.sections[0].checks.find((c) => c.id === 'node');
-              if (!/Bun v/.test(node.detail)) throw new Error('runtime check missing Bun: ' + node.detail);
+            const node = r.sections[0].checks.find((c) => c.id === 'node');
+            if (!/Bun v/.test(node.detail)) throw new Error('runtime check missing Bun: ' + node.detail);
             });
           "
+
+  # GUI(apps/desktop 独立包,不在根 workspaces):typecheck + 测试。
+  # @core/* alias 直接编译仓库根 src/ 的 TS 源码,其 zod/ai 依赖向上解析到
+  # 根 node_modules,所以根依赖也要装;typecheck/测试都不启动 Electron,
+  # 用官方 postinstall 约定的环境变量跳过 ~100MB 的二进制下载。
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: apps/desktop
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run typecheck
+        working-directory: apps/desktop
+      - run: npm test
+        working-directory: apps/desktop

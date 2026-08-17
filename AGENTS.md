@@ -17,6 +17,7 @@ npm run test:ui     # UI tests — MUST run under Bun (= bun --bun x vitest run 
 npx vitest run tests/gate.test.ts       # single core test file
 npx vitest run -t "name substring"      # single test by name
 node dist/cli.js    # run the built CLI
+cd apps/desktop && npm run typecheck && npm test   # GUI gates (separate package; root npm ci needed too)
 ```
 
 There is no lint config; `npm run typecheck` + both test lanes are the correctness gates.
@@ -112,6 +113,21 @@ stream to the renderer → history persists to append-only JSONL in `~/.mojocode
   white background (strings red, numbers/comments green) and paints red-on-green inside
   the diff; `DIFF_THEME` overrides every colored default key (unset keys fall back) with a
   red/green-free bright palette, emitted as raw truecolor SGR instead of via chalk.
+
+**`apps/desktop/` is the Electron GUI client — a deliberately separate package.** No root
+workspaces: it carries its own `package.json`/lockfile, tsconfig projects and vitest config,
+so root `build`/`typecheck`/`test`/publish never see it (`files: ["dist"]`). It is a third
+frontend over the same core — Electron main spawns a managed `mojocode serve --managed`
+child and speaks the same REST+SSE protocol as the TUI's remote mode; `spawn-server.ts`
+mirrors `src/app/server-launch.ts`'s handshake on purpose (a shared launch path would grow
+holes for the GUI's process shapes) — don't "fix" the duplication. Dependencies are strictly
+one-way: desktop compiles root pure modules via `@core/*` source aliases, a whitelist kept
+in **three synced copies** (`apps/desktop/tsconfig.json` paths, `electron.vite.config.ts`,
+`vitest.config.ts`); root never imports desktop, and renderer-side `@core/*` targets must be
+Node-free (the browser build failing on a `node:` import IS the guardrail). Gates:
+`cd apps/desktop && npm run typecheck && npm test` — root `npm ci` is a prerequisite
+(`@core/*` sources resolve `zod`/`ai` from root `node_modules`); neither gate launches
+Electron, so `ELECTRON_SKIP_BINARY_DOWNLOAD=1` is fine (CI's `desktop` job relies on it).
 
 ## Conventions
 
