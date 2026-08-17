@@ -28,6 +28,13 @@ export interface SpawnedServer {
   waitExit(graceMs?: number): Promise<void>;
 }
 
+/** 握手后子进程退出时回调携带的现场:退出码/信号 + stderr 尾部(死因线索)。 */
+export interface ServerExitInfo {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderrTail: string[];
+}
+
 export interface SpawnServerParams {
   /** 跑 cli.js 的 Node 可执行文件(系统 node,或打包态的 ELECTRON_RUN_AS_NODE)。 */
   nodeBin: string;
@@ -37,6 +44,12 @@ export interface SpawnServerParams {
   serveArgs: string[];
   /** 打包态用 ELECTRON_RUN_AS_NODE 跑 Electron 自带的二进制。 */
   runAsNode?: boolean;
+  /**
+   * 握手**之后**子进程退出即触发(计划内 shutdown 也会——期望的退出由调用方
+   * 吸收,见 session-service 的 disposing 标志)。没有它,sidecar 崩溃只
+   * 表现为几秒后「连接断开」,stderr 尾部缓冲永远没人倒。
+   */
+  onExit?: (info: ServerExitInfo) => void;
 }
 
 export async function spawnManagedServer(params: SpawnServerParams): Promise<SpawnedServer> {
@@ -109,6 +122,11 @@ export async function spawnManagedServer(params: SpawnServerParams): Promise<Spa
     });
   });
   handshaken = true;
+  // 握手内那个 once('exit') 已随 promise 落定失效;这里重新挂一个,把退出
+  // 现场(含尾部缓冲快照)交给调用方倒出与上报。
+  child.once('exit', (code, signal) => {
+    params.onExit?.({ code, signal, stderrTail: [...stderrTail] });
+  });
 
   return {
     url,

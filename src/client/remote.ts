@@ -80,6 +80,11 @@ export interface RemoteOptions {
    * `--attach` 到外部 server 时为假——退出 TUI 不该拖垮别人的 server。
    */
   ownsServer: boolean;
+  /**
+   * 重连耗尽时的断线文案。默认是 TUI 措辞(`notice.serverLost`,「重启 TUI」);
+   * GUI 客户端传自己的说法——这条消息直接进用户可见的错误横幅。
+   */
+  lostMessage?: string;
 }
 
 export interface RemoteSession extends SessionHandle {
@@ -97,6 +102,13 @@ export interface RemoteSession extends SessionHandle {
   workspaceStatus(): Promise<WorkspaceStatus>;
   /** 单文件 diff(vs HEAD;untracked 为全新增补丁)。 */
   fileDiff(path: string): Promise<FileDiff>;
+  /**
+   * 受管子进程意外退出时由拥有它的前端调用(spawn 侧的 onExit 回调接线):
+   * 不必等 5 次重连白白烧完 4.5 秒,立即断线收尾,并把死因(退出码 +
+   * stderr 尾部)作为错误消息发到 bus——这是用户能看到 sidecar 遗言的唯一
+   * 通道。dispose 之后调用是无操作(计划内退出不报灾)。
+   */
+  notifyServerExit(message: string): void;
 }
 
 export async function connectRemote(options: RemoteOptions): Promise<RemoteSession> {
@@ -332,16 +344,17 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     }
   };
 
-  const connectionLost = (): void => {
+  const connectionLost = (message?: string): void => {
     if (closed) return;
     closed = true;
-    sseReady.reject(new Error(t('notice.serverLost'))); // 已兑现时是无操作
+    const text = message ?? options.lostMessage ?? t('notice.serverLost');
+    sseReady.reject(new Error(text)); // 已兑现时是无操作
 
     for (const [, entry] of pendingCalls) {
-      entry.reject(new Error(t('notice.serverLost')));
+      entry.reject(new Error(text));
     }
     pendingCalls.clear();
-    bus.emit({ type: 'error', error: new Error(t('notice.serverLost')), recoverable: false });
+    bus.emit({ type: 'error', error: new Error(text), recoverable: false });
   };
 
   // connectRemote 必须等首条 SSE 连接**就位**才返回:server 在响应头发出前
@@ -618,6 +631,12 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // /simplify:与 startReview 同理——一整轮 agent.run 的 deferred RPC。
     startSimplify: (target, opts) =>
       callDeferred('startSimplify', { target, options: opts }) as Promise<SimplifyStartResult>,
+    notifyServerExit: (message) => {
+      // connectionLost 自带 closed 幂等:dispose(计划内退出)后到达的 exit
+      // 回调静默吸收。abort 让还挂着的 SSE 重连 fetch 立即出局。
+      connectionLost(message);
+      sseAbort.abort();
+    },
     dispose: async () => {
       const wasClosed = closed;
       closed = true;

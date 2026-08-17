@@ -578,6 +578,39 @@ describe('server ↔ remote client', () => {
     expect(infos).not.toContain('flood-0');
   });
 
+  // sidecar 意外退出的快速通道:spawn 侧 onExit 回调 → notifyServerExit,
+  // 不等 5 次重连白烧几秒。死因文本(退出码 + stderr 尾部)原样进 bus 的
+  // 不可恢复 error;挂起的 deferred 调用一并 reject,spinner 不会常亮。
+  it('notifyServerExit:立即断线、死因进 bus、pending 调用被 reject', async () => {
+    const { parts, remote } = await boot();
+    const errors: string[] = [];
+    remote.bus.on((event) => {
+      if (event.type === 'error' && !event.recoverable) errors.push(event.error.message);
+    });
+
+    const runPromise = remote.agent.run('long');
+    await waitFor(() => parts.spies.run.mock.calls.length === 1);
+
+    remote.notifyServerExit('server died: boom\ntail-line');
+
+    await expect(runPromise).rejects.toThrow('server died: boom');
+    expect(errors).toEqual(['server died: boom\ntail-line']);
+  });
+
+  // 计划内退出(dispose 已把连接标成 closed)之后到达的 exit 回调必须静默:
+  // 正常退出不该在时间线里留下一条「server 意外退出」。
+  it('notifyServerExit:dispose 之后是无操作', async () => {
+    const { remote } = await boot();
+    const errors: string[] = [];
+    remote.bus.on((event) => {
+      if (event.type === 'error') errors.push(event.error.message);
+    });
+
+    await remote.dispose();
+    remote.notifyServerExit('late exit');
+    expect(errors).toEqual([]);
+  });
+
   it('顺序依赖的调用按发起顺序到达(goalSet 先于 setPermissions)', async () => {
     const { parts, remote } = await boot();
     const order: string[] = [];

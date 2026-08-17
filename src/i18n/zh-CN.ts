@@ -346,6 +346,9 @@ export const zhCN: Record<keyof typeof en, string> = {
   'cli.attachNeedsToken': '--attach 需要把 server token 放进 MOJOCODE_SERVER_TOKEN 环境变量。',
   'cli.serverSpawnFailed': '无法启动 mojocode server：{message}',
   'notice.serverLost': '与 mojocode server 的连接已断开——请重启 TUI 继续。',
+  'notice.serverLostApp': '与 mojocode server 的连接已断开——请重启应用或重新打开项目继续。',
+  'notice.serverExited': 'mojocode server 进程意外退出({code})——请重启 TUI 继续。',
+  'notice.serverExitedApp': 'mojocode server 进程意外退出({code})——请重启应用或重新打开项目继续。',
   'remote.keyRefusedInsecure':
     '拒绝通过未加密的非本机连接发送 API key。请在 server 侧配置密钥（环境变量或配置文件）后再切换。',
   'notice.serverReconnected': '已重新连接 mojocode server。断线期间的部分输出没有出现在这份记录里。',

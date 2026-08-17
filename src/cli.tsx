@@ -3,7 +3,7 @@ import process from 'node:process';
 import { bootstrap } from './app/bootstrap.js';
 import { headlessAsker, renderHeadless } from './app/headless.js';
 import { detectTuiRuntime, reexecWithFfi } from './app/runtime.js';
-import { spawnManagedServer, type SpawnedServer } from './app/server-launch.js';
+import { spawnManagedServer, type ServerExitInfo, type SpawnedServer } from './app/server-launch.js';
 import type { SessionHandle } from './app/session-handle.js';
 import { connectRemote } from './client/remote.js';
 import { createPermissionBroker, startServer } from './server/serve.js';
@@ -429,6 +429,19 @@ function serveArgsFrom(flags: MainFlags, root: string, resumeId?: string): strin
  * server 侧无 FFI,Node ≥ 22 即可;TUI 的 FFI 运行时门只管 client 进程。
  */
 async function runServe(opts: { host: string; port: string; managed?: boolean }): Promise<void> {
+  // 崩溃兜底:server 进程一死,客户端只看得到「连接断开」,死因全在 stderr
+  // 里(受管模式下进父进程的尾部缓冲,由 onExit 回调倒出)。unhandledRejection
+  // 只记录不退出——agent 循环 / MCP / LSP / store 任何一处漏掉的 catch 不该
+  // 拖垮整个会话;uncaughtException 后进程状态不可信,记录后按惯例退出。
+  process.on('unhandledRejection', (reason) => {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    process.stderr.write(`[mojocode serve] unhandled rejection: ${detail}\n`);
+  });
+  process.on('uncaughtException', (error) => {
+    process.stderr.write(`[mojocode serve] uncaught exception: ${error.stack ?? String(error)}\n`);
+    process.exit(1);
+  });
+
   // 与 doctor 同一手法:共享 flags 声明在根命令上,从 program.opts() 读,
   // `mojocode -C dir serve` 与 `mojocode serve -C dir` 都生效。
   const globals = program.opts() as MainFlags;
@@ -634,8 +647,26 @@ async function runMain(flags: MainFlags): Promise<void> {
         });
       } else {
         // 配置警告与 MCP 失败提示由子进程 stderr 在握手前原样转发,这里不重复。
-        spawned = await spawnManagedServer(serveArgsFrom(flags, root, resume?.id));
-        handle = await connectRemote({ url: spawned.url, token: spawned.token, ownsServer: true });
+        let onServerExit: ((info: ServerExitInfo) => void) | undefined;
+        spawned = await spawnManagedServer(serveArgsFrom(flags, root, resume?.id), {
+          onExit: (info) => onServerExit?.(info),
+        });
+        const remote = await connectRemote({
+          url: spawned.url,
+          token: spawned.token,
+          ownsServer: true,
+        });
+        // sidecar 意外退出:立即断线,并把死因(退出码 + stderr 尾部)推进
+        // 时间线,不必等重连白烧几秒;计划内 shutdown 后 remote 已 closed,
+        // notifyServerExit 是无操作。
+        onServerExit = (info) => {
+          const cause = info.code !== null ? `code ${info.code}` : `signal ${info.signal ?? '?'}`;
+          const tail = info.stderrTail.slice(-8).join('\n');
+          remote.notifyServerExit(
+            `${t('notice.serverExited', { code: cause })}${tail ? `\n${tail}` : ''}`,
+          );
+        };
+        handle = remote;
       }
     } catch (error) {
       return fail(error);

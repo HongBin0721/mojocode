@@ -31,7 +31,26 @@ export interface SpawnedServer {
   waitExit(graceMs?: number): Promise<void>;
 }
 
-export async function spawnManagedServer(serveArgs: string[]): Promise<SpawnedServer> {
+/** 握手后子进程退出时回调携带的现场:退出码/信号 + stderr 尾部(死因线索)。 */
+export interface ServerExitInfo {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderrTail: string[];
+}
+
+export interface SpawnHooks {
+  /**
+   * 握手**之后**子进程退出即触发(计划内 shutdown 也会——期望的退出由调用方
+   * 用 RemoteSession 的 closed 幂等吸收,见 notifyServerExit)。没有它,
+   * sidecar 崩溃只表现为几秒后「连接断开」,stderr 尾部缓冲永远没人倒。
+   */
+  onExit?: (info: ServerExitInfo) => void;
+}
+
+export async function spawnManagedServer(
+  serveArgs: string[],
+  hooks?: SpawnHooks,
+): Promise<SpawnedServer> {
   const token = randomBytes(24).toString('hex');
   // 单二进制:execPath 就是 mojocode 本体;Node:node + dist/cli.js。
   // 不带 execArgv:server 侧无 FFI,--experimental-ffi 等旗标无须继承。
@@ -103,6 +122,12 @@ export async function spawnManagedServer(serveArgs: string[]): Promise<SpawnedSe
     });
   });
   handshaken = true;
+  // 握手内那个 once('exit') 已随 promise 落定失效;这里重新挂一个,把退出
+  // 现场交给调用方。alternate screen 期间不能写 stderr(会花屏),所以尾部
+  // 缓冲不在这里倒——随 info 带出去,进时间线错误条目。
+  child.once('exit', (code, signal) => {
+    hooks?.onExit?.({ code, signal, stderrTail: [...stderrTail] });
+  });
 
   return {
     url,

@@ -369,6 +369,12 @@ export const en = {
   'cli.attachNeedsToken': '--attach needs the server token in MOJOCODE_SERVER_TOKEN.',
   'cli.serverSpawnFailed': 'Could not start the mojocode server: {message}',
   'notice.serverLost': 'Lost connection to the mojocode server — restart the TUI to continue.',
+  'notice.serverLostApp':
+    'Lost connection to the mojocode server — restart the app or reopen the project to continue.',
+  'notice.serverExited':
+    'The mojocode server process exited unexpectedly ({code}) — restart the TUI to continue.',
+  'notice.serverExitedApp':
+    'The mojocode server process exited unexpectedly ({code}) — restart the app or reopen the project to continue.',
   'remote.keyRefusedInsecure':
     'Refusing to send the API key over an unencrypted non-loopback connection. Set the key on the server (env var or config file), then switch again.',
   'notice.serverReconnected':
