@@ -510,12 +510,13 @@ html.platform-darwin .sidebar-top {
   height: 100%;
 }
 
-/* 侧栏收起时的顶部浮层:补窗口拖拽区 + 展开按钮 + 新建任务 */
+/* 侧栏收起时的顶部浮层:补窗口拖拽区 + 展开按钮 + 新建任务。
+   只包住按钮、不铺全宽:全宽会挡住下层顶栏 chips 的点击,而且它的 drag
+   矩形(DOM 在顶栏之后)会把顶栏 no-drag 子元素挖出的洞重新盖回去。 */
 .app-overlay {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
   height: var(--topbar-h);
   z-index: 30;
   display: flex;

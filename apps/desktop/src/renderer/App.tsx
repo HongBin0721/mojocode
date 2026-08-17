@@ -116,8 +116,11 @@ export function App() {
     <div className="shell">
       <Sidebar />
       <div className="app">
-        <CollapsedOverlay />
         <ChatTopBar />
+        {/* 必须排在 ChatTopBar 之后:Electron 的拖拽区按文档顺序 union/subtract
+            (不看 z-index),浮层若在前,按钮挖出的 no-drag 洞会被顶栏整条的
+            drag 矩形重新盖回去——点「展开」变成拖窗口,侧栏永远点不开。 */}
+        <CollapsedOverlay />
         <ConnectionBanner />
         <div className="main-split">
           <div className="chat-pane">
