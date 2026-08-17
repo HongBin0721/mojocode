@@ -7,7 +7,7 @@
  *     会话里出现过的 root。每组是可折叠的文件夹标题行 + 缩进任务行(标题
  *     左、相对时间右,运行中的会话带脉冲点),空项目显示「暂无任务」;
  *     悬停出「新任务」(其他项目 → 重启 sidecar 切工作区)与「移除」;
- *  4. 底部 Settings 菜单(语言切换 + 连接状态展示)。
+ *  4. 底部 Settings 菜单(语言切换)。
  *
  * 右缘可拖宽(264~50vw,双击复位),⌘B 折叠(App 里监听)。
  */
@@ -55,10 +55,9 @@ const SessionRow = memo(function SessionRow({
   );
 });
 
-/** 底部 Settings 菜单:语言切换 + 连接状态(只读)。 */
+/** 底部 Settings 菜单:语言切换。 */
 function SettingsMenu() {
   useLocale();
-  const connection = useDesktopStore((s) => s.connection);
   const locale = getLocale();
   return (
     <MenuPopover
@@ -83,10 +82,6 @@ function SettingsMenu() {
         <span className="menu-item-label">{t('settings.language')}</span>
         <span className="menu-item-desc">{locale === 'zh-CN' ? 'English' : '中文'}</span>
       </button>
-      <div className="menu-status-row">
-        <span className={`dot dot-${connection}`} />
-        {t(`connection.${connection}` as 'connection.connected')}
-      </div>
     </MenuPopover>
   );
 }

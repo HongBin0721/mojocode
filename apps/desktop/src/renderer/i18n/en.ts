@@ -25,8 +25,6 @@ export const en = {
   'notice.interrupted': 'Interrupted.',
 
   // ---- 界面 ----
-  'connection.connecting': 'Connecting',
-  'connection.connected': 'Connected',
   'connection.lost': 'Connection lost',
   'badge.running': 'Running',
   'composer.placeholder': 'Ask mojocode anything — / for commands or skills',

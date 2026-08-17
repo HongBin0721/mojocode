@@ -21,8 +21,6 @@ export const zhCN: Record<keyof typeof import('./en.js')['en'], string> = {
   'notice.interrupted': '已中断。',
 
   // ---- 界面 ----
-  'connection.connecting': '连接中',
-  'connection.connected': '已连接',
   'connection.lost': '连接断开',
   'badge.running': '运行中',
   'composer.placeholder': '向 mojocode 提问，使用 / 选择命令或技能',

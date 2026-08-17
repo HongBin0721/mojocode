@@ -1933,16 +1933,6 @@ html.platform-darwin .app-overlay {
   font-size: 11px;
 }
 
-/* 菜单里的状态行(连接状态展示,不可点) */
-.menu-status-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  color: var(--color-foreground-subtle);
-  font-size: 12.5px;
-}
-
 .model-group {
   margin-bottom: 4px;
 }
@@ -1964,23 +1954,6 @@ html.platform-darwin .app-overlay {
 }
 .menu-error {
   color: var(--color-destructive);
-}
-
-/* 连接状态点(设置菜单内) */
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: none;
-}
-.dot-connecting {
-  background: var(--color-warning);
-}
-.dot-connected {
-  background: var(--color-success);
-}
-.dot-lost {
-  background: var(--color-destructive);
 }
 
 /* ---- 斜杠命令菜单 ---- */
