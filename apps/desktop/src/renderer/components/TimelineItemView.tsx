@@ -11,6 +11,26 @@ import { ReasoningBlock } from './ReasoningBlock.js';
 import { ToolCard } from './ToolCard.js';
 import { TurnLine } from './TurnLine.js';
 import { TodoList } from './TodoList.js';
+import { localizeMode } from '../utils/mode-label.js';
+import { useLocale } from '../i18n/index.js';
+
+/** banner 单独成组件:它是唯一要跟随语言重渲染的分支(模式 pill 走
+ * localizeMode),locale 订阅只挂在这里——挂在外层会让长会话的每一条
+ * 时间线项都进 i18n 的 listener 集合,memo 形同虚设。 */
+function BannerItem({ item }: { item: Extract<TimelineItem, { kind: 'banner' }> }) {
+  useLocale();
+  return (
+    <div className="banner">
+      <span className="banner-title">{item.providerLabel}</span>
+      <span className="banner-model">{item.model}</span>
+      <span className="banner-root" title={item.root}>
+        {item.root}
+      </span>
+      <span className="banner-mode">{localizeMode(item.mode)}</span>
+      {item.mcpSummary ? <span className="banner-mcp">MCP {item.mcpSummary}</span> : null}
+    </div>
+  );
+}
 
 export const TimelineItemView = memo(function TimelineItemView({ item }: { item: TimelineItem }) {
   switch (item.kind) {
@@ -78,17 +98,7 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
         <div className="divider">⋯ {item.count}</div>
       );
     case 'banner':
-      return (
-        <div className="banner">
-          <span className="banner-title">{item.providerLabel}</span>
-          <span className="banner-model">{item.model}</span>
-          <span className="banner-root" title={item.root}>
-            {item.root}
-          </span>
-          <span className="banner-mode">{item.mode}</span>
-          {item.mcpSummary ? <span className="banner-mcp">MCP {item.mcpSummary}</span> : null}
-        </div>
-      );
+      return <BannerItem item={item} />;
     default:
       return null;
   }

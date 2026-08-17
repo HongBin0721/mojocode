@@ -17,8 +17,16 @@ export function initBridge(): () => void {
   const api = window.mojocode;
   const ctx = makeTimelineCtx(() => desktop.getState().snapshot);
 
+  // 工作区切换(main 重启 sidecar 后强推快照)要把 Review 缓存清干净——
+  // fileDiffs 按相对路径存,新 root 下的同名文件会命中旧 diff。
+  let lastRoot: string | undefined;
+
   const offs = [
-    api.on('state', (snapshot) => desktop.getState().applySnapshot(snapshot)),
+    api.on('state', (snapshot) => {
+      if (lastRoot !== undefined && snapshot.root !== lastRoot) useReviewStore.getState().reset();
+      lastRoot = snapshot.root;
+      desktop.getState().applySnapshot(snapshot);
+    }),
     api.on('connection', (connection) => desktop.getState().applyConnection(connection)),
     api.on('permission', (permission) => desktop.getState().applyPermission(permission)),
     api.on('sessions', (sessions) => desktop.getState().applySessions(sessions)),
@@ -45,6 +53,7 @@ export function initBridge(): () => void {
   void api
     .subscribe()
     .then(({ state, replayItems, connection }) => {
+      lastRoot = state.root;
       desktop.getState().applySnapshot(state);
       desktop.getState().applyConnection(connection);
       timeline.getState().setItems(replayItems);

@@ -1,7 +1,7 @@
 /**
- * 输入区(ZCode 式输入块):rounded-2xl 外框(focus-within 抬边框/换底色)
- * 内嵌 rounded-xl textarea 卡;底部工具栏左侧是模式切换(权限档菜单)与
- * 模型选择器(原顶栏的两个入口迁到这里),右侧品牌色发送/停止钮。
+ * 输入区(ZCode 式输入块):rounded-2xl 扁平外框(textarea 透明内嵌);
+ * 底部工具栏两组——左:+ 附件、盾牌权限档 chip(完全访问染橙);右:模型、
+ * 思考强度、中性 primary 发送/停止钮(ZCode 工具栏实际布局)。
  *
  * 键盘:Enter 提交 / Shift+Enter 换行;`Shift+Tab` 循环权限档;`/` 开头弹
  * 命令菜单;粘贴与拖入图片 → 缩略图附件 chips(拖入非图片忽略)。
@@ -26,6 +26,8 @@ import { MenuPopover } from './Menu.js';
 import { ModelMenuList } from './ModelMenu.js';
 import { PermissionMenuList } from './PermissionMenu.js';
 import { ReasoningMenuList } from './ReasoningMenu.js';
+import { EffortIcon, PlusIcon, ShieldIcon } from './icons.js';
+import { localizeEffort, localizeMode } from '../utils/mode-label.js';
 
 /** 剪贴板/拖入的图片文件 → ImageAttachment(base64)。 */
 async function toAttachment(file: File, index: number): Promise<ImageAttachment> {
@@ -71,6 +73,7 @@ export function Composer() {
   const [suppressed, setSuppressed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const running = snapshot?.agent.isRunning ?? false;
   const canSend = connection === 'connected' && (text.trim().length > 0 || images.length > 0);
@@ -218,13 +221,19 @@ export function Composer() {
     else submit();
   };
 
-  /** 拖入:仅接受图片(与粘贴同路径);非图片静默忽略。 */
+  /** 追加图片附件(拖入/粘贴/+ 按钮共用);非图片静默忽略。 */
+  const addFiles = (list: Iterable<File>) => {
+    const files = Array.from(list).filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    void Promise.all(files.map((file, index) => toAttachment(file, index))).then((added) =>
+      setImages((prev) => [...prev, ...added]),
+    );
+  };
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const files = Array.from(e.dataTransfer.files).filter((file) => file.type.startsWith('image/'));
-    if (files.length === 0) return;
-    void Promise.all(files.map((file, index) => toAttachment(file, index))).then(setImages);
+    addFiles(e.dataTransfer.files);
   };
 
   return (
@@ -274,26 +283,45 @@ export function Composer() {
             if (slashState(e.target.value).query !== slash.query) setSuppressed(false);
           }}
           onPaste={(e) => {
-            const files = Array.from(e.clipboardData.files).filter((file) =>
-              file.type.startsWith('image/'),
-            );
-            if (files.length === 0) return;
+            if (e.clipboardData.files.length === 0) return;
             e.preventDefault();
-            void Promise.all(files.map((file, index) => toAttachment(file, index))).then(setImages);
+            addFiles(e.clipboardData.files);
           }}
           onKeyDown={onKeyDown}
         />
         <div className="composer-toolbar">
+          {/* 左组:+ 附件、盾牌权限档(ZCode 左下角布局) */}
           <div className="composer-tools">
+            <button
+              type="button"
+              className="composer-tool composer-plus"
+              title={t('composer.attach')}
+              onClick={() => fileRef.current?.click()}
+            >
+              <PlusIcon size={16} />
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = '';
+              }}
+            />
             {mode ? (
               <MenuPopover
                 label={
                   <span
-                    className={`composer-tool ${dangerous ? 'composer-tool-danger' : ''} ${
+                    className={`composer-tool composer-mode ${dangerous ? 'composer-tool-danger' : ''} ${
                       flash ? 'composer-tool-flash' : ''
                     }`}
                   >
-                    {badge}
+                    <ShieldIcon />
+                    {badge && localizeMode(badge)}
+                    <span className="composer-caret">⌄</span>
                   </span>
                 }
                 title={t('permissionMenu.title')}
@@ -310,12 +338,11 @@ export function Composer() {
               </MenuPopover>
             ) : null}
           </div>
-          <span className="composer-hint">Shift+Tab · {t('composer.modeHint')}</span>
-          {/* 模型选择器:发送键左侧(ZCode 的 betweenCancelAndSubmitAction 位) */}
+          {/* 右组:模型 → 思考强度 → 发送(ZCode 顺序) */}
           {snapshot ? (
             <MenuPopover
               label={
-                <span className="composer-tool">
+                <span className="composer-tool composer-tool-model">
                   {snapshot.provider.model}
                   <span className="composer-caret">⌄</span>
                 </span>
@@ -324,29 +351,31 @@ export function Composer() {
               width={360}
               requestOpen={modelMenuRequest}
               placement="top"
+              align="end"
             >
               <ModelMenuList />
             </MenuPopover>
           ) : null}
-                      {/* 思考强度:模型选择器右侧、发送键左侧(ZCode 顺序) */}
-            {effort ? (
-              <MenuPopover
-                label={
-                  <span className="composer-tool" title={t('reasoningMenu.title')}>
-                    <span aria-hidden>✦</span>
-                    {effort}
-                  </span>
-                }
-                title={t('reasoningMenu.title')}
-                width={280}
-                placement="top"
-              >
-                <ReasoningMenuList
-                  entries={reasoningMenuEntries(effort)}
-                  onPick={(level) => rpc(setReasoningRpc(level))}
-                />
-              </MenuPopover>
-            ) : null}
+          {effort ? (
+            <MenuPopover
+              label={
+                <span className="composer-tool composer-effort" title={t('reasoningMenu.title')}>
+                  <EffortIcon />
+                  {localizeEffort(effort)}
+                  <span className="composer-caret">⌄</span>
+                </span>
+              }
+              title={t('reasoningMenu.title')}
+              width={280}
+              placement="top"
+              align="end"
+            >
+              <ReasoningMenuList
+                entries={reasoningMenuEntries(effort)}
+                onPick={(level) => rpc(setReasoningRpc(level))}
+              />
+            </MenuPopover>
+          ) : null}
           <button
             type="button"
             className="composer-send"

@@ -16,6 +16,8 @@ import {
 export interface UiStore {
   width: number;
   collapsed: boolean;
+  /** 侧栏搜索框的展开态(⌘K 与侧栏搜索行共用,不持久化)。 */
+  searchOpen: boolean;
   /** 拖拽中直接设宽(已钳制);拖拽结束才落盘。 */
   setWidth(width: number, viewportWidth: number): void;
   /** 拖拽结束:持久化当前宽度。 */
@@ -23,11 +25,14 @@ export interface UiStore {
   /** 双击手柄:复位默认宽并落盘。 */
   resetWidth(): void;
   toggleCollapsed(): void;
+  openSearch(): void;
+  closeSearch(): void;
 }
 
 export const useUiStore = create<UiStore>((set, get) => ({
   width: typeof window === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : loadSidebarWidth(window.innerWidth),
   collapsed: loadSidebarCollapsed(),
+  searchOpen: false,
 
   setWidth: (width, viewportWidth) => set({ width: clampSidebarWidth(width, viewportWidth) }),
   commitWidth: () => saveSidebarWidth(get().width),
@@ -40,4 +45,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ collapsed });
     saveSidebarCollapsed(collapsed);
   },
+  openSearch: () => set({ searchOpen: true }),
+  closeSearch: () => set({ searchOpen: false }),
 }));

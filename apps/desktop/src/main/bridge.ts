@@ -114,10 +114,11 @@ export function createBridge(deps: BridgeDeps): Bridge {
     if (!disposed) target.send(IPC_CHANNELS.replay, items);
   };
 
-  /** 拉会话列表并下发;旧 server(unknown method)以 undefined 下发(侧栏降级)。 */
+  /** 拉会话列表并下发;旧 server(unknown method)以 undefined 下发(侧栏降级)。
+   * 跨工作区(all):侧栏按项目分组,其他项目的任务也要能列出来。 */
   const pushSessions = async (): Promise<void> => {
     try {
-      const sessions = await session.listSessions();
+      const sessions = await session.listSessions(true);
       if (!disposed) target.send(IPC_CHANNELS.sessions, sessions);
     } catch {
       if (!disposed) target.send(IPC_CHANNELS.sessions, undefined);
@@ -180,7 +181,7 @@ export function createBridge(deps: BridgeDeps): Bridge {
       case 'setReasoningEffort':
         return session.setReasoningEffort(request.level);
       case 'listSessions':
-        return session.listSessions();
+        return session.listSessions(true);
       case 'listProviderModels':
         return session.listProviderModels();
       case 'runSkill':

@@ -1,8 +1,9 @@
 /*
- * 桌面客户端样式 —— 对齐 ZCode 桌面端 3.7.7 的视觉语言(从其产物提取的
- * 设计规格):neutral 灰阶底色 + sky 品牌色,层级用透明度叠层表达
- * (surface/selected 均为白色低透明度混合),边框为白色低透明度 hairline。
- * 仅深色形态;token 命名沿用 ZCode 语义(--color-*),浅色主题留待下迭代。
+ * 桌面客户端样式 —— 对齐 ZCode 桌面端的视觉语言(自实机截图取色):
+ * neutral 灰阶底色 + 橙色强调(#ff8e31,完全访问/品牌点缀),侧栏比主区
+ * 浅一档(#2b2c2e vs #171717),卡片/输入块 #2b2b2b 近无边框;发送键是
+ * 中性 primary(白底黑箭头)。层级用透明度叠层表达,边框为白色低透明度
+ * hairline。仅深色形态;token 命名沿用 ZCode 语义(--color-*)。
  */
 
 :root {
@@ -11,34 +12,45 @@
   /* vibrancy 上的 tint:重遮蔽(92%)——60% 透明度在亮色壁纸下会透白发灰,
    * 近实心才能稳定读作深色,又保留一丝毛玻璃层次 */
   --color-background-alt: rgba(23, 23, 23, 0.92);
-  --color-sidebar: #0a0a0a; /* neutral-950 侧栏 */
-  --color-card: #262626; /* neutral-800 卡片/输入/浮层 */
+  --color-sidebar: rgba(43, 44, 46, 0.92); /* ZCode 侧栏:比主区浅一档 */
+  --color-card: #2b2b2b; /* 卡片/输入/浮层(ZCode 实测) */
   --color-card-selected: #404040; /* neutral-700 */
-  --color-popover: #262626; /* 审批卡等嵌入式浮层 */
-  --color-menu: #0a0a0a; /* 下拉菜单(比 popover 更沉) */
-  --color-menu-hover: #171717;
-  --color-input: #262626;
-  --color-input-focused: #0a0a0a;
+  --color-popover: #2b2b2b; /* 审批卡等嵌入式浮层 */
+  --color-menu: #212121; /* 下拉菜单(比 popover 沉) */
+  --color-menu-hover: #2e2e2e;
+  --color-input: #2b2b2b;
+  --color-input-focused: #262626;
   --color-tag: #404040; /* 行内代码底 */
+  /* 侧栏被调浅后,浅灰上的输入类控件要再沉一档才可见 */
+  --color-surface-sunken: rgba(0, 0, 0, 0.22);
+  --color-output: #1f1f1f; /* 工具输出底:比卡底再沉一档 */
+
+  /* ---- 中性 primary(发送键/主按钮:ZCode 白底黑字) ---- */
+  --color-primary: #fafafa;
+  --color-primary-hover: #e5e5e5;
+  --color-primary-foreground: #0a0a0a;
+  --color-primary-disabled: #9d9d9d;
+  --color-primary-disabled-foreground: #303030;
 
   /* ---- 线与叠层:白色低透明度 ---- */
-  --color-border: rgba(250, 250, 250, 0.1);
+  --color-border: rgba(250, 250, 250, 0.08);
   --color-border-strong: rgba(250, 250, 250, 0.16);
   --color-border-hover: rgba(250, 250, 250, 0.3);
   --color-surface: rgba(255, 255, 255, 0.05);
   --color-surface-hover: rgba(255, 255, 255, 0.1);
-  --color-selected: rgba(255, 255, 255, 0.1);
+  --color-selected: rgba(255, 255, 255, 0.12);
 
   /* ---- 文字 ---- */
   --color-foreground: #e5e5e5; /* neutral-200 */
   --color-foreground-subtle: rgba(229, 229, 229, 0.6);
   --color-foreground-subtlest: rgba(229, 229, 229, 0.3);
 
-  /* ---- 品牌与状态:sky + tailwind 400/500 系 ---- */
-  --color-brand: #0ea5e9; /* sky-500 */
-  --color-brand-hover: rgba(14, 165, 233, 0.8);
-  --color-brand-soft: rgba(14, 165, 233, 0.35);
-  --color-accent: rgba(5, 47, 74, 0.5); /* #052f4a80 */
+  /* ---- 品牌与状态:ZCode 橙 + tailwind 400/500 系 ---- */
+  --color-brand: #ff8e31; /* ZCode 橙(实机取色 255,142,49) */
+  --color-brand-hover: rgba(255, 142, 49, 0.85);
+  --color-brand-soft: rgba(255, 142, 49, 0.35);
+  --color-brand-foreground: #ffc48f; /* 橙底/橙晕上的浅橙文字 */
+  --color-accent: rgba(255, 142, 49, 0.12);
   --color-success: #22c55e; /* green-500 */
   --color-destructive: #ef4444; /* red-500 */
   --color-warning: #eab308; /* yellow-500 */
@@ -60,6 +72,8 @@
 
   /* 侧栏顶条高度:非 mac 48,mac 56(红绿灯让位,平台类里覆盖) */
   --topbar-h: 48px;
+  /* 侧栏收起时顶部浮层按钮占用的让位宽(聊天顶栏据此缩进) */
+  --topbar-lead: 76px;
 }
 
 * {
@@ -83,6 +97,7 @@ html.platform-darwin #root {
 
 html.platform-darwin {
   --topbar-h: 56px;
+  --topbar-lead: 168px; /* 红绿灯 96px + 浮层两钮 */
 }
 
 body {
@@ -201,12 +216,13 @@ html.platform-darwin .sidebar-top {
   padding: 8px 10px;
 }
 
-.new-task {
+/* 图标导航行(新建任务/搜索):图标 + 文案 + 右侧 ⌘ 快捷键提示 */
+.side-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  height: 32px;
+  height: 34px;
   padding: 0 10px;
   border: none;
   border-radius: var(--radius-lg);
@@ -217,12 +233,28 @@ html.platform-darwin .sidebar-top {
   font-weight: 500;
   text-align: left;
 }
-.new-task:not(:disabled):hover {
+.side-nav:not(:disabled):hover {
   background: var(--color-surface-hover);
-  border-color: transparent;
 }
-.new-task:disabled {
+.side-nav:disabled {
   opacity: 0.45;
+}
+
+.side-nav-icon {
+  display: inline-flex;
+  color: var(--color-foreground-subtle);
+}
+
+.side-nav-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.side-kbd {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  color: var(--color-foreground-subtlest);
+  user-select: none;
 }
 
 .task-search {
@@ -231,7 +263,7 @@ html.platform-darwin .sidebar-top {
   padding: 0 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  background: var(--color-input);
+  background: var(--color-surface-sunken);
   color: var(--color-foreground);
   font: inherit;
   font-size: 12.5px;
@@ -239,19 +271,49 @@ html.platform-darwin .sidebar-top {
 .task-search:focus {
   outline: none;
   border-color: var(--color-border-hover);
-  background: var(--color-input-focused);
 }
 .task-search::placeholder {
   color: var(--color-foreground-subtlest);
 }
 
-.sidebar-section-title {
+/* 「项目」标题行:文本左 + 图标按钮右(添加项目) */
+.sidebar-section-head {
   flex: none;
-  padding: 6px 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 0 8px;
+}
+
+.sidebar-section-title {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   letter-spacing: 0.8px;
   color: var(--color-foreground-subtlest);
   user-select: none;
+}
+
+/* 小图标钮(标题行/分组行共用):ghost,hover 抬 surface */
+.section-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-foreground-subtlest);
+  font-size: 11px;
+}
+.section-icon:not(:disabled):hover {
+  background: var(--color-surface-hover);
+  color: var(--color-foreground);
+}
+.section-icon:disabled {
+  opacity: 0.4;
 }
 
 .session-list {
@@ -263,17 +325,87 @@ html.platform-darwin .sidebar-top {
   gap: 1px;
 }
 
-/* 任务行:状态点 + 两行标题 + 相对时间(ZCode task-item 形态) */
+/* 项目分组:文件夹标题行 + 缩进任务行(ZCode 形态) */
+.session-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-bottom: 6px;
+}
+
+.session-group-title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 2px;
+  border-radius: var(--radius-lg);
+  color: var(--color-foreground-subtle);
+  font-size: 13px;
+  user-select: none;
+}
+.session-group-title:hover {
+  background: var(--color-surface-hover);
+}
+.session-group-current {
+  color: var(--color-foreground);
+}
+
+/* 文件夹行主体(点击折叠/展开) */
+.session-group-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 6px 8px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.session-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-group-caret {
+  font-size: 9px;
+  color: var(--color-foreground-subtlest);
+}
+
+/* 分组行的悬停动作(新任务/移除):visibility 隐藏而非 display——
+ * 出现/消失不改变布局,标题不会在悬停时跳动 */
+.session-group-actions {
+  visibility: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.session-group-title:hover .session-group-actions {
+  visibility: visible;
+}
+
+.session-group-empty {
+  padding: 2px 8px 6px 28px;
+  font-size: 12px;
+  color: var(--color-foreground-subtlest);
+  user-select: none;
+}
+
+/* 任务行:标题左、相对时间右;仅运行中的会话带脉冲点 */
 .session-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   width: 100%;
   text-align: left;
   background: none;
   border: none;
   border-radius: var(--radius-lg);
-  padding: 7px 8px;
+  padding: 6px 8px 6px 28px;
   color: var(--color-foreground);
   font: inherit;
   font-size: 13px;
@@ -288,21 +420,13 @@ html.platform-darwin .sidebar-top {
   background: var(--color-selected);
 }
 
+/* 运行中脉冲点(只在运行中的会话行渲染) */
 .session-dot {
   flex: none;
   width: 8px;
   height: 8px;
-  margin-top: 5px;
+  margin-left: -16px; /* 吃掉行首缩进的一段,点落在文件夹图标下方 */
   border-radius: 9999px;
-  border: 1.5px solid var(--color-foreground-subtlest);
-  background: transparent;
-}
-.session-dot-active {
-  border-color: var(--color-foreground-subtle);
-  background: var(--color-foreground-subtle);
-}
-.session-dot-running {
-  border: none;
   background: var(--color-brand);
   animation: pulse 1.3s ease-in-out infinite;
 }
@@ -313,24 +437,17 @@ html.platform-darwin .sidebar-top {
   }
 }
 
-.session-main {
+.session-title {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.session-title {
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.session-meta {
-  font-size: 11px;
+.session-when {
+  flex: none;
+  font-size: 11.5px;
   color: var(--color-foreground-subtlest);
 }
 
@@ -345,6 +462,7 @@ html.platform-darwin .sidebar-top {
   border-top: 1px solid var(--color-border);
   padding: 10px;
 }
+
 
 .settings-row {
   display: flex;
@@ -413,6 +531,51 @@ html.platform-darwin .app-overlay {
   -webkit-app-region: no-drag;
 }
 
+/* ---- 聊天列顶栏:任务标题 + 项目/分支 chips(整条可拖拽窗口) ---- */
+
+.chat-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--topbar-h);
+  padding: 0 16px;
+  -webkit-app-region: drag;
+}
+.chat-topbar > * {
+  -webkit-app-region: no-drag;
+}
+/* 侧栏收起时给浮层的展开/新建按钮让位 */
+.chat-topbar-collapsed {
+  padding-left: var(--topbar-lead);
+}
+
+.topbar-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+  max-width: 45%;
+}
+
+.topbar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  background: var(--color-card);
+  color: var(--color-foreground);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.topbar-chip svg {
+  color: var(--color-foreground-subtle);
+}
+
 .connection-banner {
   flex: none;
   padding: 6px 12px;
@@ -432,6 +595,7 @@ html.platform-darwin .app-overlay {
 }
 
 .chat-pane {
+  position: relative; /* todo 浮层卡的定位基准 */
   flex: 1;
   min-width: 0;
   display: flex;
@@ -453,10 +617,6 @@ html.platform-darwin .app-overlay {
   .status-line {
     padding-left: 0;
     padding-right: 0;
-  }
-  .todo-panel {
-    margin-left: 0;
-    margin-right: 0;
   }
   .permission-wrap {
     margin-left: 0;
@@ -571,8 +731,8 @@ html.platform-darwin .app-overlay {
 .turn-line {
   color: var(--color-foreground-subtlest);
   font-size: 11.5px;
-  text-align: center;
-  margin: 6px 0 18px;
+  text-align: left;
+  margin: 4px 0 18px;
   user-select: none;
 }
 
@@ -756,17 +916,17 @@ html.platform-darwin .app-overlay {
   overflow: hidden;
 }
 
-/* ---- 工具卡片:紧凑行,折叠一行,等宽工具名 ---- */
+/* ---- 工具卡片:ZCode 卡片形态(无边框、#2b2b2b 底、rounded-xl) ---- */
 
 .tool-card {
   margin-bottom: 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border: none;
+  border-radius: var(--radius-xl);
   overflow: hidden;
-  background: transparent;
+  background: var(--color-card);
 }
 .tool-error {
-  border-color: rgba(239, 68, 68, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45);
 }
 
 .tool-row {
@@ -777,7 +937,7 @@ html.platform-darwin .app-overlay {
   text-align: left;
   background: none;
   border: none;
-  padding: 7px 12px;
+  padding: 9px 14px;
   color: var(--color-foreground);
   font: inherit;
   font-size: 13px;
@@ -822,8 +982,7 @@ html.platform-darwin .app-overlay {
 }
 
 .tool-active {
-  border-style: dashed;
-  border-color: var(--color-border-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 .tool-active .tool-row {
   cursor: default;
@@ -848,7 +1007,7 @@ html.platform-darwin .app-overlay {
   margin: 0;
   padding: 10px 12px;
   border-top: 1px solid var(--color-border);
-  background: var(--color-card);
+  background: var(--color-output);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
@@ -889,42 +1048,82 @@ html.platform-darwin .app-overlay {
 }
 .todo-list li {
   display: flex;
-  gap: 8px;
-  padding: 2px 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 4px 0;
   font-size: 13px;
 }
-.todo-mark {
+/* 圆环勾选标记(ZCode:完成=绿圈勾,进行中=琥珀点,待办=灰圈) */
+.todo-ring {
   flex: none;
-  width: 14px;
-  text-align: center;
-  color: var(--color-foreground-subtlest);
+  width: 15px;
+  height: 15px;
+  margin-top: 2.5px;
+  border-radius: 9999px;
+  border: 1.5px solid var(--color-foreground-subtlest);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: transparent;
 }
-.todo-completed .todo-mark {
+.todo-completed .todo-ring {
+  border-color: var(--color-success);
   color: var(--color-success);
 }
-.todo-in_progress .todo-mark {
+.todo-in_progress .todo-ring {
+  border-color: var(--color-warning);
   color: var(--color-warning);
+  font-size: 6px;
 }
 .todo-done {
   color: var(--color-foreground-subtlest);
   text-decoration: line-through;
 }
 
-.todo-panel {
-  flex: none;
-  margin: 0 16px 8px;
-  padding: 10px 14px;
+/* 「进程 n/m」浮层卡:聊天列右上角(ZCode 形态) */
+.todo-float {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 25;
+  width: 300px;
+  max-height: 46%;
+  overflow-y: auto;
+  background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
+  padding: 12px 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
 }
-.todo-panel-title {
-  font-size: 11px;
-  letter-spacing: 1px;
+.todo-float-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.todo-float-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.todo-float-count {
+  color: var(--color-success);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.todo-float-toggle {
+  margin-left: auto;
+  padding: 0 4px;
+  border: none;
+  background: none;
   color: var(--color-foreground-subtlest);
-  margin-bottom: 6px;
+  font-size: 13px;
 }
-.todo-panel .todo-list {
-  margin-bottom: 0;
+.todo-float-toggle:hover {
+  color: var(--color-foreground);
+}
+.todo-float .todo-list {
+  margin: 8px 0 0;
 }
 
 /* ---- 状态行:底部一行 subtle 元数据 ---- */
@@ -1497,16 +1696,16 @@ html.platform-darwin .app-overlay {
   color: var(--color-foreground);
 }
 
+/* 扁平内嵌:textarea 透明,与外框融为一体(ZCode 输入块) */
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 52px;
+  min-height: 48px;
   max-height: 156px;
   resize: none;
-  padding: 8px 10px;
+  padding: 4px 4px 0;
   border: none;
-  border-radius: var(--radius-xl);
-  background: var(--color-card);
+  background: transparent;
   color: var(--color-foreground);
   font: inherit;
   font-size: 13.5px;
@@ -1537,9 +1736,9 @@ html.platform-darwin .app-overlay {
 .composer-tool {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 8px;
   border: none;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -1555,11 +1754,27 @@ html.platform-darwin .app-overlay {
   background: var(--color-surface-hover);
   color: var(--color-foreground);
 }
-.composer-tool-danger {
-  color: var(--color-destructive);
+/* 完全访问:ZCode 橙(chip 文字与图标整体染色) */
+.composer-tool-danger,
+.composer-tool-danger:not(:disabled):hover {
+  color: var(--color-brand);
+}
+.composer-tool-danger .composer-caret {
+  color: var(--color-brand);
 }
 .composer-tool-flash {
   box-shadow: 0 0 0 3px var(--color-brand-soft);
+}
+/* 模型名:亮白(ZCode 工具栏里模型是最亮的一段) */
+.composer-tool-model {
+  color: var(--color-foreground);
+}
+
+/* + 附件:纯图标钮 */
+.composer-plus {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
 }
 
 .composer-caret {
@@ -1567,16 +1782,7 @@ html.platform-darwin .app-overlay {
   color: var(--color-foreground-subtlest);
 }
 
-.composer-hint {
-  flex: none;
-  margin-right: 4px;
-  color: var(--color-foreground-subtlest);
-  font-size: 11px;
-  user-select: none;
-  white-space: nowrap;
-}
-
-/* 发送/停止:品牌色圆角方钮(空闲 ↑ / 运行中 ■) */
+/* 发送/停止:中性 primary 圆角方钮(空闲 ↑ / 运行中 ■;ZCode 白底黑箭头) */
 .composer-send {
   flex: none;
   width: 30px;
@@ -1584,8 +1790,8 @@ html.platform-darwin .app-overlay {
   padding: 0;
   border: none;
   border-radius: var(--radius-lg);
-  background: var(--color-brand);
-  color: #ffffff;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
   font-size: 14px;
   line-height: 1;
   display: inline-flex;
@@ -1594,11 +1800,11 @@ html.platform-darwin .app-overlay {
   cursor: pointer;
 }
 .composer-send:not(:disabled):hover {
-  background: var(--color-brand-hover);
+  background: var(--color-primary-hover);
 }
 .composer-send:disabled {
-  background: var(--color-surface-hover);
-  color: var(--color-foreground-subtlest);
+  background: var(--color-primary-disabled);
+  color: var(--color-primary-disabled-foreground);
   cursor: default;
 }
 
@@ -1620,7 +1826,7 @@ html.platform-darwin .app-overlay {
   border-radius: 9999px;
   border: 1px solid var(--color-border-hover);
   background: var(--color-accent);
-  color: #7dd3fc;
+  color: var(--color-brand-foreground);
   font-size: 13px;
   font-weight: 500;
 }
@@ -1642,6 +1848,14 @@ html.platform-darwin .app-overlay {
   border-color: transparent;
 }
 
+/* block 修饰:触发器铺满容器宽(侧栏底部的整宽设置行) */
+.menu-root-block,
+.menu-trigger-block {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
 .menu-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -1660,6 +1874,12 @@ html.platform-darwin .app-overlay {
 .menu-popover-up {
   top: auto;
   bottom: calc(100% + 6px);
+}
+
+/* 右对齐锚定(靠近窗口右缘的触发器) */
+.menu-popover-end {
+  left: auto;
+  right: 0;
 }
 
 .menu-title {

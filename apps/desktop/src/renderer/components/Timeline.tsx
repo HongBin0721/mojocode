@@ -95,12 +95,14 @@ export function Timeline() {
   // 对话尚未开始(无用户/助手条目且无流式文本)→ 空状态问候。
   const empty =
     !activeText && items.every((item) => item.kind !== 'user' && item.kind !== 'assistant');
+  // 空状态只留问候:banner 的信息(模型/目录/模式)已由顶栏与 Composer 承载。
+  const visibleItems = empty ? items.filter((item) => item.kind !== 'banner') : items;
 
   return (
     <div className="timeline" ref={scrollRef} onScroll={onScroll}>
       <div className="timeline-inner conv-col">
         {empty ? <EmptyState /> : null}
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <TimelineItemView key={item.key} item={item} />
         ))}
         <ActiveArea />

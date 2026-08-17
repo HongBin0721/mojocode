@@ -30,7 +30,13 @@ describe('IPC 通道契约', () => {
   });
 
   it('上行通道与下行通道不冲突', () => {
-    const uplink = [IPC_CHANNELS.subscribe, IPC_CHANNELS.rpc];
+    const uplink = [
+      IPC_CHANNELS.subscribe,
+      IPC_CHANNELS.rpc,
+      IPC_CHANNELS.pickDirectory,
+      IPC_CHANNELS.switchWorkspace,
+    ];
+    expect(new Set(uplink).size).toBe(uplink.length);
     const downlink = DOWNLINK.map((key) => IPC_CHANNELS[key]);
     for (const channel of uplink) {
       expect(downlink).not.toContain(channel);

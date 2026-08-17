@@ -26,6 +26,13 @@ export interface MojocodeDesktopApi {
   on<C extends PushChannel>(channel: C, listener: (payload: PushPayloads[C]) => void): () => void;
   /** 主进程平台('darwin' 等):侧栏红绿灯让位 / drag region 仅 mac 需要。 */
   readonly platform: string;
+  /** 原生目录选择器(添加项目)。取消返回 undefined。 */
+  pickDirectory(): Promise<string | undefined>;
+  /**
+   * 切换工作区:重启受管 sidecar 到新 root,随后 main 强推整套镜像
+   * (state/replay/sessions)。attach 模式或当前有运行中的轮会 reject。
+   */
+  switchWorkspace(root: string): Promise<void>;
 }
 
 /** 各通道的载荷类型(on 的 listener 参数由此推导)。 */

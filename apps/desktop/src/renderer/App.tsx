@@ -1,12 +1,12 @@
 /**
  * App 布局(ZCode 式双栏):
  *
- * Sidebar(顶部拖拽区/任务列表/底部设置)| MainArea[ ConnectionBanner /
- * SplitPane( ChatPane(EmptyState+Timeline/TodoPanel/StatusLine/PermissionCard/
- * Composer)| ReviewPanel(代码评审面板)) ]
+ * Sidebar(顶部拖拽区/任务列表/底部设置)| MainArea[ ChatTopBar(标题+项目
+ * +分支 chips)/ ConnectionBanner / SplitPane( ChatPane(EmptyState+Timeline/
+ * TodoPanel 浮层/StatusLine/PermissionCard/Composer)| ReviewPanel ) ]
  *
- * ZCode 无顶栏:权限档与模型选择器在 Composer 工具栏,语言/连接状态在侧栏
- * 底部 Settings 菜单。侧栏收起时主区顶部补一条浮层(拖拽区 + 展开按钮)。
+ * 权限档与模型选择器在 Composer 工具栏,语言/连接状态在侧栏底部 Settings
+ * 菜单。侧栏收起时主区顶部补一条浮层(拖拽区 + 展开按钮),顶栏给它让位。
  */
 
 import React, { useEffect } from 'react';
@@ -16,6 +16,8 @@ import { useDesktopStore } from './state/desktopStore.js';
 import { useUiStore } from './state/uiStore.js';
 import { useLocale, t } from './i18n/index.js';
 import { Sidebar } from './components/Sidebar.js';
+import { ChatTopBar } from './components/ChatTopBar.js';
+import { newSession } from './state/actions.js';
 import { Timeline } from './components/Timeline.js';
 import { TodoPanel } from './components/TodoPanel.js';
 import { StatusLine } from './components/StatusLine.js';
@@ -52,10 +54,6 @@ function CollapsedOverlay() {
   const running = useDesktopStore((s) => s.snapshot?.agent.isRunning ?? false);
   const toggleCollapsed = useUiStore((s) => s.toggleCollapsed);
   if (!collapsed) return null;
-  const newSession = () => {
-    if (running) return;
-    void window.mojocode.rpc({ kind: 'newSession' }).catch((error) => console.error('newSession 失败', error));
-  };
   return (
     <div className="app-overlay">
       <button
@@ -79,14 +77,31 @@ function CollapsedOverlay() {
   );
 }
 
-/** ⌘B/Ctrl+B 切换侧栏(文档级,无菜单环境下直达 renderer)。 */
-function useSidebarShortcut(): void {
+/**
+ * 全局快捷键:⌘B 切换侧栏、⌘N 新建任务、⌘K 搜索(ZCode 同款)。
+ *
+ * 修饰键按平台取一个,不接受 meta||ctrl:macOS 的文本框里 ctrl+b/n/k 是系统
+ * emacs 光标键(前一字符/下一行/删到行尾),两个都认的话在输入框里敲 ctrl+n
+ * 会把正在写的会话换掉。
+ */
+function useGlobalShortcuts(): void {
   const toggleCollapsed = useUiStore((s) => s.toggleCollapsed);
   useEffect(() => {
+    const mac = window.mojocode.platform === 'darwin';
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'b' || e.key === 'B')) {
+      if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'b') {
         e.preventDefault();
         toggleCollapsed();
+      } else if (key === 'n') {
+        e.preventDefault();
+        newSession();
+      } else if (key === 'k') {
+        e.preventDefault();
+        // 搜索框在侧栏里;收起时先展开。
+        if (useUiStore.getState().collapsed) toggleCollapsed();
+        useUiStore.getState().openSearch();
       }
     };
     document.addEventListener('keydown', onKey);
@@ -96,12 +111,13 @@ function useSidebarShortcut(): void {
 
 export function App() {
   useEffect(() => initBridge(), []);
-  useSidebarShortcut();
+  useGlobalShortcuts();
   return (
     <div className="shell">
       <Sidebar />
       <div className="app">
         <CollapsedOverlay />
+        <ChatTopBar />
         <ConnectionBanner />
         <div className="main-split">
           <div className="chat-pane">

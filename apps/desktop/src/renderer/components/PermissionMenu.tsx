@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { t, useLocale } from '../i18n/index.js';
+import { localizeMode } from '../utils/mode-label.js';
 import type { PermissionMenuEntry } from '../commands/permissions.js';
 
 const LABEL_KEYS = {
@@ -34,7 +35,7 @@ export function PermissionMenuList({
           }`}
           onClick={() => onPick(entry.id)}
         >
-          <span className="menu-item-label">{entry.id}</span>
+          <span className="menu-item-label">{localizeMode(entry.id)}</span>
           <span className="menu-item-desc">{t(LABEL_KEYS[entry.id])}</span>
         </button>
       ))}

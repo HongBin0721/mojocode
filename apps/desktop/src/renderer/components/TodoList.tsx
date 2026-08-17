@@ -18,8 +18,9 @@ export function TodoList({ todos }: { todos: TodoItem[] }) {
     <ul className="todo-list">
       {todos.map((todo, index) => (
         <li key={index} className={`todo-${todo.status}`}>
-          <span className="todo-mark">
-            {todo.status === 'completed' ? '✔' : todo.status === 'in_progress' ? '▶' : '·'}
+          {/* ZCode 形态:圆环勾选标记(完成=绿圈勾,进行中=琥珀点,待办=灰圈) */}
+          <span className="todo-ring" aria-hidden>
+            {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '●' : ''}
           </span>
           <span className={todo.status === 'completed' ? 'todo-done' : ''}>{todo.content}</span>
         </li>

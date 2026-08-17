@@ -43,9 +43,13 @@ let desktop: DesktopSession | undefined;
 let bridge: Bridge | undefined;
 let quitting = false;
 
-/** 桥就绪信号(deferred):bootstrap 创建桥后兑现。 */
+/**
+ * 桥就绪信号(deferred):bootstrap/切换工作区创建桥后兑现。切换工作区会
+ * 重置 deferred——期间到达的 subscribe/rpc 挂起等新桥,而不是打在已 dispose
+ * 的旧桥上(handler 体内读的是 let,调用时自然取到当前的 promise)。
+ */
 let resolveBridge: (b: Bridge) => void = () => {};
-const bridgeReady = new Promise<Bridge>((resolve) => {
+let bridgeReady = new Promise<Bridge>((resolve) => {
   resolveBridge = resolve;
 });
 
@@ -99,6 +103,64 @@ const teardown = async (): Promise<void> => {
   app.quit();
 };
 
+/** 拉起 session + 桥(bootstrap 与切换工作区共用),就绪后兑现 deferred。 */
+const startBridge = async (
+  root: string,
+  attach?: { url: string; token: string },
+): Promise<Bridge> => {
+  desktop = await startDesktopSession({ root, attach, runtime: resolveRuntime() });
+  const current = desktop;
+  const next = createBridge({
+    target: {
+      // 只推给活着的窗口;重载窗口(新 webContents)后靠 renderer 重新 subscribe 拿快照。
+      send: (channel, ...args) => {
+        const contents = mainWindow?.webContents;
+        if (contents && !contents.isDestroyed()) contents.send(channel, ...args);
+      },
+    },
+    session: current.session,
+    replay: async () => buildReplayItems(current.session),
+  });
+  next.setConnection('connected');
+  bridge = next;
+  resolveBridge(next);
+  return next;
+};
+
+/**
+ * 切换工作区:停掉当前受管 sidecar,以新 root 重新拉起,再强推整套镜像
+ * (subscribe() 的 target.send 路径:state/replay/connection/sessions)。
+ * attach 模式(不拥有 server)与运行中的轮直接拒绝。
+ */
+let switching = false;
+const switchWorkspace = async (root: string): Promise<void> => {
+  if (switching) throw new Error('正在切换项目,稍候再试');
+  const current = desktop;
+  if (!current?.spawned) throw new Error('attach 模式不支持切换项目');
+  if (current.session.snapshot.agent.isRunning) throw new Error('先结束或中断当前这轮');
+  switching = true;
+  try {
+    bridge?.setConnection('connecting');
+    bridge?.dispose();
+    bridge = undefined;
+    bridgeReady = new Promise<Bridge>((resolve) => {
+      resolveBridge = resolve;
+    });
+    desktop = undefined;
+    await current.dispose();
+    const next = await startBridge(root);
+    await next.subscribe();
+  } catch (error) {
+    // 半途失败(新 sidecar 起不来):没有可用会话,提示后整体退出。
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox('切换项目失败', message);
+    await teardown();
+    throw error;
+  } finally {
+    switching = false;
+  }
+};
+
 const bootstrap = async (): Promise<void> => {
   const attachUrl = argvValue('--attach');
   const root = argvValue('--root') ?? process.cwd();
@@ -122,22 +184,7 @@ const bootstrap = async (): Promise<void> => {
     await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   }
 
-  desktop = await startDesktopSession({ root, attach, runtime: resolveRuntime() });
-  const current = desktop;
-  const next = createBridge({
-    target: {
-      // 只推给活着的窗口;重载窗口(新 webContents)后靠 renderer 重新 subscribe 拿快照。
-      send: (channel, ...args) => {
-        const contents = mainWindow?.webContents;
-        if (contents && !contents.isDestroyed()) contents.send(channel, ...args);
-      },
-    },
-    session: current.session,
-    replay: async () => buildReplayItems(current.session),
-  });
-  next.setConnection('connected');
-  bridge = next;
-  resolveBridge(next);
+  await startBridge(root, attach);
 };
 
 app.whenReady().then(
@@ -150,6 +197,15 @@ app.whenReady().then(
     ipcMain.handle(IPC_CHANNELS.rpc, (_event, request) =>
       bridgeReady.then((b) => b.dispatchRpc(request as RpcRequest)),
     );
+    // main 本地能力:目录选择器(添加项目)与工作区切换(sidecar 重启)。
+    ipcMain.handle(IPC_CHANNELS.pickDirectory, async () => {
+      if (!mainWindow) return undefined;
+      const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    });
+    ipcMain.handle(IPC_CHANNELS.switchWorkspace, (_event, root) => switchWorkspace(String(root)));
     try {
       await bootstrap();
     } catch (error) {

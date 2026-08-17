@@ -86,6 +86,10 @@ export const IPC_CHANNELS = {
   connection: 'bridge:connection',
   permission: 'bridge:permission',
   sessions: 'bridge:sessions',
+  /* 下面两个是 main 本地能力(Electron dialog / sidecar 重启),不进 bridge
+   * 的 RPC 白名单——bridge 保持 electron-free 可测。 */
+  pickDirectory: 'desktop:pick-directory',
+  switchWorkspace: 'desktop:switch-workspace',
 } as const;
 
 export type ConnectionState = 'connecting' | 'connected' | 'lost';

@@ -13,6 +13,8 @@ export function MenuPopover({
   width,
   requestOpen,
   placement = 'bottom',
+  align = 'start',
+  block = false,
 }: {
   /** 触发按钮的文案(徽章)。 */
   label: React.ReactNode;
@@ -24,6 +26,11 @@ export function MenuPopover({
   requestOpen?: number;
   /** 浮层弹出方向:bottom 在触发器下方(默认),top 在上方。 */
   placement?: 'bottom' | 'top';
+  /** 水平锚定:start 左对齐触发器(默认),end 右对齐——靠近窗口右缘的
+   * 触发器(模型/思考强度)必须 end,否则窄窗口下弹层伸出视口。 */
+  align?: 'start' | 'end';
+  /** 触发器铺满容器宽(侧栏底部的整宽设置行)。 */
+  block?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -50,13 +57,19 @@ export function MenuPopover({
   }, [open]);
 
   return (
-    <div className="menu-root" ref={rootRef}>
-      <button type="button" className="menu-trigger" onClick={() => setOpen(!open)}>
+    <div className={`menu-root ${block ? 'menu-root-block' : ''}`} ref={rootRef}>
+      <button
+        type="button"
+        className={`menu-trigger ${block ? 'menu-trigger-block' : ''}`}
+        onClick={() => setOpen(!open)}
+      >
         {label}
       </button>
       {open ? (
         <div
-          className={`menu-popover ${placement === 'top' ? 'menu-popover-up' : ''}`}
+          className={`menu-popover ${placement === 'top' ? 'menu-popover-up' : ''} ${
+            align === 'end' ? 'menu-popover-end' : ''
+          }`}
           style={width ? { width: `${width}px` } : undefined}
         >
           {title ? <div className="menu-title">{title}</div> : null}
