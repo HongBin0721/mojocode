@@ -27,7 +27,7 @@ import {
   type PermissionDecision,
   type PermissionRequest,
 } from '../core/events.js';
-import type { Config, Permissions, ReasoningEffort } from '../config/schema.js';
+import type { Config, Permissions, ProviderConfig, ReasoningEffort } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
@@ -35,7 +35,8 @@ import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { GoalStopReason } from '../core/events.js';
 import type { SessionMeta } from '../session/store.js';
 import type { FileDiff, WorkspaceStatus } from '../agent/workspace.js';
-import type { ProviderModels } from '../model/registry.js';
+import type { ModelTestResult, ProviderModels } from '../model/registry.js';
+import type { ModelCapabilities } from '../model/catalog.js';
 import type { DoctorReport } from '../app/doctor.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
 import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/review.js';
@@ -98,6 +99,20 @@ export interface RemoteSession extends SessionHandle {
    * `unknown method`,调用方自行降级。
    */
   listSessions(all?: boolean): Promise<SessionMeta[]>;
+  /**
+   * GUI 模型设置的保存/删除(server 侧合并内存配置并落盘全局文件)。
+   * 与 listSessions 同理不进 SessionHandle——TUI 走 /provider 向导本地落盘,
+   * 只有远程 GUI 需要这条 RPC。patch 只含用户改过的键;带 apiKey 时沿用
+   * switch 的可信传输检查。
+   */
+  saveProvider(id: string, patch: ProviderConfig): Promise<void>;
+  deleteProvider(id: string): Promise<void>;
+  /**
+   * 镜像快照更新通知(GUI 桥订阅,变化后重推 renderer)。SSE 的 `state`
+   * 帧不产生 bus 事件,没有这条通道,配置/模型切换这类"纯状态"变更要等
+   * 下一个 agent 事件才会被桥转发。返回退订函数。
+   */
+  stateChanged(listener: () => void): () => void;
   /** 工作区 pending 变更(GUI Review 面板;同为 GUI 专属只读 RPC)。 */
   workspaceStatus(): Promise<WorkspaceStatus>;
   /** 单文件 diff(vs HEAD;untracked 为全新增补丁)。 */
@@ -145,6 +160,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
   // 快照没有 skills 字段,镜像为一律空表。
   let skillItems = state.skills ?? [];
   const skillListeners = new Set<() => void>();
+  const stateListeners = new Set<() => void>();
   const applyState = (next: StateSnapshot): void => {
     state = next;
     if (next.agent.isRunning) optimistic.run = false;
@@ -159,6 +175,10 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       skillItems = nextSkills;
       for (const listener of skillListeners) listener();
     }
+    // 快照整体的变更通知(GUI 桥用):TUI 在事件驱动下按需拉镜像,但
+    // saveProvider/switch/远端其他客户端的操作只带来 state 帧、没有 bus
+    // 事件——不通知的话 GUI 的快照推送永远等不来下一个事件才补上。
+    for (const listener of stateListeners) listener();
   };
 
   // ---- 历史刷新(带在途合并) ----
@@ -227,6 +247,18 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
   /** 即时方法:排队 POST,直接拿返回值。 */
   const call = async <T>(method: string, args?: unknown): Promise<T> => {
     const response = await enqueue(() => postCall({ id: nextCallId(), method, args }));
+    if (!response.ok) throw reviveError(response.error);
+    return response.value as T;
+  };
+
+  /**
+   * 只读慢方法:绕开串行队列直接 POST。队列只为顺序依赖对(goal.set→goal.run)
+   * 存在;testModel(30s 超时)/modelCapabilities(冷目录 10s)骑在队列上会把
+   * 之后的每个 RPC(权限决策、switch、run 的 ack)都压在自己后面。server 侧
+   * HTTP 分发本来就是并发的。
+   */
+  const callParallel = async <T>(method: string, args?: unknown): Promise<T> => {
+    const response = await postCall({ id: nextCallId(), method, args });
     if (!response.ok) throw reviveError(response.error);
     return response.value as T;
   };
@@ -575,6 +607,18 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       call<SessionMeta[]>('listSessions', all === true ? { all: true } : undefined),
     workspaceStatus: () => call<WorkspaceStatus>('workspaceStatus'),
     fileDiff: (path: string) => call<FileDiff>('fileDiff', { path }),
+    saveProvider: async (id, patch) => {
+      // 与 switch 的 apiKey 同一道闸:明文非环回传输上拒绝发 key。
+      if (patch.apiKey !== undefined && !isTrustedTransport(url)) {
+        throw new Error(t('remote.keyRefusedInsecure'));
+      }
+      await call<void>('saveProvider', { id, config: patch });
+      await refreshState();
+    },
+    deleteProvider: async (id) => {
+      await call<void>('deleteProvider', { id });
+      await refreshState();
+    },
     switch: async (change) => {
       // 刚就地输入的 key 只允许在可信传输上过线:loopback(受管子进程的默认
       // 形态)或 https。`serve --host` + `--attach` 是明文 HTTP,把 key 发出去
@@ -604,6 +648,13 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       return call<void>('setReasoningEffort', { level });
     },
     listProviderModels: () => call<ProviderModels[]>('listProviderModels'),
+    testModel: (providerId, modelId) =>
+      callParallel<ModelTestResult>('testModel', { id: providerId, model: modelId }),
+    modelCapabilities: (providerId, modelId) =>
+      callParallel<ModelCapabilities | undefined>('modelCapabilities', {
+        id: providerId,
+        model: modelId,
+      }),
     doctor: (opts) => call<DoctorReport>('doctor', opts),
     refreshEnvironment: () => call<void>('refreshEnvironment'),
     get skills() {
@@ -631,6 +682,10 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // /simplify:与 startReview 同理——一整轮 agent.run 的 deferred RPC。
     startSimplify: (target, opts) =>
       callDeferred('startSimplify', { target, options: opts }) as Promise<SimplifyStartResult>,
+    stateChanged: (listener: () => void) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
     notifyServerExit: (message) => {
       // connectionLost 自带 closed 幂等:dispose(计划内退出)后到达的 exit
       // 回调静默吸收。abort 让还挂着的 SSE 重连 fetch 立即出局。

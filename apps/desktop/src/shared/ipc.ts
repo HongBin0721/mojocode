@@ -16,7 +16,7 @@
 
 import type { serializeEvent, StateSnapshot } from '@core/protocol';
 import type { AgentEvent, PermissionDecision, PermissionRequest } from '@core/events';
-import type { Permissions, ReasoningEffort } from '@core/schema';
+import type { Permissions, ProviderConfig, ReasoningEffort } from '@core/schema';
 import type { ImageAttachment } from '@core/attachments';
 import type { TimelineItem } from '@core/types';
 
@@ -77,6 +77,27 @@ export interface ProviderModelsSummary {
   error?: string;
 }
 
+/** 逐模型能力(models.dev)。形状复制自根仓库 src/model/catalog.ts 的 ModelCapabilities。 */
+export interface ModelCapabilitiesSummary {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  /**
+   * 生效可选思考档位('auto' 不在内)。server 侧已做完回退与 wire 过滤,
+   * 直接渲染即可:`[]` = 该模型不推理(思考 chip 整个不显示),
+   * `undefined` = 连 provider 都解析不了,退回全量枚举。
+   */
+  efforts?: ReasoningEffort[];
+}
+
+/** 「测试模型」结果。形状复制自根仓库 src/model/registry.ts 的 ModelTestResult。 */
+export interface ModelTestSummary {
+  ok: boolean;
+  status?: number;
+  /** 失败原因(英文,端点原文),单行。 */
+  error?: string;
+  durationMs: number;
+}
+
 export const IPC_CHANNELS = {
   subscribe: 'bridge:subscribe',
   rpc: 'bridge:rpc',
@@ -103,11 +124,20 @@ export type RpcRequest =
   | { kind: 'resumeSession'; idOrPrefix: string }
   | { kind: 'forkSession' }
   | { kind: 'switch'; change: { provider?: string; model?: string; apiKey?: string } }
+  /* 设置页·模型设置:保存/删除 provider 条目(server 侧落盘全局配置)。
+   * config 只含用户真正改过的键——快照里的配置是脱敏副本,整对象回写会
+   * 用空值覆盖真 key。 */
+  | { kind: 'saveProvider'; id: string; config: ProviderConfig }
+  | { kind: 'deleteProvider'; id: string }
   | { kind: 'setPermissions'; permissions: Permissions }
   | { kind: 'setPlan'; active: boolean }
   | { kind: 'setReasoningEffort'; level: ReasoningEffort }
   | { kind: 'listSessions' }
   | { kind: 'listProviderModels' }
+  /* 设置页·模型行的「测试模型」:server 侧发一次最小补全验证连通性。 */
+  | { kind: 'testModel'; id: string; model: string }
+  /* 逐模型能力(models.dev 目录):思考档位与窗口/输出上限,查不到返回 undefined。 */
+  | { kind: 'modelCapabilities'; id: string; model: string }
   | { kind: 'runSkill'; name: string; args: string; display?: string }
   | { kind: 'startReview'; scope: string }
   | { kind: 'startSimplify'; target: string }

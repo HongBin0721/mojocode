@@ -19,8 +19,7 @@ import { useUiStore } from '../state/uiStore.js';
 import { useProjectsStore } from '../state/projectsStore.js';
 import { newSession } from '../state/actions.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
-import { t, useLocale, setLocale, getLocale, type Locale } from '../i18n/index.js';
-import { MenuPopover } from './Menu.js';
+import { t, useLocale } from '../i18n/index.js';
 import { CirclePlusIcon, FolderIcon, GearIcon, PlusIcon, SearchIcon } from './icons.js';
 
 /** 任务行:标题左、相对时间右;仅运行中的会话带脉冲点(ZCode 形态)。
@@ -55,34 +54,17 @@ const SessionRow = memo(function SessionRow({
   );
 });
 
-/** 底部 Settings 菜单:语言切换。 */
-function SettingsMenu() {
+/** 底部设置按钮:进入全屏设置页(语言切换已移入常规节)。 */
+function SettingsButton() {
   useLocale();
-  const locale = getLocale();
+  const openSettings = useUiStore((s) => s.openSettings);
   return (
-    <MenuPopover
-      label={
-        <span className="settings-row">
-          <span className="side-nav-icon">
-            <GearIcon size={16} />
-          </span>
-          {t('sidebar.settings')}
-        </span>
-      }
-      title={t('sidebar.settings')}
-      width={260}
-      placement="top"
-      block
-    >
-      <button
-        type="button"
-        className="menu-item"
-        onClick={() => setLocale(locale === 'zh-CN' ? 'en' : ('zh-CN' as Locale))}
-      >
-        <span className="menu-item-label">{t('settings.language')}</span>
-        <span className="menu-item-desc">{locale === 'zh-CN' ? 'English' : '中文'}</span>
-      </button>
-    </MenuPopover>
+    <button type="button" className="settings-row side-nav" onClick={() => openSettings()}>
+      <span className="side-nav-icon">
+        <GearIcon size={16} />
+      </span>
+      {t('sidebar.settings')}
+    </button>
   );
 }
 
@@ -344,7 +326,7 @@ export function Sidebar() {
         </div>
       </div>
       <div className="sidebar-footer">
-        <SettingsMenu />
+        <SettingsButton />
       </div>
       {!collapsed ? <SidebarResizer /> : null}
     </aside>

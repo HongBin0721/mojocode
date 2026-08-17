@@ -45,6 +45,15 @@ export interface ModelInfo {
   ownedBy?: string;
 }
 
+/** Error 的 cause 链(最多 4 层),probeModels 的详情格式化与 testModel 的超时识别共用。 */
+function* causeChain(err: unknown): Generator<Error> {
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    yield current;
+    current = (current as { cause?: unknown }).cause;
+  }
+}
+
 /**
  * 展开 Error 的 cause 链。undici 抛出来的顶层消息永远是干巴巴的
  * `fetch failed`,真正有用的 ENOTFOUND / ECONNREFUSED / 自签证书 / 代理拒绝
@@ -52,14 +61,25 @@ export interface ModelInfo {
  */
 function errorChain(err: unknown): string {
   const parts: string[] = [];
-  let current: unknown = err;
-  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+  for (const current of causeChain(err)) {
     const code = (current as NodeJS.ErrnoException).code;
     const text = code && !current.message.includes(code) ? `${current.message} (${code})` : current.message;
     if (text && !parts.includes(text)) parts.push(text);
-    current = (current as { cause?: unknown }).cause;
   }
   return parts.length > 0 ? parts.join(' ← ') : String(err);
+}
+
+/** `{baseURL}/{path}`,去掉 baseURL 尾斜杠(probeModels 与 testModel 共用)。 */
+function endpointUrl(provider: ResolvedProvider, path: string): string {
+  return `${provider.baseURL.replace(/\/$/, '')}/${path}`;
+}
+
+/** 认证头:无凭据的本地端点不发 Authorization(空 Bearer 会被部分服务端拒掉)。 */
+function authHeaders(provider: ResolvedProvider): Record<string, string> {
+  return {
+    ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+    ...provider.headers,
+  };
 }
 
 /** 一次 `/models` 探测的结果。失败也是正常返回值——`doctor` 要报告失败详情。 */
@@ -90,7 +110,7 @@ export async function probeModels(
   options: ProbeOptions = {},
 ): Promise<ModelProbe> {
   const doFetch = options.fetchImpl ?? fetch;
-  const url = `${provider.baseURL.replace(/\/$/, '')}/models`;
+  const url = endpointUrl(provider, 'models');
   const started = Date.now();
   const done = (rest: Omit<ModelProbe, 'url' | 'durationMs'>): ModelProbe => ({
     url,
@@ -101,11 +121,7 @@ export async function probeModels(
   let res: Response;
   try {
     res = await doFetch(url, {
-      headers: {
-        // 无凭据的本地端点不发 Authorization(空 Bearer 会被部分服务端拒掉)。
-        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-        ...provider.headers,
-      },
+      headers: authHeaders(provider),
       ...(options.signal ? { signal: options.signal } : {}),
     });
   } catch (err) {
@@ -174,6 +190,94 @@ export async function listModels(
   if (!probe.ok) throw new Error(probe.error);
   return ensurePresetDefault(probe.models ?? [], provider.id);
 }
+
+/** 一次模型连通性测试的结果。失败也是正常返回值——UI 要把原因渲染成红色提示。 */
+export interface ModelTestResult {
+  ok: boolean;
+  /** 拿到 HTTP 响应时的状态码;连接层面失败(DNS/超时)时为 undefined。 */
+  status?: number;
+  /** 失败原因(英文,端点原文),单行。 */
+  error?: string;
+  durationMs: number;
+}
+
+/**
+ * GUI 模型设置「测试模型」:向 `POST {baseURL}/chat/completions` 发一次
+ * max_tokens=1 的最小补全,一并验证 baseURL / key / 模型 id 三件事——
+ * `/models` 探测只能证明前两件(列表滞后时新模型不在里面,见
+ * ensurePresetDefault 的说明,所以测试必须打真正的对话端点)。
+ * 凭据解析与真正对话同一条链(resolveProvider);目标 provider 用参数
+ * 覆盖,顶层 model 覆盖属于(可能是另一个)厂商,一并换掉。
+ */
+export async function testModel(
+  config: Config,
+  providerId: string,
+  modelId: string,
+  options: ListProviderModelsOptions = {},
+): Promise<ModelTestResult> {
+  const env = options.env ?? process.env;
+  let provider: ResolvedProvider;
+  try {
+    // probe 模式:缺 key 不抛,让端点用 401 给出真实答案(与探测同款取舍)。
+    provider = resolveProvider({ ...config, provider: providerId, model: modelId }, env, {
+      probe: true,
+    });
+  } catch (err) {
+    return { ok: false, error: (err as Error).message, durationMs: 0 };
+  }
+
+  const doFetch = options.fetchImpl ?? fetch;
+  const url = endpointUrl(provider, 'chat/completions');
+  // 比 /models 探测宽松:对话端点冷启动/推理模型排队都可能超过 10s,而测试
+  // 是用户显式点击、有「测试中」反馈,宁可多等也别把好端点误报成失败。
+  const timeoutMs = options.timeoutMs ?? TEST_TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const started = Date.now();
+  try {
+    const res = await doFetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(provider),
+      },
+      body: JSON.stringify({
+        // resolveProvider 已做 id 归一(GLM 系小写→大写)。
+        model: provider.model,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+        stream: false,
+      }),
+      signal,
+    });
+    const durationMs = Date.now() - started;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return {
+        ok: false,
+        status: res.status,
+        durationMs,
+        error: `${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ''}`,
+      };
+    }
+    // 消化响应体,不留悬挂连接。
+    await res.text().catch(() => '');
+    return { ok: true, status: res.status, durationMs };
+  } catch (err) {
+    // undici 的超时文案(`The operation was aborted due to timeout`)对用户
+    // 没有信息量,换成带秒数的一行。TimeoutError 可能在顶层也可能藏在
+    // cause 链里(Node 版本间行为有差),两处都认。
+    const timedOut = [...causeChain(err)].some((cur) => cur.name === 'TimeoutError');
+    return {
+      ok: false,
+      durationMs: Date.now() - started,
+      error: timedOut ? `No response within ${Math.round(timeoutMs / 1000)}s` : errorChain(err),
+    };
+  }
+}
+
+/** 「测试模型」的兜底超时,见 testModel 内的说明。 */
+const TEST_TIMEOUT_MS = 30_000;
 
 /** `/models` 分组选择器里一个厂商的数据。凭据一律不随组外带。 */
 export interface ProviderModels {

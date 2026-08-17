@@ -63,7 +63,7 @@ import {
   savePermissions,
   saveStatusBar,
 } from '../config/save.js';
-import { supportedEfforts } from '../model/reasoning.js';
+import { selectableEfforts } from './commands/config-cmds.js';
 import { getLocale, setLocale, t, type Locale } from '../i18n/index.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
@@ -747,8 +747,9 @@ export function App(props: Props): JSX.Element {
           label: t(PRESET_DESCRIPTIONS[p.id]),
           current: !planActive() && p.id === permissionsLabel(perms()),
         })),
-      think: () =>
-        supportedEfforts(session.provider).map((l) => ({
+      // 档位来源见 selectableEfforts(与 /think 参数校验同一处)。
+      think: async () =>
+        (await selectableEfforts(session)).map((l) => ({
           value: l,
           label: t(THINK_DESCRIPTIONS[l]),
           current: l === think(),

@@ -178,6 +178,40 @@ export async function saveApiKey(
 }
 
 /**
+ * GUI 模型设置的保存入口:把一次编辑(baseURL / apiKey / label / models 的
+ * 任意子集)合并进 `providers.<id>`,未出现的字段原样保留。调用方只传
+ * 用户真正改过的键——GUI 拿到的配置是脱敏副本,把 undefined 也写进去
+ * 会用空值覆盖真 key。models 数组整组替换(它就是编辑器的完整状态)。
+ */
+export async function saveProviderEntry(
+  providerId: string,
+  patch: Record<string, unknown>,
+  file?: string,
+): Promise<string> {
+  return updateGlobalConfig((config) => {
+    const providers =
+      typeof config.providers === 'object' && config.providers !== null
+        ? (config.providers as Record<string, Record<string, unknown>>)
+        : {};
+    const entry = { ...(providers[providerId] ?? {}) };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) entry[key] = value;
+    }
+    providers[providerId] = entry;
+    config.providers = providers;
+  }, file);
+}
+
+/** GUI 模型设置的删除入口:整条移除 `providers.<id>`(内置预设照常可用,只是回到无覆盖状态)。 */
+export async function deleteProviderEntry(providerId: string, file?: string): Promise<string> {
+  return updateGlobalConfig((config) => {
+    if (typeof config.providers === 'object' && config.providers !== null) {
+      delete (config.providers as Record<string, unknown>)[providerId];
+    }
+  }, file);
+}
+
+/**
  * 保存自定义(非内置)provider 的定义:baseURL 必有,apiKey 可省——本地端点
  * (Ollama/vLLM/LM Studio)不需要凭据。与 saveApiKey 一样合并写,不覆盖该 id
  * 已有的 model 等字段;重跑向导配同一个地址会自然更新同一条目。

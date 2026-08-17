@@ -10,6 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ImageAttachment } from '@core/attachments';
 import { presetById } from '@core/schema';
+import { useModelCapabilities } from '../utils/use-model-capabilities.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { t, useLocale } from '../i18n/index.js';
 import {
@@ -84,6 +85,13 @@ export function Composer() {
   const dangerous = mode ? isDangerousMode(mode) : false;
   const permissionEntries = mode ? permissionMenuEntries(mode) : [];
   const effort = snapshot?.provider.reasoningEffort;
+  // 模型条目配了自定义思考参数时档位映射(含 /think)不再生效——chip 显示
+  // 「自定义」且不再展开档位菜单,避免选了也没用的假交互。
+  const customReasoning = snapshot?.provider.reasoningParams !== undefined;
+  // 思考菜单的可选档位:models.dev 逐模型能力(server 侧缓存),查不到 =
+  // undefined = 菜单显示全量档位(与之前行为一致)。
+  const effortLevels = useModelCapabilities(snapshot?.provider.id, snapshot?.provider.model)
+    ?.efforts;
 
   const slash = slashState(text);
   const entries = useMemo(() => {
@@ -324,7 +332,6 @@ export function Composer() {
                     <span className="composer-caret">⌄</span>
                   </span>
                 }
-                title={t('permissionMenu.title')}
                 width={320}
                 placement="top"
               >
@@ -347,7 +354,6 @@ export function Composer() {
                   <span className="composer-caret">⌄</span>
                 </span>
               }
-              title={t('modelMenu.title')}
               width={360}
               requestOpen={modelMenuRequest}
               placement="top"
@@ -356,7 +362,12 @@ export function Composer() {
               <ModelMenuList />
             </MenuPopover>
           ) : null}
-          {effort ? (
+          {customReasoning ? (
+            <span className="composer-tool composer-effort" title={t('reasoningMenu.customTitle')}>
+              <EffortIcon />
+              {t('effort.custom')}
+            </span>
+          ) : effortLevels?.length === 0 ? null : effort ? ( // 目录说该模型无思考能力:chip 整个不渲染
             <MenuPopover
               label={
                 <span className="composer-tool composer-effort" title={t('reasoningMenu.title')}>
@@ -371,7 +382,7 @@ export function Composer() {
               align="end"
             >
               <ReasoningMenuList
-                entries={reasoningMenuEntries(effort)}
+                entries={reasoningMenuEntries(effort, effortLevels)}
                 onPick={(level) => rpc(setReasoningRpc(level))}
               />
             </MenuPopover>

@@ -134,6 +134,13 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
   const token = options.token ?? randomBytes(24).toString('hex');
   const tokenBuf = Buffer.from(token);
 
+  // 预热 models.dev 能力目录(后台,不 await):catalog 是懒加载的,否则首个
+  // modelCapabilities 落在用户正在等的交互上(/think 选择器、Composer 挂载),
+  // 缓存过期时最坏替所有人扛 10s 网络拉取。只在 serve 进程预热——-p 短命
+  // 进程做这个纯属浪费带宽还可能拖住退出。可选调用:测试的 session stub
+  // 只造用到的方法。
+  void session.modelCapabilities?.(session.provider.id, session.provider.model).catch(() => {});
+
   const sseClients = new Set<ServerResponse>();
 
   const computeState = (): StateSnapshot => {
@@ -272,6 +279,14 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
             apiKey: args['apiKey'] as string | undefined,
           }),
         );
+      // GUI 模型设置:保存/删除 provider 条目(server 侧落盘全局配置)。
+      // 调用结束后的 pushState 会把变更后的脱敏配置推给所有客户端。
+      case 'saveProvider':
+        await session.saveProvider(args['id'] as string, args['config'] as never);
+        return undefined;
+      case 'deleteProvider':
+        await session.deleteProvider(args['id'] as string);
+        return undefined;
       case 'newSession':
         await session.newSession();
         return { id: session.store.id };
@@ -307,6 +322,12 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return session.reviewCommits();
       case 'listProviderModels':
         return session.listProviderModels();
+      // 「测试模型」:单次最小补全,内部 10s 兜底超时,普通即时 RPC。
+      case 'testModel':
+        return session.testModel(args['id'] as string, args['model'] as string);
+      // models.dev 逐模型能力(思考档位/窗口):首个调用可能触发一次网络拉取(10s 兜底)。
+      case 'modelCapabilities':
+        return session.modelCapabilities(args['id'] as string, args['model'] as string);
       // 兼容垫片:旧客户端(--attach 版本偏差)的裸 /model 仍发 listModels。
       // 旧语义是"只探当前厂商"——调 session.listModels,不能转发到
       // listProviderModels:那会并发探测所有已配置厂商,还得等最慢的一个

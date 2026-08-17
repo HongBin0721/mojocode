@@ -1,6 +1,7 @@
 import {
   streamText,
   stepCountIs,
+  type JSONValue,
   type LanguageModel,
   type ModelMessage,
   type ToolSet,
@@ -461,7 +462,11 @@ export class Agent {
       provider.parallelToolCalls
         ? undefined
         : { [providerOptionsKey(provider.id)]: { parallel_tool_calls: false } },
-      reasoningMapping(provider, provider.reasoningEffort).providerOptions,
+      // 逐模型自定义思考参数(GUI 模型设置):原样并入该 provider 键,完全
+      // 替代档位映射——用户显式接管了思考参数,/think 对这类模型不生效。
+      provider.reasoningParams
+        ? { [providerOptionsKey(provider.id)]: provider.reasoningParams as Record<string, JSONValue> }
+        : reasoningMapping(provider, provider.reasoningEffort).providerOptions,
     );
 
     const result = streamText({
@@ -518,6 +523,8 @@ export class Agent {
       },
       abortSignal: signal,
       temperature: config.temperature,
+      // GUI 模型设置里逐模型配置的最大输出;未配置传 undefined = 服务端默认。
+      maxOutputTokens: provider.maxOutputTokens,
       ...(providerOptions ? { providerOptions } : {}),
       // 工具抛出异常绝不能终结整轮对话:模型需要看到错误才能纠正方向
       // (路径写错、oldString 过期、权限被拒)。把错误消息作为工具输出

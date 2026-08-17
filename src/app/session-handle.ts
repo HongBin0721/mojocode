@@ -24,7 +24,8 @@ import type { ResolvedProvider } from '../config/load.js';
 import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalState, GoalStatus } from '../agent/goal.js';
-import type { ProviderModels } from '../model/registry.js';
+import type { ModelTestResult, ProviderModels } from '../model/registry.js';
+import type { ModelCapabilities } from '../model/catalog.js';
 import type { DoctorReport } from './doctor.js';
 import type { ImageAttachment } from './attachments.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
@@ -104,6 +105,10 @@ export interface SessionHandle {
   setReasoningEffort(level: ReasoningEffort): void | Promise<void>;
   /** 所有已配置厂商的模型分组(`/models`):远程侧 RPC,server 侧并发探测。 */
   listProviderModels(): Promise<ProviderModels[]>;
+  /** GUI「测试模型」:server 侧向对话端点发一次最小补全,失败原因随结果带回。 */
+  testModel(providerId: string, modelId: string): Promise<ModelTestResult>;
+  /** 逐模型能力(models.dev 目录):思考档位/窗口/输出上限;库里没有返回 undefined。 */
+  modelCapabilities(providerId: string, modelId: string): Promise<ModelCapabilities | undefined>;
   doctor(options: { offline: boolean }): Promise<DoctorReport>;
   refreshEnvironment(): Promise<void>;
   /** user-invocable 技能投影(命令菜单用),同步读取(远程侧走 SSE 镜像)。 */

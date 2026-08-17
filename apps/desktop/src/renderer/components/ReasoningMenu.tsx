@@ -3,9 +3,10 @@
  * (模型参数),说明走 GUI i18n。纯展示,数据由 commands/reasoning.ts 组装。
  */
 
-import React from 'react';
+import React, { useContext } from 'react';
 import { t, useLocale } from '../i18n/index.js';
 import type { ReasoningMenuEntry } from '../commands/reasoning.js';
+import { MenuCloseContext } from './Menu.js';
 
 const DESC_KEYS = {
   auto: 'reasonopt.auto',
@@ -24,6 +25,8 @@ export function ReasoningMenuList({
   onPick: (level: ReasoningMenuEntry['level']) => void;
 }) {
   useLocale();
+  // 点选即关(ZCode 行为),与权限菜单一致。
+  const closeMenu = useContext(MenuCloseContext);
   return (
     <div className="reasoning-menu">
       {entries.map((entry) => (
@@ -31,7 +34,10 @@ export function ReasoningMenuList({
           type="button"
           key={entry.level}
           className={`menu-item ${entry.current ? 'menu-item-current' : ''}`}
-          onClick={() => onPick(entry.level)}
+          onClick={() => {
+            onPick(entry.level);
+            closeMenu();
+          }}
         >
           <span className="menu-item-label">{entry.level}</span>
           <span className="menu-item-desc">{t(DESC_KEYS[entry.level])}</span>

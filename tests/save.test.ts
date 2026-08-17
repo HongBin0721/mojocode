@@ -2,7 +2,15 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { saveApiKey, saveCustomProvider, savePermissions, saveReasoningEffort, setDefaultProvider } from '../src/config/save.js';
+import {
+  deleteProviderEntry,
+  saveApiKey,
+  saveCustomProvider,
+  savePermissions,
+  saveProviderEntry,
+  saveReasoningEffort,
+  setDefaultProvider,
+} from '../src/config/save.js';
 import { presetById } from '../src/config/schema.js';
 
 let dir: string;
@@ -103,6 +111,52 @@ describe('saveCustomProvider', () => {
     expect(await readConfig()).toEqual({
       providers: { 'custom-ollama': { baseURL: 'http://127.0.0.1:11434/v1', apiKey: 'k' } },
     });
+  });
+});
+
+describe('saveProviderEntry / deleteProviderEntry(GUI 模型设置)', () => {
+  it('合并写入 patch 里的键,保留条目其余字段;models 整组替换', async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        providers: { glm: { apiKey: 'g1', model: 'GLM-5.3', models: [{ id: 'GLM-5.2' }] } },
+      }),
+    );
+
+    await saveProviderEntry(
+      'glm',
+      { models: [{ id: 'GLM-5.3', contextWindow: 1_000_000 }] },
+      file,
+    );
+
+    expect(await readConfig()).toEqual({
+      providers: {
+        glm: {
+          apiKey: 'g1',
+          model: 'GLM-5.3',
+          models: [{ id: 'GLM-5.3', contextWindow: 1_000_000 }],
+        },
+      },
+    });
+  });
+
+  it('undefined 值不落盘——GUI 的脱敏副本不会覆盖真 key', async () => {
+    await saveProviderEntry('glm', { apiKey: 'real', model: 'GLM-5.3' }, file);
+    await saveProviderEntry('glm', { apiKey: undefined, label: 'GLM' }, file);
+    expect(await readConfig()).toEqual({
+      providers: { glm: { apiKey: 'real', model: 'GLM-5.3', label: 'GLM' } },
+    });
+  });
+
+  it('deleteProviderEntry 整条移除,其他条目不动;文件不存在也不抛', async () => {
+    await saveProviderEntry('a', { baseURL: 'https://a.example/v1' }, file);
+    await saveProviderEntry('b', { baseURL: 'https://b.example/v1' }, file);
+    await deleteProviderEntry('a', file);
+    expect(await readConfig()).toEqual({ providers: { b: { baseURL: 'https://b.example/v1' } } });
+
+    const fresh = path.join(dir, 'nested', 'fresh.json');
+    await expect(deleteProviderEntry('nope', fresh)).resolves.toBe(fresh);
   });
 });
 

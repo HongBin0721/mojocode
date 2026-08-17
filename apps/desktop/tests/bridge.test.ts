@@ -48,6 +48,15 @@ interface Harness {
     startSimplify: ReturnType<typeof vi.fn>;
     listProviderModels: ReturnType<typeof vi.fn>;
   };
+  /** 设置页·模型设置的 RPC spy。 */
+  providerOps: {
+    saveProvider: ReturnType<typeof vi.fn>;
+    deleteProvider: ReturnType<typeof vi.fn>;
+    testModel: ReturnType<typeof vi.fn>;
+    modelCapabilities: ReturnType<typeof vi.fn>;
+  };
+  /** 模拟远端镜像的 state 帧更新(remote.applyState → stateChanged 通知)。 */
+  fireStateChanged: () => void;
   setSnapshot(seed: number): void;
 }
 
@@ -68,6 +77,15 @@ function makeHarness(snapshotSeed = 1): Harness {
     startSimplify: vi.fn().mockResolvedValue({ ok: true }),
     listProviderModels: vi.fn().mockResolvedValue([]),
   };
+  const providerOps = {
+    saveProvider: vi.fn().mockResolvedValue(undefined),
+    deleteProvider: vi.fn().mockResolvedValue(undefined),
+    testModel: vi.fn().mockResolvedValue({ ok: true, status: 200, durationMs: 12 }),
+    modelCapabilities: vi
+      .fn()
+      .mockResolvedValue({ contextWindow: 1_000_000, efforts: ['auto', 'off', 'high'] }),
+  };
+  let stateListener: (() => void) | undefined;
   const session = {
     get snapshot() {
       return snapshot;
@@ -75,6 +93,12 @@ function makeHarness(snapshotSeed = 1): Harness {
     bus,
     todos: { get: () => [], subscribe: () => () => {} },
     skillsChanged: () => () => {},
+    stateChanged: (listener: () => void) => {
+      stateListener = listener;
+      return () => {
+        stateListener = undefined;
+      };
+    },
     gate: {
       setAsker: (ask: PermissionAsker) => {
         asker = ask;
@@ -89,6 +113,7 @@ function makeHarness(snapshotSeed = 1): Harness {
     listSessions: vi.fn().mockRejectedValue(new Error('unknown method: listSessions')),
     ...commands,
     switch: vi.fn().mockResolvedValue(undefined),
+    ...providerOps,
     setPermissions: vi.fn(),
     setPlan: vi.fn(),
   } as unknown as RemoteSession;
@@ -113,9 +138,11 @@ function makeHarness(snapshotSeed = 1): Harness {
     },
     agents,
     commands,
+    providerOps,
     setSnapshot: (seed: number) => {
       snapshot = makeSnapshot(seed);
     },
+    fireStateChanged: () => stateListener?.(),
   };
 }
 
@@ -259,6 +286,45 @@ describe('createBridge', () => {
     expect(h.commands.startReview).toHaveBeenCalledWith('uncommitted');
     expect(h.commands.startSimplify).toHaveBeenCalledWith('');
     expect(h.commands.listProviderModels).toHaveBeenCalled();
+  });
+
+  it('镜像 state 帧更新(stateChanged)触发快照重推——saveProvider/switch 这类纯状态变更没有 bus 事件', async () => {
+    const h = makeHarness();
+    await invokeSubscribe(h);
+    await flushMicrotasks();
+    const before = sendsOf(h, IPC_CHANNELS.state).length;
+    h.setSnapshot(2); // 模拟 server 推来的新快照已写入镜像
+    h.fireStateChanged();
+    await flushMicrotasks();
+    expect(sendsOf(h, IPC_CHANNELS.state).length).toBe(before + 1);
+  });
+
+  it('rpc 白名单:testModel 透传并带回连通结果', async () => {
+    const h = makeHarness();
+    const result = await invokeRpc(h, { kind: 'testModel', id: 'glm-coding', model: 'GLM-5.3' });
+    expect(h.providerOps.testModel).toHaveBeenCalledWith('glm-coding', 'GLM-5.3');
+    expect(result).toEqual({ ok: true, status: 200, durationMs: 12 });
+  });
+
+  it('rpc 白名单:modelCapabilities 透传(models.dev 能力目录)', async () => {
+    const h = makeHarness();
+    const result = await invokeRpc(h, { kind: 'modelCapabilities', id: 'kimi', model: 'kimi-k3' });
+    expect(h.providerOps.modelCapabilities).toHaveBeenCalledWith('kimi', 'kimi-k3');
+    expect(result).toEqual({ contextWindow: 1_000_000, efforts: ['auto', 'off', 'high'] });
+  });
+
+  it('rpc 白名单:saveProvider/deleteProvider 透传(设置页·模型设置)', async () => {
+    const h = makeHarness();
+    await invokeRpc(h, {
+      kind: 'saveProvider',
+      id: 'glm',
+      config: { models: [{ id: 'GLM-5.3', contextWindow: 1_000_000 }] },
+    });
+    await invokeRpc(h, { kind: 'deleteProvider', id: 'custom-x' });
+    expect(h.providerOps.saveProvider).toHaveBeenCalledWith('glm', {
+      models: [{ id: 'GLM-5.3', contextWindow: 1_000_000 }],
+    });
+    expect(h.providerOps.deleteProvider).toHaveBeenCalledWith('custom-x');
   });
 
   it('runSkill 不带 display 时不传 options(与 TUI 的调用形态一致)', async () => {

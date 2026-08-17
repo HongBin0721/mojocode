@@ -17,6 +17,15 @@ function isKimiEffortModel(model: string): boolean {
 }
 
 /**
+ * GLM-5 系支持 reasoning_effort 档位——对 Coding Plan 端点实测过:非法值
+ * 400 并列出可选集(none…max),low/max 的 reasoning tokens 实测 0 vs 44,
+ * 参数真实控制思考深度。GLM-4 系只有 thinking 开关。
+ */
+function isGlmEffortModel(model: string): boolean {
+  return /^glm-[5-9]/i.test(model);
+}
+
+/**
  * openai-compatible 的 providerOptions 键。SDK 两种拼写都读,但带连字符的
  * 原名(glm-coding、kimi-intl)会触发弃用警告——它经 console.warn 输出,会
  * 直接打进 TUI 的全屏画面。统一用 SDK 期望的 camelCase 形式。
@@ -58,7 +67,18 @@ export function reasoningMapping(
   const key = providerOptionsKey(id);
 
   if (id.startsWith('glm')) {
-    // GLM 只有 thinking 开关,没有档位,非 off 一律等于开启。
+    // GLM-5 系:reasoning_effort 是真档位(见 isGlmEffortModel 的实测),
+    // 与 thinking 开关并用;off 仍走 disabled(实测有效的关闭路径)。
+    if (isGlmEffortModel(provider.model)) {
+      if (effort === 'off') {
+        return { support: 'full', providerOptions: { [key]: { thinking: { type: 'disabled' } } } };
+      }
+      return {
+        support: 'full',
+        providerOptions: { [key]: { thinking: { type: 'enabled' }, reasoningEffort: effort } },
+      };
+    }
+    // GLM-4 系只有 thinking 开关,没有档位,非 off 一律等于开启。
     return {
       support: effort === 'off' ? 'full' : 'coarse',
       providerOptions: { [key]: { thinking: { type: effort === 'off' ? 'disabled' : 'enabled' } } },
@@ -96,6 +116,31 @@ export function reasoningMapping(
  */
 export function supportedEfforts(provider: ResolvedProvider): ReasoningEffort[] {
   return REASONING_EFFORTS.filter((e) => reasoningMapping(provider, e).support === 'full');
+}
+
+/**
+ * 前端真正该展示的档位:目录档位(逐模型精确,家族表会过时)优先,目录没说
+ * 就回退家族表,再剔掉 wire 层压根发不出去的档位。
+ *
+ * `catalogEfforts` 的三态直接对应三种处置——`[]` 是"目录明说不推理",原样
+ * 返回(前端据此隐藏思考 chip);`undefined` 是目录缺口,回退;非空则采信。
+ *
+ * 只剔 `unsupported`(选了什么都不发,比如 kimi k3 系列的 off,思考照旧开着,
+ * 是纯粹的假选项),`coarse` 保留:GLM-4 这类只有开关的模型,目录若列出档位,
+ * 发出去至少等于"开启思考"——粗粒度近似、不是无效。
+ */
+export function effectiveEfforts(
+  provider: ResolvedProvider,
+  catalogEfforts: ReasoningEffort[] | undefined,
+): ReasoningEffort[] {
+  if (catalogEfforts?.length === 0) return [];
+  return (catalogEfforts ?? supportedEfforts(provider)).filter(
+    (effort) =>
+      // 'auto' 是"什么参数都不发"的会话默认态,不是可点档位(用户的决定);
+      // 家族表把它算作支持,所以回退路径必须在这里剔掉——契约是"efforts 不含
+      // auto",属主在这一处,前端不必各自记得 filter。
+      effort !== 'auto' && reasoningMapping(provider, effort).support !== 'unsupported',
+  );
 }
 
 /**

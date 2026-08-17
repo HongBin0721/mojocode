@@ -9,9 +9,25 @@ import {
 } from '../../config/schema.js';
 import { saveReasoningEffort, saveTimelineMode } from '../../config/save.js';
 import { supportedEfforts } from '../../model/reasoning.js';
+import type { ReasoningEffort } from '../../config/schema.js';
+import type { SessionHandle } from '../../app/session-handle.js';
 import type { CommandHandler } from './types.js';
 
 /** 配置类命令:approvals / think / setting / focus / provider / models。 */
+
+/**
+ * /think 选择器与参数校验同源的可选档位。生效可选集由 Session 的
+ * `modelCapabilities` 给出(目录优先、缺口回退家族表、剔除 wire 发不出去的
+ * 档位,都在那一处);这里只兜 RPC 失败——server 抖动时仍能用家族表出个单子。
+ * 'auto' 不列(用户的决定)——它是"什么都不发"的初始默认态,不作为可点档位,
+ * `/think auto` 裸参数仍被接受(下面的显式出口)。
+ */
+export async function selectableEfforts(session: SessionHandle): Promise<ReasoningEffort[]> {
+  const caps = await session
+    .modelCapabilities(session.provider.id, session.provider.model)
+    .catch(() => undefined);
+  return (caps?.efforts ?? supportedEfforts(session.provider)).filter((l) => l !== 'auto');
+}
 
 export const approvals: CommandHandler = async (ctx, arg) => {
   const preset = APPROVAL_PRESETS.find((p) => p.id === arg);
@@ -48,19 +64,23 @@ export const approvals: CommandHandler = async (ctx, arg) => {
 };
 
 export const think: CommandHandler = async (ctx, arg) => {
-  // 档位与当前 provider/model 绑定:只接受它能完整表达的值,
-  // 不支持的档位直接拒绝并列出可用项。
-  const valid = supportedEfforts(ctx.session.provider);
+  // 档位与当前 provider/model 绑定:只接受它能完整表达的值,不支持的档位
+  // 直接拒绝并列出可用项(selectableEfforts,与选择器同一来源)。
+  // `/think auto` 显式输入免校验直通——它是唯一的"回到什么参数都不发"的
+  // 出口,而且不必为它拉一次能力目录。
   const parsed = reasoningEffortSchema.safeParse(arg);
-  if (!parsed.success || !valid.includes(parsed.data)) {
-    ctx.push({
-      kind: 'notice',
-      level: 'warn',
-      message: t('notice.thinkUsage', { list: valid.join('|'), level: ctx.think() }),
-    });
-    return;
+  const level = parsed.success ? parsed.data : undefined;
+  if (level === undefined || level !== 'auto') {
+    const valid = await selectableEfforts(ctx.session);
+    if (level === undefined || !valid.includes(level)) {
+      ctx.push({
+        kind: 'notice',
+        level: 'warn',
+        message: t('notice.thinkUsage', { list: valid.join('|'), level: ctx.think() }),
+      });
+      return;
+    }
   }
-  const level = parsed.data;
   // 档位必须落到真正跑模型的进程:本地会话改共享的 provider/config
   // 对象,远程会话(client-server)则经 RPC 送达——细节收进 Session 契约。
   // RPC 会 reject(server 抖动),而这里是 `void` 调用的:

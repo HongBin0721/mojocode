@@ -26,6 +26,7 @@
       "@core/types": ["../../src/ui/types.ts"],
       "@core/timeline-data": ["../../src/ui/timeline-data.ts"],
       "@core/schema": ["../../src/config/schema.ts"],
+      "@core/providers": ["../../src/config/providers.ts"],
       "@core/attachments": ["../../src/app/attachments.ts"],
       "@core/remote": ["../../src/client/remote.ts"],
       "@core/replay": ["../../src/session/replay.ts"],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listModels, listProviderModels } from '../src/model/registry.js';
+import { listModels, listProviderModels, testModel } from '../src/model/registry.js';
 import { configSchema } from '../src/config/schema.js';
 
 /** 按 URL 前缀路由的假 fetch:未命中的 URL 一律 404(等价于探到陌生端点)。 */
@@ -249,5 +249,62 @@ describe('listProviderModels', () => {
       fetchImpl: routedFetch({ 'api.moonshot.cn': { ids: ['kimi-k3'] } }),
     });
     expect(groups.map((g) => g.providerId)).toEqual(['kimi']);
+  });
+});
+
+describe('testModel', () => {
+  it('向对话端点发最小补全:携 key、模型 id 归一,200 即连通', async () => {
+    const captured: Array<{ url: string; init: RequestInit }> = [];
+    const config = configSchema.parse({
+      provider: 'kimi',
+      providers: { 'glm-coding': { apiKey: 'glm-key' } },
+    });
+    const result = await testModel(config, 'glm-coding', 'glm-5.3', {
+      env: {},
+      fetchImpl: (async (input: unknown, init?: RequestInit) => {
+        captured.push({ url: String(input), init: init! });
+        return new Response(JSON.stringify({ choices: [] }), { status: 200 });
+      }) as typeof fetch,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    const req = captured[0]!;
+    expect(req.url).toContain('/chat/completions');
+    expect((req.init.headers as Record<string, string>).Authorization).toBe('Bearer glm-key');
+    const body = JSON.parse(String(req.init.body)) as { model: string; max_tokens: number };
+    // 目标 provider 由参数指定(不是顶层 provider),GLM 系 id 归一为大写。
+    expect(body.model).toBe('GLM-5.3');
+    expect(body.max_tokens).toBe(1);
+  });
+
+  it('HTTP 失败:ok=false,带状态码与响应体片段', async () => {
+    const config = configSchema.parse({
+      provider: 'glm-coding',
+      providers: { 'glm-coding': { apiKey: 'bad' } },
+    });
+    const result = await testModel(config, 'glm-coding', 'GLM-5.3', {
+      env: {},
+      fetchImpl: (async () =>
+        new Response('{"error":"invalid api key"}', { status: 401, statusText: 'Unauthorized' })) as typeof fetch,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(401);
+    expect(result.error).toContain('401');
+    expect(result.error).toContain('invalid api key');
+  });
+
+  it('连接层失败:错误链展开(undici 的 cause 里才有真原因)', async () => {
+    const config = configSchema.parse({
+      provider: 'kimi',
+      providers: { local: { baseURL: 'http://127.0.0.1:9/v1', model: 'm' } },
+    });
+    const result = await testModel(config, 'local', 'm', {
+      env: {},
+      fetchImpl: (async () => {
+        throw new Error('fetch failed', { cause: new Error('connect ECONNREFUSED 127.0.0.1:9') });
+      }) as typeof fetch,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('ECONNREFUSED');
   });
 });

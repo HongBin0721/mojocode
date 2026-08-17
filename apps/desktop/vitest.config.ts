@@ -20,6 +20,7 @@ const aliases = {
   '@core/types': resolve(repoRoot, 'src/ui/types.ts'),
   '@core/timeline-data': resolve(repoRoot, 'src/ui/timeline-data.ts'),
   '@core/schema': resolve(repoRoot, 'src/config/schema.ts'),
+  '@core/providers': resolve(repoRoot, 'src/config/providers.ts'),
   '@core/attachments': resolve(repoRoot, 'src/app/attachments.ts'),
   '@core/remote': resolve(repoRoot, 'src/client/remote.ts'),
   '@core/replay': resolve(repoRoot, 'src/session/replay.ts'),

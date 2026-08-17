@@ -7,6 +7,7 @@ import {
   sandboxModeSchema,
   searchBackendSchema,
   type Config,
+  type JsonValue,
   type PartialConfig,
   type ProviderConfig,
   type ReasoningEffort,
@@ -217,6 +218,13 @@ export interface ResolvedProvider {
   model: string;
   headers: Record<string, string>;
   contextWindow: number;
+  /** 逐模型配置的最大输出 token(GUI 模型设置),未配置则交给服务端默认。 */
+  maxOutputTokens?: number;
+  /**
+   * 逐模型自定义思考参数(GUI 模型设置):原样并入 providerOptions,完全
+   * 替代 reasoningMapping 的档位翻译;存在时 /think 对该模型不生效。
+   */
+  reasoningParams?: Record<string, JsonValue>;
   parallelToolCalls: boolean;
   reasoningEffort: ReasoningEffort;
   sdk: 'deepseek' | 'openai-compatible';
@@ -299,8 +307,12 @@ export function resolveProvider(
     throw new ConfigError(`No model for provider "${id}". Set providers.${id}.model or pass --model.`);
   }
 
+  // GUI 模型设置里逐模型配置的条目:按归一后的 id 匹配。
+  const modelEntry = override.models?.find((entry) => normalizeModelId(id, entry.id) === model);
   const contextWindow =
     config.maxContext ??
+    // 逐模型窗口优先于 provider 级 contextWindow(后者是"整个端点一个值"的粗粒度兜底)。
+    modelEntry?.contextWindow ??
     override.contextWindow ??
     preset?.contextWindows[model as keyof typeof preset.contextWindows] ??
     preset?.defaultContextWindow ??
@@ -315,8 +327,17 @@ export function resolveProvider(
     model: model ?? '',
     headers: override.headers ?? {},
     contextWindow,
+    ...(modelEntry?.maxOutputTokens !== undefined ? { maxOutputTokens: modelEntry.maxOutputTokens } : {}),
+    // 逐模型思考配置:对象形态 = 自定义参数原样透传;档位字符串则并入下面
+    // reasoningEffort 的回退链(模型级 > provider 级 > 全局)。
+    ...(typeof modelEntry?.reasoning === 'object' && modelEntry.reasoning !== null
+      ? { reasoningParams: modelEntry.reasoning }
+      : {}),
     parallelToolCalls: override.parallelToolCalls ?? preset?.parallelToolCalls ?? true,
-    reasoningEffort: override.reasoningEffort ?? config.reasoningEffort,
+    reasoningEffort:
+      (typeof modelEntry?.reasoning === 'string' ? modelEntry.reasoning : undefined) ??
+      override.reasoningEffort ??
+      config.reasoningEffort,
     sdk: preset && 'sdk' in preset && preset.sdk === 'deepseek' ? 'deepseek' : 'openai-compatible',
   };
 }

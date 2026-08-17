@@ -63,6 +63,97 @@ describe('resolveProvider', () => {
     expect(provider.contextWindow).toBe(128_000);
   });
 
+  it('GUI 配置的逐模型 contextWindow 优先于 provider 级与预设窗口', () => {
+    const config = makeConfig({
+      provider: 'glm',
+      model: 'glm-5.2',
+      providers: {
+        glm: {
+          contextWindow: 64_000,
+          // 小写 id 也要能命中:匹配走 normalizeModelId,与解析出的 model 同一拼写。
+          models: [{ id: 'glm-5.2', contextWindow: 200_000 }],
+        },
+      },
+    });
+    const provider = resolveProvider(config, { ZHIPU_API_KEY: 'k' });
+    expect(provider.model).toBe('GLM-5.2');
+    expect(provider.contextWindow).toBe(200_000);
+    // 列表里没有的模型回落到 provider 级 contextWindow。
+    const other = resolveProvider(
+      makeConfig({
+        provider: 'glm',
+        model: 'GLM-99-future',
+        providers: { glm: { contextWindow: 64_000, models: [{ id: 'GLM-5.2', contextWindow: 200_000 }] } },
+      }),
+      { ZHIPU_API_KEY: 'k' },
+    );
+    expect(other.contextWindow).toBe(64_000);
+  });
+
+  it('逐模型 maxOutputTokens 只在命中条目时解析(未配置为 undefined)', () => {
+    const config = makeConfig({
+      provider: 'glm',
+      model: 'glm-5.2',
+      providers: {
+        glm: { models: [{ id: 'glm-5.2', contextWindow: 200_000, maxOutputTokens: 8192 }] },
+      },
+    });
+    expect(resolveProvider(config, { ZHIPU_API_KEY: 'k' }).maxOutputTokens).toBe(8192);
+    const other = resolveProvider(
+      makeConfig({
+        provider: 'glm',
+        model: 'GLM-99-future',
+        providers: { glm: { models: [{ id: 'glm-5.2', maxOutputTokens: 8192 }] } },
+      }),
+      { ZHIPU_API_KEY: 'k' },
+    );
+    expect(other.maxOutputTokens).toBeUndefined();
+  });
+
+  it('逐模型 reasoning:档位字符串盖过 provider 级与全局,自定义对象落到 reasoningParams', () => {
+    // 档位字符串:模型级 > provider 级 reasoningEffort。
+    const effortConfig = makeConfig({
+      provider: 'glm',
+      model: 'glm-5.2',
+      providers: {
+        glm: {
+          reasoningEffort: 'low',
+          models: [{ id: 'glm-5.2', reasoning: 'high' }],
+        },
+      },
+    });
+    const withEffort = resolveProvider(effortConfig, { ZHIPU_API_KEY: 'k' });
+    expect(withEffort.reasoningEffort).toBe('high');
+    expect(withEffort.reasoningParams).toBeUndefined();
+
+    // 自定义对象:原样落到 reasoningParams,reasoningEffort 保持回退链的值。
+    const customConfig = makeConfig({
+      provider: 'glm',
+      model: 'glm-5.2',
+      providers: {
+        glm: {
+          reasoningEffort: 'low',
+          models: [{ id: 'glm-5.2', reasoning: { thinking: { type: 'enabled' }, budget: 4096 } }],
+        },
+      },
+    });
+    const withCustom = resolveProvider(customConfig, { ZHIPU_API_KEY: 'k' });
+    expect(withCustom.reasoningParams).toEqual({ thinking: { type: 'enabled' }, budget: 4096 });
+    expect(withCustom.reasoningEffort).toBe('low');
+
+    // 列表里没命中的模型:不带 reasoningParams,回退 provider 级档位。
+    const other = resolveProvider(
+      makeConfig({
+        provider: 'glm',
+        model: 'GLM-99-future',
+        providers: { glm: { reasoningEffort: 'low', models: [{ id: 'glm-5.2', reasoning: 'high' }] } },
+      }),
+      { ZHIPU_API_KEY: 'k' },
+    );
+    expect(other.reasoningEffort).toBe('low');
+    expect(other.reasoningParams).toBeUndefined();
+  });
+
   it('lets maxContext override everything, for testing compaction', () => {
     const provider = resolveProvider(makeConfig({ provider: 'glm', maxContext: 8000 }), {
       ZHIPU_API_KEY: 'k',

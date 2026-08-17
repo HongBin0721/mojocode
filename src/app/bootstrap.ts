@@ -12,13 +12,26 @@ import {
 import { createViewImageTool } from '../tools/view-image.js';
 import {
   planReturnFor,
+  providerConfigSchema,
   type Config,
   type Permissions,
+  type ProviderConfig,
   type ReasoningEffort,
 } from '../config/schema.js';
+import { deleteProviderEntry, saveProviderEntry } from '../config/save.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus, type PermissionAsker } from '../core/events.js';
-import { createModel, listModels, listProviderModels, type ModelInfo, type ProviderModels } from '../model/registry.js';
+import {
+  createModel,
+  listModels,
+  listProviderModels,
+  testModel as testModelConnection,
+  type ModelInfo,
+  type ModelTestResult,
+  type ProviderModels,
+} from '../model/registry.js';
+import { capabilitiesFor, createCatalogSource, type ModelCapabilities } from '../model/catalog.js';
+import { effectiveEfforts } from '../model/reasoning.js';
 import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
 import { bridgeMcpTools } from '../mcp/bridge.js';
 import { PermissionGate } from '../permissions/gate.js';
@@ -94,6 +107,16 @@ export interface Session {
    */
   switch: (change: { provider?: string; model?: string; apiKey?: string }) => ResolvedProvider | Promise<ResolvedProvider>;
   /**
+   * GUI 模型设置的保存入口:把一次编辑(baseURL / apiKey / label / models
+   * 的任意子集)并入内存 `config.providers[id]` 并落盘全局配置。patch 只含
+   * 用户真正改过的键——GUI 拿到的配置是脱敏副本,整对象回写会用空值覆盖
+   * 真 key。编辑的是当前 provider 时尽力重解析,让 label / 逐模型
+   * contextWindow 立即生效。
+   */
+  saveProvider: (id: string, patch: ProviderConfig) => void | Promise<void>;
+  /** GUI 模型设置的删除入口:整条移除 `providers.<id>`。当前激活的 provider 拒绝删除。 */
+  deleteProvider: (id: string) => void | Promise<void>;
+  /**
    * 调整当前 provider 的思考档位(`/think`)。直接改 provider/config 字段的
    * 老写法在 client-server 模式下改的只是本地镜像,必须收进 Session 契约
    * 才能落到真正跑模型的那个进程。
@@ -104,6 +127,10 @@ export interface Session {
    * 单组失败不抛错、就地带回原因。收进契约:凭据只存在于 server 侧。
    */
   listProviderModels: () => Promise<ProviderModels[]>;
+  /** GUI「测试模型」:向对话端点发一次最小补全,验证 baseURL/key/模型 id。 */
+  testModel: (providerId: string, modelId: string) => Promise<ModelTestResult>;
+  /** 逐模型能力(models.dev 目录),见 src/model/catalog.ts。 */
+  modelCapabilities: (providerId: string, modelId: string) => Promise<ModelCapabilities | undefined>;
   /**
    * 只拉**当前厂商**的模型列表。新代码用 listProviderModels,这个方法
    * 只剩 server 的 listModels 兼容垫片在调(旧 --attach 客户端的版本偏差
@@ -194,6 +221,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   const bus = new EventBus();
   const todos = new TodoStore();
+  // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
+  const catalogSource = createCatalogSource();
 
   // 会话状态快照:todos + 会话级授权规则 + 当前两轴权限。gate/store 在下方
   // 才创建,闭包按绑定取值,实际调用时都已就绪。
@@ -824,6 +853,35 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return store;
     },
     switch: switchProvider,
+    saveProvider: async (id, patch) => {
+      // 经 schema 过一遍:剥掉未知键(wire 上的 args 没有类型约束)、校验
+      // 字段形状;再滤掉 undefined——只合并用户真正改过的键。
+      const parsed = providerConfigSchema.parse(patch);
+      const cleaned: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (value !== undefined) cleaned[key] = value;
+      }
+      config.providers[id] = { ...config.providers[id], ...(cleaned as ProviderConfig) };
+      await saveProviderEntry(id, cleaned);
+      // 编辑的是当前 provider 时重解析(空 change 的 switch 即"按当前配置
+      // 重算"),label / 逐模型 contextWindow 立即生效;失败不回滚保存——
+      // 条目被改坏的真实错误留给下一次显式切换报告。
+      if (id === provider.id) {
+        try {
+          switchProvider({});
+        } catch {
+          /* 保存已完成;解析问题在下一次显式 switch 时浮现。 */
+        }
+      }
+    },
+    deleteProvider: async (id) => {
+      // 拒绝删除激活条目:agent 正拿着它跑,删了内存与落盘立刻分叉。
+      if (id === provider.id) {
+        throw new Error(`Provider "${id}" is active. Switch to another provider first.`);
+      }
+      delete config.providers[id];
+      await deleteProviderEntry(id);
+    },
     setPermissions,
     setPlan,
     setReasoningEffort: (level: ReasoningEffort) => {
@@ -837,6 +895,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       };
     },
     listProviderModels: () => listProviderModels(config),
+    testModel: (providerId, modelId) => testModelConnection(config, providerId, modelId),
+    // 返回**生效可选集**,不是目录原文:回退与 wire 可表达性过滤都做在这里,
+    // 三个前端(TUI /think 选择器与校验、GUI 思考菜单、模型弹窗)直接渲染。
+    // 放前端做过两次都是错的——家族表是 server-only 模块,renderer 摸不到,
+    // 同一个目录缺口 TUI 会收窄、GUI 却列出模型根本不支持的档位。
+    modelCapabilities: async (providerId, modelId) => {
+      const catalog = await catalogSource.get();
+      const caps = catalog ? capabilitiesFor(catalog, providerId, modelId) : undefined;
+      // 目标 provider/model 的 wire 能力:probe 模式,缺 key 不抛(弹窗查的
+      // 可能是还没配 key 的厂商)。解析失败(连 baseURL 都没有)只能交回目录原文。
+      let target: ResolvedProvider;
+      try {
+        target = resolveProvider({ ...config, provider: providerId, model: modelId }, process.env, {
+          probe: true,
+        });
+      } catch {
+        return caps;
+      }
+      return { ...caps, efforts: effectiveEfforts(target, caps?.efforts) };
+    },
     listModels: () => listModels(provider),
     doctor: ({ offline }) =>
       runDoctor({

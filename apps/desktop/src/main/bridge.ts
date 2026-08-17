@@ -99,6 +99,9 @@ export function createBridge(deps: BridgeDeps): Bridge {
   });
   const offTodos = session.todos.subscribe(() => scheduleStatePush());
   const offSkills = session.skillsChanged(() => scheduleStatePush());
+  // SSE 的 state 帧不产生 bus 事件(saveProvider/switch/别的客户端的操作),
+  // 不订阅镜像自身的更新,这些"纯状态"变更要等下一个 agent 事件才被转发。
+  const offState = session.stateChanged(() => scheduleStatePush());
 
   // asker 要尽早注册:remote 的 askerQueue 会把注册前到达的请求补发过来,
   // 不注册的话 server 侧 gate 会一直 await(--attach 半路接上时整轮挂死)。
@@ -174,6 +177,10 @@ export function createBridge(deps: BridgeDeps): Bridge {
       }
       case 'switch':
         return session.switch(request.change);
+      case 'saveProvider':
+        return session.saveProvider(request.id, request.config);
+      case 'deleteProvider':
+        return session.deleteProvider(request.id);
       case 'setPermissions':
         return session.setPermissions(request.permissions);
       case 'setPlan':
@@ -184,6 +191,10 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return session.listSessions(true);
       case 'listProviderModels':
         return session.listProviderModels();
+      case 'testModel':
+        return session.testModel(request.id, request.model);
+      case 'modelCapabilities':
+        return session.modelCapabilities(request.id, request.model);
       case 'runSkill':
         // deferred:一整轮 agent.run。调用方 fire-and-forget + catch,与 run 同构。
         return session.runSkill(
@@ -222,6 +233,7 @@ export function createBridge(deps: BridgeDeps): Bridge {
       offBus();
       offTodos();
       offSkills();
+      offState();
       // attach 模式下 server 不随 GUI 退出:挂起的审批必须收尾,否则 server
       // 侧 gate 永远等不到决定。
       pendingPermission?.resolve({ type: 'deny', reason: 'client closed' });

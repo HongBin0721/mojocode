@@ -151,6 +151,52 @@ export const reasoningEffortSchema = z.enum(['auto', 'off', 'low', 'medium', 'hi
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 export const REASONING_EFFORTS = reasoningEffortSchema.options;
 
+/** JSON 值(逐模型自定义思考参数用)。不引 ai 包的 JSONValue——配置层自持一份。 */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+/**
+ * 逐模型思考配置,两种形态:
+ * - 档位字符串:该模型的默认思考档位,盖过 provider 级与全局 `reasoningEffort`,
+ *   仍走 reasoningMapping 按厂商翻译,/think 也还能在会话里调;
+ * - 自定义参数对象:**原样**并入请求的 providerOptions(该 provider 键下),
+ *   完全替代档位映射——内置家族表达不了的思考开关(Qwen `enable_thinking`、
+ *   vLLM `chat_template_kwargs`、代理网关的 `reasoning: {...}` 等)由用户自己写。
+ *   选了它,档位与 /think 对该模型不再生效;deepseek 专用 SDK 只透传规范键
+ *   (thinking / reasoningEffort),任意字段在那一家会被 SDK 丢弃。
+ */
+export const modelReasoningSchema = z.union([
+  reasoningEffortSchema,
+  z.record(z.string(), jsonValueSchema),
+]);
+export type ModelReasoning = z.infer<typeof modelReasoningSchema>;
+
+/**
+ * GUI 模型设置里逐条维护的模型条目。id 原样发往端点(GLM 系的大小写归一
+ * 在 resolveProvider 里做);contextWindow 供用量计量与压缩阈值,按模型
+ * 覆盖 provider 级的 `contextWindow`(见 resolveProvider 的回退链)。
+ * 与「Never hardcode model IDs」不冲突:这是用户显式配置,不是代码预置。
+ */
+export const providerModelSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  contextWindow: z.number().int().positive().optional(),
+  /** 单次响应的最大输出 token,透传 streamText(GUI 添加模型弹窗的「高级」项)。 */
+  maxOutputTokens: z.number().int().positive().optional(),
+  /** 逐模型思考配置,见 modelReasoningSchema。 */
+  reasoning: modelReasoningSchema.optional(),
+});
+export type ProviderModelEntry = z.infer<typeof providerModelSchema>;
+
 /** 用户声明的 provider 条目。内置 id 只需填写要覆盖的字段。 */
 export const providerConfigSchema = z.object({
   baseURL: z.url().optional(),
@@ -169,6 +215,13 @@ export const providerConfigSchema = z.object({
    */
   vision: z.boolean().optional(),
   label: z.string().optional(),
+  /**
+   * 该 provider 在模型选择器里展示的模型列表(GUI 模型设置维护)。配置了
+   * 任意一组后,GUI 的选择器改为直接读它(同步、零探测);为空/缺省时
+   * 选择器回落到 `/models` 端点探测。所有字段无默认值——providerConfigSchema
+   * 被 partialConfigSchema 原样复用,带默认值会复活分层幻影覆盖。
+   */
+  models: z.array(providerModelSchema).optional(),
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 

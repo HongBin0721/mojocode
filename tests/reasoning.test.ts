@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  effectiveEfforts,
   mergeProviderOptions,
   providerOptionsKey,
   reasoningMapping,
@@ -141,8 +142,19 @@ describe('supportedEfforts:档位与模型绑定', () => {
     ]);
   });
 
-  it('glm 只有开关:仅 auto 和 off 可选,伪档位不出现', () => {
+  it('glm-4 系只有开关:仅 auto 和 off 可选,伪档位不出现', () => {
     expect(supportedEfforts(provider({ id: 'glm', model: 'GLM-4.6' }))).toEqual(['auto', 'off']);
+  });
+
+  it('glm-5 系 reasoning_effort 是实测过的真档位:全档可选', () => {
+    expect(supportedEfforts(provider({ id: 'glm-coding', model: 'GLM-5.3' }))).toEqual([
+      'auto',
+      'off',
+      'low',
+      'medium',
+      'high',
+      'max',
+    ]);
   });
 
   it('kimi-k3 无法关闭思考且没有 medium', () => {
@@ -165,6 +177,43 @@ describe('supportedEfforts:档位与模型绑定', () => {
       'medium',
       'high',
       'max',
+    ]);
+  });
+});
+
+describe('effectiveEfforts:目录 × wire 可表达性', () => {
+  it('目录缺口(undefined)回退家族表——会思考的模型不能因此没了档位', () => {
+    // deepseek-reasoner / kimi-for-coding 这类条目在目录里就是"会思考但没说
+    // 档位形状";当成"不推理"会让思考彻底调不了。
+    // 回退路径也不带 'auto':它是会话默认态,不是可点档位。
+    expect(effectiveEfforts(provider({ id: 'deepseek', sdk: 'deepseek' }), undefined)).toEqual([
+      'off',
+      'low',
+      'medium',
+      'high',
+      'max',
+    ]);
+    expect(effectiveEfforts(provider({ id: 'glm', model: 'GLM-4.6' }), undefined)).toEqual(['off']);
+  });
+
+  it('目录明说不推理(空数组)原样返回——前端据此隐藏思考 chip', () => {
+    expect(effectiveEfforts(provider({ id: 'deepseek', sdk: 'deepseek' }), [])).toEqual([]);
+  });
+
+  it('目录档位优先于家族表(家族表会过时),但剔掉 wire 发不出去的档位', () => {
+    // kimi-k3 目录带 toggle → 含 off,而 reasoningMapping 对它 off 是 unsupported
+    // (什么都不发、思考照旧开着),必须剔除。
+    expect(
+      effectiveEfforts(provider({ id: 'kimi', model: 'kimi-k3' }), ['off', 'low', 'high', 'max']),
+    ).toEqual(['low', 'high', 'max']);
+    // GLM-5.3 的档位如今是 full(实测 reasoning_effort 生效);GLM-4 系目录若
+    // 给出档位,coarse(等于开启思考)也保留——粗粒度近似不是无效。
+    expect(
+      effectiveEfforts(provider({ id: 'glm-coding', model: 'GLM-5.3' }), ['low', 'high', 'max']),
+    ).toEqual(['low', 'high', 'max']);
+    expect(effectiveEfforts(provider({ id: 'glm', model: 'GLM-4.6' }), ['low', 'high'])).toEqual([
+      'low',
+      'high',
     ]);
   });
 });

@@ -1,7 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
+import { initUiFontSize } from './utils/appearance.js';
 import './styles.css';
+
+// 恢复外观偏好(设置页·界面字号)——在首帧渲染前应用,避免字号跳动。
+initUiFontSize();
 
 // 平台类挂到 <html>:mac 走透明底 + vibrancy(body 透明),其余平台实体底色。
 try {

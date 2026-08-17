@@ -6,6 +6,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 
+/** 菜单内容拿来关掉自己的出口:点选条目后即关(ZCode 行为)。 */
+export const MenuCloseContext = React.createContext<() => void>(() => {});
+
 export function MenuPopover({
   label,
   title,
@@ -43,7 +46,11 @@ export function MenuPopover({
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as HTMLElement;
+      // portal 出去的次级浮层(级联菜单的二级)不算"外部":它挂在 body 上,
+      // contains 测不到,不放行会在 click 送达前把整个菜单卸载、吞掉点选。
+      if (target.closest?.('[data-menu-portal]')) return;
+      if (rootRef.current && !rootRef.current.contains(target)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
@@ -73,7 +80,7 @@ export function MenuPopover({
           style={width ? { width: `${width}px` } : undefined}
         >
           {title ? <div className="menu-title">{title}</div> : null}
-          {children}
+          <MenuCloseContext.Provider value={() => setOpen(false)}>{children}</MenuCloseContext.Provider>
         </div>
       ) : null}
     </div>

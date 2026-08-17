@@ -24,6 +24,7 @@ import { StatusLine } from './components/StatusLine.js';
 import { Composer } from './components/Composer.js';
 import { PermissionCard } from './components/PermissionCard.js';
 import { ReviewPanel } from './components/ReviewPanel.js';
+import { SettingsPage } from './components/SettingsPage.js';
 
 /** 审批卡挂在 Composer 上方;决策经 RPC 回 main 侧的 asker。 */
 function PermissionSection() {
@@ -112,6 +113,10 @@ function useGlobalShortcuts(): void {
 export function App() {
   useEffect(() => initBridge(), []);
   useGlobalShortcuts();
+  const view = useUiStore((s) => s.view);
+  // 全屏设置页整体替换工作区(ZCode 形态);桥与快捷键保持挂载,
+  // SSE/状态推送在设置页停留期间照常回流(模型设置就吃这份快照)。
+  if (view === 'settings') return <SettingsPage />;
   return (
     <div className="shell">
       <Sidebar />
