@@ -86,12 +86,13 @@ export interface RemoteSession extends SessionHandle {
   /** 仅测试/诊断用:当前镜像快照。 */
   readonly snapshot: StateSnapshot;
   /**
-   * 本工作区的会话列表(GUI 侧栏;serve 的 `listSessions` 只读 RPC)。
+   * 会话列表(GUI 侧栏;serve 的 `listSessions` 只读 RPC)。默认限本工作区,
+   * `all` 时跨工作区(GUI 按项目分组要看到其他项目的任务)。
    * 不进 SessionHandle——那是 TUI 的窄接口,TUI 在拉起 server 之前本地读
    * store,不需要 RPC;远程 GUI 才有这条路径。旧 server 返回
    * `unknown method`,调用方自行降级。
    */
-  listSessions(): Promise<SessionMeta[]>;
+  listSessions(all?: boolean): Promise<SessionMeta[]>;
   /** 工作区 pending 变更(GUI Review 面板;同为 GUI 专属只读 RPC)。 */
   workspaceStatus(): Promise<WorkspaceStatus>;
   /** 单文件 diff(vs HEAD;untracked 为全新增补丁)。 */
@@ -557,7 +558,8 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       }
     },
     forkSession: () => call<{ id: string }>('forkSession'),
-    listSessions: () => call<SessionMeta[]>('listSessions'),
+    listSessions: (all?: boolean) =>
+      call<SessionMeta[]>('listSessions', all === true ? { all: true } : undefined),
     workspaceStatus: () => call<WorkspaceStatus>('workspaceStatus'),
     fileDiff: (path: string) => call<FileDiff>('fileDiff', { path }),
     switch: async (change) => {

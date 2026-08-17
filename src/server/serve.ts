@@ -285,10 +285,11 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return { id: forked.id };
       }
       // GUI 侧栏的会话列表:TUI 在拉起 server 之前本地读 store,远程客户端
-      // 没有那条路径——按当前工作区过滤、updatedAt 倒序,纯只读。旧 client
-      // 从不调用,零影响。
+      // 没有那条路径——updatedAt 倒序,纯只读。默认按当前工作区过滤;
+      // `all` 时列出所有工作区(GUI 侧栏按项目分组要看到其他项目的任务,
+      // 等同 `mojocode sessions --all`)。旧 client 不传该参数,行为不变。
       case 'listSessions':
-        return SessionStore.list(session.root);
+        return SessionStore.list(args['all'] === true ? undefined : session.root);
       // GUI Review 面板:pending 变更列表与单文件 diff(vs HEAD),只读收集。
       case 'workspaceStatus':
         return collectWorkspaceStatus(session.root);
