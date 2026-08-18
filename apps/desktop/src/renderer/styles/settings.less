@@ -1,4 +1,5 @@
 /* ---- 模型设置:双栏卡片(左供应商列表 / 右详情) ---- */
+@import (reference) './_mixins.less';
 
 .models-panel {
   display: flex;
@@ -27,9 +28,7 @@
 }
 
 .provider-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   width: 100%;
   height: 30px;
   padding: 0 10px;
@@ -49,11 +48,8 @@
   background: var(--color-selected);
 }
 .provider-row-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .flex-fill();
+  .ellipsis();
 }
 .provider-dot {
   flex: none;
@@ -67,25 +63,20 @@
 }
 
 .models-detail {
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
   padding: 16px 18px 20px;
   overflow-y: auto;
 }
 
 .provider-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  .flex-row(10px);
   margin-bottom: 12px;
 }
 .provider-title {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .provider-badge {
   flex: none;
@@ -100,15 +91,11 @@
   margin-left: auto;
 }
 .model-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  .flex-col(8px);
   margin-top: 10px;
 }
 .model-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -118,13 +105,10 @@
   border-color: var(--color-brand-soft);
 }
 .model-row-id {
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
   font-family: var(--font-mono);
   font-size: 12.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .model-row-ctx {
   flex: none;
@@ -214,9 +198,7 @@
   right: 4px;
   height: 100%;
   width: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  .inline-center();
   border: none;
   background: transparent;
   color: var(--color-foreground-subtle);
@@ -252,9 +234,7 @@
   position: fixed;
   inset: 0;
   z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  .center-row();
   background: rgba(0, 0, 0, 0.55);
 }
 .modal-card {
@@ -279,9 +259,7 @@
   font-weight: 600;
 }
 .modal-advanced {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  .inline-row(5px);
   margin-top: 16px;
   padding: 0;
   border: none;

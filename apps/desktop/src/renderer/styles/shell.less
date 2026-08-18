@@ -1,4 +1,5 @@
 /* ---- 窗口壳:设计稿不透明纯色底 ---- */
+@import (reference) './_mixins.less';
 
 .shell {
   display: flex;
@@ -18,9 +19,7 @@
 .titlebar {
   flex: none;
   height: var(--topbar-h);
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  .flex-row(12px);
   padding: 0 14px 0 var(--topbar-lead);
   background: var(--color-sidebar);
   border-bottom: 1px solid var(--color-border);
@@ -43,9 +42,7 @@
 .titlebar-btn {
   width: 28px;
   height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  .inline-center();
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -58,15 +55,12 @@
   color: var(--color-foreground);
 }
 .titlebar-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
+  .disabled(0.4);
 }
 
 /* 分支切换器触发行:project / branch ▾(mono) */
 .branch-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+  .inline-row(7px);
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-size: var(--fs-12);
@@ -87,25 +81,19 @@
 }
 
 .branch-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  .flex-row(9px);
 }
 .branch-item-name {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
   color: var(--color-foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .branch-item-meta {
   margin-left: auto;
   font-size: var(--fs-10);
   color: var(--color-foreground-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
   max-width: 140px;
 }
 
@@ -120,16 +108,12 @@
 
 .sidebar-head {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  .flex-col(10px);
   padding: 14px 12px 10px;
 }
 
 .project-trigger {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  .flex-row(9px);
   width: 100%;
   padding: 7px 9px;
   border-radius: var(--radius-lg);
@@ -142,11 +126,8 @@
   background: var(--color-card-selected);
 }
 .project-trigger-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-fill();
+  .flex-col(1px);
 }
 .project-trigger-name {
   font-size: var(--fs-13);
@@ -155,22 +136,15 @@
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   color: var(--color-foreground-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 
 .project-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  .flex-row(9px);
 }
 .project-item-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-fill();
+  .flex-col(1px);
 }
 .project-item-name {
   font-size: var(--fs-125);
@@ -180,9 +154,7 @@
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   color: var(--color-foreground-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .project-item-count {
   flex: none;
@@ -190,9 +162,7 @@
   color: var(--color-foreground-subtle);
 }
 .project-import {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  .flex-row(9px);
   margin-top: 4px;
   border-top: 1px solid var(--color-border-strong);
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
@@ -200,10 +170,7 @@
 }
 
 .new-task-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
+  .center-row(7px);
   width: 100%;
   height: 32px;
   border: 1px solid var(--color-primary-border);
@@ -218,22 +185,17 @@
   border-color: var(--color-primary-border-hover);
 }
 .new-task-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
+  .disabled();
 }
 
 .nav-list {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-col(1px);
   padding: 4px 8px 0;
 }
 
 .nav-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
+  .flex-row(9px);
   width: 100%; /* button 默认收缩到内容宽,footer 里要整行可点 + 整行 hover */
   padding: 7px 10px;
   border: 0;
@@ -272,16 +234,12 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  .flex-col(2px);
   padding: 0 8px 12px;
 }
 
 .task-row {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  .flex-col(5px);
   padding: 9px 10px;
   border: 0;
   border-radius: var(--radius-lg);
@@ -297,9 +255,7 @@
   background: var(--color-popover);
 }
 .task-row-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  .flex-row(7px);
   min-width: 0;
 }
 .task-dot {
@@ -309,14 +265,11 @@
   border-radius: 999px;
 }
 .task-row-title {
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
   font-size: var(--fs-125);
   line-height: 1.35;
   color: var(--color-foreground-soft);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .task-row-active .task-row-title {
   color: var(--color-foreground);
@@ -365,9 +318,7 @@
 .sidebar-top {
   flex: none;
   height: var(--topbar-h);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  .flex-row(6px);
   padding: 0 10px;
   -webkit-app-region: drag;
 }
@@ -376,9 +327,7 @@ html.platform-darwin .sidebar-top {
 }
 
 .sidebar-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  .inline-center();
   width: 24px;
   height: 24px;
   border-radius: var(--radius-md);
@@ -390,9 +339,7 @@ html.platform-darwin .sidebar-top {
 }
 
 .sidebar-collapse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  .inline-center();
   width: 24px;
   height: 24px;
   padding: 0;
@@ -411,17 +358,13 @@ html.platform-darwin .sidebar-top {
 .sidebar-body {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  .flex-col(8px);
   padding: 8px 10px;
 }
 
 /* 图标导航行(新建任务/搜索):图标 + 文案 + 右侧 ⌘ 快捷键提示 */
 .side-nav {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  .flex-row(10px);
   width: 100%;
   height: 34px;
   padding: 0 10px;
@@ -447,8 +390,7 @@ html.platform-darwin .sidebar-top {
 }
 
 .side-nav-label {
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
 }
 
 .side-kbd {
@@ -480,15 +422,12 @@ html.platform-darwin .sidebar-top {
 /* 「项目」标题行:文本左 + 图标按钮右(添加项目) */
 .sidebar-section-head {
   flex: none;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  .flex-row(4px);
   padding: 6px 4px 0 8px;
 }
 
 .sidebar-section-title {
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
   font-size: 11px;
   letter-spacing: 0.8px;
   color: var(--color-foreground-subtlest);
@@ -497,9 +436,7 @@ html.platform-darwin .sidebar-top {
 
 /* 小图标钮(标题行/分组行共用):ghost,hover 抬 surface */
 .section-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  .inline-center();
   width: 22px;
   height: 22px;
   padding: 0;
@@ -521,23 +458,17 @@ html.platform-darwin .sidebar-top {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-col(1px);
 }
 
 /* 项目分组:文件夹标题行 + 缩进任务行(ZCode 形态) */
 .session-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-col(1px);
   margin-bottom: 6px;
 }
 
 .session-group-title {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  .flex-row(2px);
   padding-right: 2px;
   border-radius: var(--radius-lg);
   color: var(--color-foreground-subtle);
@@ -553,11 +484,8 @@ html.platform-darwin .sidebar-top {
 
 /* 文件夹行主体(点击折叠/展开) */
 .session-group-toggle {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-fill();
+  .flex-row(8px);
   padding: 6px 4px 6px 8px;
   border: none;
   background: none;
@@ -567,9 +495,7 @@ html.platform-darwin .sidebar-top {
   text-align: left;
 }
 .session-group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .session-group-caret {
   font-size: 9px;
@@ -580,9 +506,7 @@ html.platform-darwin .sidebar-top {
  * 出现/消失不改变布局,标题不会在悬停时跳动 */
 .session-group-actions {
   visibility: hidden;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+  .inline-row(2px);
   flex: none;
 }
 .session-group-title:hover .session-group-actions {
@@ -598,19 +522,12 @@ html.platform-darwin .sidebar-top {
 
 /* 任务行:标题左、相对时间右;仅运行中的会话带脉冲点 */
 .session-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
+  .flex-row(8px);
+  .action-reset();
   border-radius: var(--radius-lg);
   padding: 6px 8px 6px 28px;
   color: var(--color-foreground);
-  font: inherit;
   font-size: 13px;
-  cursor: pointer;
 }
 .session-row:hover {
   background: var(--color-surface-hover);
@@ -639,11 +556,8 @@ html.platform-darwin .sidebar-top {
 }
 
 .session-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .flex-fill();
+  .ellipsis();
 }
 
 .session-when {
@@ -669,9 +583,7 @@ html.platform-darwin .sidebar-top {
 
 
 .settings-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   width: 100%;
   height: 32px;
   padding: 0 10px;
@@ -707,8 +619,7 @@ html.platform-darwin .sidebar-top {
 
 .app {
   position: relative;
-  flex: 1;
-  min-width: 0;
+  .flex-fill();
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -723,9 +634,7 @@ html.platform-darwin .sidebar-top {
   left: 0;
   height: var(--topbar-h);
   z-index: 30;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  .flex-row(6px);
   padding: 0 12px;
   -webkit-app-region: drag;
 }
@@ -740,9 +649,7 @@ html.platform-darwin .app-overlay {
 
 .chat-topbar {
   flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   height: 48px;
   padding: 0 16px;
   border-bottom: 1px solid var(--color-border);
@@ -755,17 +662,13 @@ html.platform-darwin .app-overlay {
 .topbar-title {
   font-weight: 600;
   font-size: 13.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  .ellipsis();
   flex: none;
   max-width: 45%;
 }
 
 .topbar-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  .inline-row(6px);
   height: 26px;
   padding: 0 12px;
   border-radius: 9999px;

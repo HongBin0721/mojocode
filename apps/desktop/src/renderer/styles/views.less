@@ -1,4 +1,5 @@
 /* ---- 独立视图:首页(问候 + 项目卡 + 进行中)与归档(历史任务表格) ---- */
+@import (reference) './_mixins.less';
 
 .home-view,
 .archive-view {
@@ -37,9 +38,7 @@
   margin-bottom: 30px;
 }
 .repo-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  .flex-col(6px);
   padding: 15px;
   border: 0;
   border-radius: var(--radius-xl);
@@ -53,9 +52,7 @@
   background: var(--color-card-hover);
 }
 .repo-card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   font-family: var(--font-mono);
   font-size: var(--fs-13);
 }
@@ -65,23 +62,17 @@
 .repo-card-path {
   font-size: var(--fs-115);
   color: var(--color-foreground-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .repo-card-state {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  .flex-row(7px);
   margin-top: 6px;
   font-size: var(--fs-115);
   color: var(--color-foreground-soft);
 }
 
 .home-tasks {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  .flex-col(4px);
   margin-bottom: 20px;
 }
 .home-task-row {
@@ -101,21 +92,15 @@
   background: var(--color-popover);
 }
 .home-task-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   font-size: var(--fs-13);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .home-task-project {
   font-family: var(--font-mono);
   font-size: var(--fs-115);
   color: var(--color-foreground-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .ellipsis();
 }
 .home-task-state {
   font-size: var(--fs-115);

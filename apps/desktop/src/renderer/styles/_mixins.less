@@ -1,0 +1,91 @@
+/*
+ * 公共 mixin:机械声明组的声明级复用(调用处原地展开,本文件不产出规则)。
+ * 各样式文件以 @import (reference) './_mixins.less' 引入;参数值直接传
+ * var(--*) token 或字面量,不做算术。收录纪律:同一声明组重复 ≥3 处、值域
+ * 稳定才进这里;调用处必须与被替换的源声明逐条全等,缺一条就保持字面,
+ * 不做「mixin + 补覆盖」拼装。
+ */
+
+/* 单行截断三连 */
+.ellipsis() {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 弹性占满主轴并允许子项收缩(flex:1 + min-width:0 成对出现) */
+.flex-fill() {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 横排:flex + 垂直居中 + 间距(gap 必传,避免魔法默认值) */
+.flex-row(@gap) {
+  display: flex;
+  align-items: center;
+  gap: @gap;
+}
+
+/* 纵排:flex column + 间距 */
+.flex-col(@gap) {
+  display: flex;
+  flex-direction: column;
+  gap: @gap;
+}
+
+/* 行内横排:inline-flex + 垂直居中 + 间距(gap 必传) */
+.inline-row(@gap) {
+  display: inline-flex;
+  align-items: center;
+  gap: @gap;
+}
+
+/* 行内居中(图标钮/圆环等 inline-flex);传 @gap 才输出 gap,缺省不加声明 */
+.inline-center(@gap: none) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  & when not (@gap = none) {
+    gap: @gap;
+  }
+}
+
+/* 块级居中(空态/拖放覆盖);传 @gap 才输出 gap,缺省不加声明 */
+.center-row(@gap: none) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  & when not (@gap = none) {
+    gap: @gap;
+  }
+}
+
+/* 整行可点按钮重置(六条全等才可用:width/text-align/background/border/font/cursor) */
+.action-reset() {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* 浮层菜单卡骨架;position/z-index 留给调用方——z-index 是跨文件契约,必须显式可见 */
+.menu-card(
+  @radius: var(--radius-xl);
+  @pad: 6px;
+  @border: 1px solid var(--color-border-strong);
+  @shadow: 0 16px 48px rgba(0, 0, 0, 0.55)
+) {
+  background: var(--color-menu);
+  border: @border;
+  border-radius: @radius;
+  box-shadow: @shadow;
+  padding: @pad;
+}
+
+/* 禁用态 */
+.disabled(@opacity: 0.45) {
+  opacity: @opacity;
+  cursor: default;
+}

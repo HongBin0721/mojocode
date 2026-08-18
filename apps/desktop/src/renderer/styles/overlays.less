@@ -1,4 +1,5 @@
 /* ---- 审批卡:rounded-2xl 浮层卡 + 编号选项列表(ZCode 形态)---- */
+@import (reference) './_mixins.less';
 
 .permission {
   border: 1px solid var(--color-border);
@@ -14,9 +15,7 @@
 }
 
 .permission-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  .flex-row(8px);
   margin-bottom: 8px;
 }
 
@@ -63,9 +62,7 @@
 
 /* 编号选项:数字键直选,方向键/Tab 移动高亮,回车确认 */
 .permission-options {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  .flex-col(2px);
   margin-top: 10px;
 }
 
@@ -73,15 +70,10 @@
   display: flex;
   gap: 10px;
   align-items: baseline;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
+  .action-reset();
   border-radius: var(--radius-xl);
   padding: 8px 10px;
   color: var(--color-foreground);
-  font: inherit;
-  cursor: pointer;
 }
 .permission-option:hover {
   background: var(--color-surface-hover);
@@ -101,9 +93,7 @@
 
 .permission-option-main {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  .flex-col(1px);
 }
 .permission-option-label {
   font-weight: 500;
