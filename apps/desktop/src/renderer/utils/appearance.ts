@@ -1,8 +1,8 @@
 /**
  * 外观偏好(设置页·外观节):界面字号。持久化走 localStorage(本机布局
  * 偏好,与侧栏宽度同一层级),应用方式是改 `:root` 的 `--ui-font-size`
- * token——styles.css 里 body 的 font-size 吃它,组件内的相对字号跟着缩放。
- * 主题目前只有深色(styles.css 硬编码),设置页里以禁用项如实呈现。
+ * token——base.less 里 body 的 font-size 吃它,组件内的相对字号跟着缩放。
+ * 主题目前只有深色(tokens.less 硬编码),设置页里以禁用项如实呈现。
  */
 
 import { readLocal, writeLocal } from './host.js';
@@ -42,7 +42,7 @@ export function initUiFontSize(): void {
 
 /**
  * 代码字号档(设置页·外观的三档:紧凑 11 / 标准 12 / 宽松 14)。应用方式是
- * 给 `:root` 打 `data-font-scale`,tokens.css 里按属性选择器覆盖 --fs-code
+ * 给 `:root` 打 `data-font-scale`,tokens.less 里按属性选择器覆盖 --fs-code
  * ——diff / 终端 / 工具输出等等宽区域统一跟着走,界面字号(--ui-font-size)
  * 与它正交,各管各的。
  */

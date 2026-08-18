@@ -1,7 +1,7 @@
 /**
  * 近似语法高亮分词器(移植自设计稿的 tokenize()):零依赖单正则,按扩展名
  * 切关键字集(Go / TS-JS / Python 三套近似)。输出 token 的 kind 对应
- * tokens.css 的 --tok-* 色;含 CJK 的整行按弱色处理由调用方判断
+ * tokens.less 的 --tok-* 色;含 CJK 的整行按弱色处理由调用方判断
  * (hasCjk)。准确率换体积:diff/工具 detail 的辅助着色足够,不引 highlight.js。
  */
 

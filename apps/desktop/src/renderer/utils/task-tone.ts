@@ -14,7 +14,7 @@ export function taskTone(task: TaskSummary, changedFileCount?: number): TaskTone
   return 'done';
 }
 
-/** 状态点的 CSS 变量名(tokens.css 的 --tone-*)。 */
+/** 状态点的 CSS 变量名(tokens.less 的 --tone-*)。 */
 export function toneColorVar(tone: TaskTone): string {
   return `var(--tone-${tone})`;
 }
