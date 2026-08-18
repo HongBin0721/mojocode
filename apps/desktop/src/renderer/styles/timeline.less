@@ -39,11 +39,10 @@
   min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-/* 流式文本的进入动画(ZCode:0.9s 自定义缓动的淡入) */
-.active-area .entry-body {
-  animation: stream-fade 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 流式文本的进入动画(ZCode:0.9s 自定义缓动的淡入) */
+  .active-area & {
+    animation: stream-fade 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
 
 @keyframes stream-fade {
@@ -178,9 +177,9 @@
 .markdown a {
   color: var(--color-foreground-dim); /* 设计稿:链接默认弱色 */
   text-underline-offset: 3px;
-}
-.markdown a:hover {
-  color: var(--color-accent-soft); /* hover 才亮成 accent-300 */
+  &:hover {
+    color: var(--color-accent-soft); /* hover 才亮成 accent-300 */
+  }
 }
 .markdown blockquote {
   margin: 0.6em 0;
@@ -241,10 +240,10 @@
   color: var(--color-foreground-subtlest);
   font: inherit;
   font-size: 12.5px;
-}
-.reasoning-toggle:hover {
-  background: none;
-  color: var(--color-foreground-subtle);
+  &:hover {
+    background: none;
+    color: var(--color-foreground-subtle);
+  }
 }
 
 .reasoning-arrow {
@@ -292,10 +291,10 @@
   padding: 9px 14px;
   color: var(--color-foreground);
   font-size: 13px;
-}
-.tool-row:hover {
-  background: var(--color-surface-hover);
-  border-color: transparent;
+  &:hover {
+    background: var(--color-surface-hover);
+    border-color: transparent;
+  }
 }
 
 .tool-name {
@@ -328,9 +327,9 @@
 
 .tool-active {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
-}
-.tool-active .tool-row {
-  cursor: default;
+  .tool-row {
+    cursor: default;
+  }
 }
 
 .spinner {
@@ -410,15 +409,15 @@
   font-size: 9px;
   line-height: 1;
   color: transparent;
-}
-.todo-completed .todo-ring {
-  border-color: var(--color-success);
-  color: var(--color-success);
-}
-.todo-in_progress .todo-ring {
-  border-color: var(--color-warning);
-  color: var(--color-warning);
-  font-size: 6px;
+  .todo-completed & {
+    border-color: var(--color-success);
+    color: var(--color-success);
+  }
+  .todo-in_progress & {
+    border-color: var(--color-warning);
+    color: var(--color-warning);
+    font-size: 6px;
+  }
 }
 .todo-done {
   color: var(--color-foreground-subtlest);
@@ -459,9 +458,9 @@
   background: none;
   color: var(--color-foreground-subtlest);
   font-size: 13px;
-}
-.todo-float-toggle:hover {
-  color: var(--color-foreground);
+  &:hover {
+    color: var(--color-foreground);
+  }
 }
 .todo-float .todo-list {
   margin: 8px 0 0;

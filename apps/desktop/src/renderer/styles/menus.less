@@ -10,10 +10,10 @@
   border: none;
   background: none;
   font: inherit;
-}
-.menu-trigger:hover {
-  background: none;
-  border-color: transparent;
+  &:hover {
+    background: none;
+    border-color: transparent;
+  }
 }
 
 /* block 修饰:触发器铺满容器宽(侧栏底部的整宽设置行) */
@@ -63,19 +63,19 @@
   padding: 7px 8px;
   color: var(--color-foreground);
   font-size: 13px;
-}
-.menu-item:hover {
-  background: var(--color-menu-hover);
-  border-color: transparent;
+  &:hover {
+    background: var(--color-menu-hover);
+    border-color: transparent;
+  }
 }
 .menu-item-current {
   background: var(--color-surface);
-}
-.menu-item-current::after {
-  content: '✓';
-  margin-left: auto;
-  /* ZCode 的当前项勾是前景白,不是绿色(与权限菜单的 menu-item-check 一致)。 */
-  color: var(--color-foreground);
+  &::after {
+    content: '✓';
+    margin-left: auto;
+    /* ZCode 的当前项勾是前景白,不是绿色(与权限菜单的 menu-item-check 一致)。 */
+    color: var(--color-foreground);
+  }
 }
 .menu-item-danger .menu-item-label {
   color: var(--color-warning);
@@ -108,9 +108,9 @@
   display: inline-flex;
   margin-top: 2px;
   color: var(--color-foreground-subtle);
-}
-.menu-item-danger .menu-item-icon {
-  color: var(--color-warning);
+  .menu-item-danger & {
+    color: var(--color-warning);
+  }
 }
 .menu-item-body {
   .flex-fill();
@@ -197,10 +197,10 @@
   padding: 6px 8px;
   color: var(--color-foreground);
   font-size: 13px;
-}
-.slash-item:hover {
-  background: none;
-  border-color: transparent;
+  &:hover {
+    background: none;
+    border-color: transparent;
+  }
 }
 .slash-cursor {
   background: var(--color-menu-hover);
@@ -236,10 +236,10 @@ button:not([class]) {
   font: inherit;
   font-size: 13px;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-button:not([class]):not(:disabled):hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-hover);
+  &:not(:disabled):hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-hover);
+  }
 }
 button:disabled {
   .disabled();
@@ -251,10 +251,10 @@ button:disabled {
   background: #fafafa;
   color: #0a0a0a;
   font-weight: 500;
-}
-.btn-primary:not(:disabled):hover {
-  background: #e5e5e5;
-  border-color: #e5e5e5;
+  &:not(:disabled):hover {
+    background: #e5e5e5;
+    border-color: #e5e5e5;
+  }
 }
 
 /* 品牌按钮:sky-500 底白字(评审/方案确认的强调态) */
@@ -263,19 +263,19 @@ button:disabled {
   background: var(--color-brand);
   color: #ffffff;
   font-weight: 500;
-}
-.btn-brand:not(:disabled):hover {
-  background: var(--color-brand-hover);
+  &:not(:disabled):hover {
+    background: var(--color-brand-hover);
+  }
 }
 
 .btn-danger {
   border-color: rgba(239, 68, 68, 0.55);
   background: transparent;
   color: var(--color-destructive);
-}
-.btn-danger:not(:disabled):hover {
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.55);
+  &:not(:disabled):hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.55);
+  }
 }
 
 /* 菜单/浮层触发器等元素内部的具体按钮重置为由各自类定义;
@@ -320,10 +320,10 @@ button:disabled {
   font: inherit;
   font-size: 12.5px;
   text-align: left;
-}
-.settings-back:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-foreground);
+  &:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-foreground);
+  }
 }
 
 .settings-nav-group {
@@ -346,9 +346,9 @@ button:disabled {
   font-size: 13px;
   font-weight: 500;
   text-align: left;
-}
-.settings-nav:hover {
-  background: var(--color-surface-hover);
+  &:hover {
+    background: var(--color-surface-hover);
+  }
 }
 .settings-nav-active,
 .settings-nav-active:hover {
@@ -405,9 +405,9 @@ button:disabled {
 .setting-row {
   .flex-row(16px);
   padding: 14px 0;
-}
-.setting-row + .setting-row {
-  border-top: 1px solid var(--color-border);
+  & + & {
+    border-top: 1px solid var(--color-border);
+  }
 }
 .setting-row-text {
   .flex-fill();
@@ -460,14 +460,14 @@ button:disabled {
   font: inherit;
   font-size: 12.5px;
   min-width: 0;
-}
-.select-trigger:hover:not(:disabled),
-.select-trigger:focus-visible {
-  outline: none;
-  border-color: var(--color-border-hover);
-}
-.select-trigger:disabled {
-  opacity: 0.55;
+  &:hover:not(:disabled),
+  &:focus-visible {
+    outline: none;
+    border-color: var(--color-border-hover);
+  }
+  &:disabled {
+    opacity: 0.55;
+  }
 }
 .select-value {
   .flex-fill();
@@ -503,11 +503,11 @@ button:disabled {
   font-size: 12.5px;
   text-align: left;
   white-space: nowrap;
-}
-.select-option:hover,
-.select-option:focus-visible {
-  outline: none;
-  background: var(--color-menu-hover);
+  &:hover,
+  &:focus-visible {
+    outline: none;
+    background: var(--color-menu-hover);
+  }
 }
 .select-option-label {
   flex: 1;
@@ -539,21 +539,21 @@ button:disabled {
   font: inherit;
   font-size: 12.5px;
   flex: none;
-}
-.settings-btn:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-}
-.settings-btn:disabled {
-  opacity: 0.45;
+  &:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+  }
+  &:disabled {
+    opacity: 0.45;
+  }
 }
 .settings-btn-primary {
   background: var(--color-primary);
   border-color: transparent;
   color: var(--color-primary-foreground);
   font-weight: 600;
-}
-.settings-btn-primary:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+  }
 }
 .settings-btn-danger {
   color: var(--color-destructive);
@@ -609,12 +609,12 @@ button:disabled {
   font-size: var(--fs-12);
   text-align: left;
   cursor: pointer;
-}
-.ctx-item:not(:disabled):hover {
-  background: var(--color-card-selected);
-}
-.ctx-item:disabled {
-  .disabled();
+  &:not(:disabled):hover {
+    background: var(--color-card-selected);
+  }
+  &:disabled {
+    .disabled();
+  }
 }
 .ctx-item-danger {
   color: var(--color-destructive);
@@ -622,9 +622,9 @@ button:disabled {
 .ctx-icon {
   display: inline-flex;
   color: var(--color-foreground-subtle);
-}
-.ctx-item-danger .ctx-icon {
-  color: var(--color-destructive);
+  .ctx-item-danger & {
+    color: var(--color-destructive);
+  }
 }
 
 /* 重命名对话框 */
@@ -714,9 +714,9 @@ button:disabled {
   color: var(--color-foreground-mid);
   font-size: var(--fs-12);
   cursor: pointer;
-}
-.import-choose:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .import-hint {
   .flex-row(7px);

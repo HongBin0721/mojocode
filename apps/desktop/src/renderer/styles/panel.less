@@ -9,12 +9,12 @@
   font-size: 12px;
   margin-bottom: 6px;
   color: var(--color-foreground-subtle);
-}
-.diff-stat .diff-add {
-  color: var(--color-success);
-}
-.diff-stat .diff-del {
-  color: var(--color-destructive);
+  .diff-add {
+    color: var(--color-success);
+  }
+  .diff-del {
+    color: var(--color-destructive);
+  }
 }
 
 .diff-body {
@@ -105,10 +105,10 @@
   background: none;
   color: var(--color-foreground-subtlest);
   font-size: 14px;
-}
-.review-icon:hover {
-  background: none;
-  color: var(--color-foreground);
+  &:hover {
+    background: none;
+    color: var(--color-foreground);
+  }
 }
 
 .review-body {
@@ -134,10 +134,10 @@
   padding: 6px 10px;
   color: var(--color-foreground);
   font-size: 12.5px;
-}
-.review-file-row:hover {
-  background: var(--color-surface-hover);
-  border-color: transparent;
+  &:hover {
+    background: var(--color-surface-hover);
+    border-color: transparent;
+  }
 }
 
 .review-change {
@@ -208,11 +208,11 @@
   color: var(--color-foreground);
   font: inherit;
   font-size: 12px;
-}
-.line-comment input:focus {
-  outline: none;
-  border-color: var(--color-border-hover);
-  background: var(--color-input-focused);
+  &:focus {
+    outline: none;
+    border-color: var(--color-border-hover);
+    background: var(--color-input-focused);
+  }
 }
 .line-comment button {
   padding: 4px 10px;
@@ -259,10 +259,9 @@
   flex: none;
   font-size: 11px;
   opacity: 0.7;
-}
-
-.diff-clickable:hover .diff-comment-hint {
-  visibility: visible;
+  .diff-clickable:hover & {
+    visibility: visible;
+  }
 }
 
 .diff-clickable:hover {
@@ -323,9 +322,9 @@
   color: var(--color-foreground-dim);
   font-size: var(--fs-12);
   cursor: pointer;
-}
-.panel-tab:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .panel-tab-active,
 .panel-tab-active:hover {
@@ -370,9 +369,9 @@
   font-size: var(--fs-115);
   text-align: left;
   cursor: pointer;
-}
-.diff-file-row:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .diff-file-active,
 .diff-file-active:hover {
@@ -412,13 +411,13 @@
   color: var(--color-primary-foreground);
   font-size: var(--fs-125);
   cursor: pointer;
-}
-.approval-approve:not(:disabled):hover {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-border-hover);
-}
-.approval-approve:disabled {
-  .disabled(0.5);
+  &:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-border-hover);
+  }
+  &:disabled {
+    .disabled(0.5);
+  }
 }
 .approval-request {
   height: 32px;
@@ -429,9 +428,9 @@
   color: var(--color-foreground-mid);
   font-size: var(--fs-125);
   cursor: pointer;
-}
-.approval-request:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .approval-done {
   .inline-row(7px);
@@ -512,9 +511,9 @@
   font-size: var(--fs-12);
   text-align: left;
   cursor: pointer;
-}
-.tree-row:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .tree-row svg {
   flex: none;
@@ -633,7 +632,7 @@
   color: var(--color-destructive);
   font-size: var(--fs-125);
   cursor: pointer;
-}
-.btn-danger:hover {
-  background: rgba(178, 74, 84, 0.15);
+  &:hover {
+    background: rgba(178, 74, 84, 0.15);
+  }
 }

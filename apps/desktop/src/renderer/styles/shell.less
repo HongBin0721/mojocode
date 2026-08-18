@@ -49,13 +49,13 @@
   color: var(--color-foreground-subtle);
   font-size: 14px;
   cursor: pointer;
-}
-.titlebar-btn:not(:disabled):hover {
-  background: var(--color-card-selected);
-  color: var(--color-foreground);
-}
-.titlebar-btn:disabled {
-  .disabled(0.4);
+  &:not(:disabled):hover {
+    background: var(--color-card-selected);
+    color: var(--color-foreground);
+  }
+  &:disabled {
+    .disabled(0.4);
+  }
 }
 
 /* 分支切换器触发行:project / branch ▾(mono) */
@@ -65,9 +65,9 @@
   border-radius: var(--radius-sm);
   font-size: var(--fs-12);
   color: var(--color-foreground-dim);
-}
-.menu-trigger:hover .branch-trigger {
-  background: var(--color-popover);
+  .menu-trigger:hover & {
+    background: var(--color-popover);
+  }
 }
 .branch-trigger-project,
 .branch-trigger-branch {
@@ -121,9 +121,9 @@
   box-shadow: 0 0 0 1px rgba(50, 53, 66, 0.2);
   color: var(--color-foreground);
   text-align: left;
-}
-.menu-trigger-block:hover .project-trigger {
-  background: var(--color-card-selected);
+  .menu-trigger-block:hover & {
+    background: var(--color-card-selected);
+  }
 }
 .project-trigger-body {
   .flex-fill();
@@ -179,13 +179,13 @@
   color: var(--color-primary-foreground);
   font-size: var(--fs-13);
   cursor: pointer;
-}
-.new-task-btn:not(:disabled):hover {
-  background: var(--color-primary-hover);
-  border-color: var(--color-primary-border-hover);
-}
-.new-task-btn:disabled {
-  .disabled();
+  &:not(:disabled):hover {
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-border-hover);
+  }
+  &:disabled {
+    .disabled();
+  }
 }
 
 .nav-list {
@@ -206,9 +206,9 @@
   font-size: var(--fs-125);
   text-align: left;
   cursor: pointer;
-}
-.nav-row:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .nav-row-active,
 .nav-row-active:hover {
@@ -218,9 +218,9 @@
 .nav-row-icon {
   display: inline-flex;
   color: var(--color-foreground-subtle);
-}
-.nav-row-active .nav-row-icon {
-  color: var(--color-foreground-mid);
+  .nav-row-active & {
+    color: var(--color-foreground-mid);
+  }
 }
 .nav-row-label {
   flex: 1;
@@ -246,9 +246,9 @@
   background: transparent;
   text-align: left;
   cursor: pointer;
-}
-.task-row:hover {
-  background: var(--color-popover);
+  &:hover {
+    background: var(--color-popover);
+  }
 }
 .task-row-active,
 .task-row-active:hover {
@@ -270,9 +270,9 @@
   line-height: 1.35;
   color: var(--color-foreground-soft);
   .ellipsis();
-}
-.task-row-active .task-row-title {
-  color: var(--color-foreground);
+  .task-row-active & {
+    color: var(--color-foreground);
+  }
 }
 .task-badge-permission {
   flex: none;
@@ -321,9 +321,9 @@
   .flex-row(6px);
   padding: 0 10px;
   -webkit-app-region: drag;
-}
-html.platform-darwin .sidebar-top {
-  padding-left: 96px;
+  html.platform-darwin & {
+    padding-left: 96px;
+  }
 }
 
 .sidebar-logo {
@@ -349,10 +349,10 @@ html.platform-darwin .sidebar-top {
   color: var(--color-foreground-subtle);
   font-size: 13px;
   -webkit-app-region: no-drag;
-}
-.sidebar-collapse:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-foreground);
+  &:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-foreground);
+  }
 }
 
 .sidebar-body {
@@ -376,12 +376,12 @@ html.platform-darwin .sidebar-top {
   font-size: 13px;
   font-weight: 500;
   text-align: left;
-}
-.side-nav:not(:disabled):hover {
-  background: var(--color-surface-hover);
-}
-.side-nav:disabled {
-  opacity: 0.45;
+  &:not(:disabled):hover {
+    background: var(--color-surface-hover);
+  }
+  &:disabled {
+    opacity: 0.45;
+  }
 }
 
 .side-nav-icon {
@@ -410,13 +410,13 @@ html.platform-darwin .sidebar-top {
   color: var(--color-foreground);
   font: inherit;
   font-size: 12.5px;
-}
-.task-search:focus {
-  outline: none;
-  border-color: var(--color-border-hover);
-}
-.task-search::placeholder {
-  color: var(--color-foreground-subtlest);
+  &:focus {
+    outline: none;
+    border-color: var(--color-border-hover);
+  }
+  &::placeholder {
+    color: var(--color-foreground-subtlest);
+  }
 }
 
 /* 「项目」标题行:文本左 + 图标按钮右(添加项目) */
@@ -445,13 +445,13 @@ html.platform-darwin .sidebar-top {
   background: transparent;
   color: var(--color-foreground-subtlest);
   font-size: 11px;
-}
-.section-icon:not(:disabled):hover {
-  background: var(--color-surface-hover);
-  color: var(--color-foreground);
-}
-.section-icon:disabled {
-  opacity: 0.4;
+  &:not(:disabled):hover {
+    background: var(--color-surface-hover);
+    color: var(--color-foreground);
+  }
+  &:disabled {
+    opacity: 0.4;
+  }
 }
 
 .session-list {
@@ -474,9 +474,9 @@ html.platform-darwin .sidebar-top {
   color: var(--color-foreground-subtle);
   font-size: 13px;
   user-select: none;
-}
-.session-group-title:hover {
-  background: var(--color-surface-hover);
+  &:hover {
+    background: var(--color-surface-hover);
+  }
 }
 .session-group-current {
   color: var(--color-foreground);
@@ -508,9 +508,9 @@ html.platform-darwin .sidebar-top {
   visibility: hidden;
   .inline-row(2px);
   flex: none;
-}
-.session-group-title:hover .session-group-actions {
-  visibility: visible;
+  .session-group-title:hover & {
+    visibility: visible;
+  }
 }
 
 .session-group-empty {
@@ -528,10 +528,10 @@ html.platform-darwin .sidebar-top {
   padding: 6px 8px 6px 28px;
   color: var(--color-foreground);
   font-size: 13px;
-}
-.session-row:hover {
-  background: var(--color-surface-hover);
-  border-color: transparent;
+  &:hover {
+    background: var(--color-surface-hover);
+    border-color: transparent;
+  }
 }
 .session-active,
 .session-active:hover {
@@ -594,10 +594,10 @@ html.platform-darwin .sidebar-top {
   font: inherit;
   font-size: 13px;
   text-align: left;
-}
-.settings-row:hover {
-  background: var(--color-surface-hover);
-  border-color: transparent;
+  &:hover {
+    background: var(--color-surface-hover);
+    border-color: transparent;
+  }
 }
 
 /* 拖宽手柄:右缘 6px,双击复位 264 */
@@ -637,9 +637,9 @@ html.platform-darwin .sidebar-top {
   .flex-row(6px);
   padding: 0 12px;
   -webkit-app-region: drag;
-}
-html.platform-darwin .app-overlay {
-  padding-left: 96px;
+  html.platform-darwin & {
+    padding-left: 96px;
+  }
 }
 .app-overlay > * {
   -webkit-app-region: no-drag;
