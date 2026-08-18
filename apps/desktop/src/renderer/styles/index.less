@@ -1,0 +1,19 @@
+/*
+ * 样式入口:按原 styles.css 的区块顺序 @import——Less 编译期内联,
+ * 顺序即级联优先级,调整顺序前先确认不改变既有覆盖关系。
+ * Inter 是 nocturne DS 的正文字体:在线时加载,离线回落 --font-sans 的
+ * system-ui(url @import 必须排最前;(css) 钉住「不内联远程 css」)。
+ * 构建零配置:electron-vite 默认管线即可编译 .less,勿加 preprocessorOptions——
+ * math 默认 parens-division,calc() 与斜杠简写不会被求值,样式里不要写算术。
+ */
+@import (css) url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import './tokens.less';
+@import './base.less';
+@import './shell.less';
+@import './timeline.less';
+@import './overlays.less';
+@import './panel.less';
+@import './views.less';
+@import './composer.less';
+@import './menus.less';
+@import './settings.less';

@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { initCodeFontScale, initUiFontSize } from './utils/appearance.js';
-import './styles/index.css';
+import './styles/index.less';
 
 // 恢复外观偏好(设置页·界面字号)——在首帧渲染前应用,避免字号跳动。
 initUiFontSize();
