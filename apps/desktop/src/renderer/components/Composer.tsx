@@ -1,7 +1,8 @@
 /**
- * 输入区(ZCode 式输入块):rounded-2xl 扁平外框(textarea 透明内嵌);
- * 底部工具栏两组——左:+ 附件、盾牌权限档 chip(完全访问染橙);右:模型、
- * 思考强度、中性 primary 发送/停止钮(ZCode 工具栏实际布局)。
+ * 输入区(设计稿胶囊工具条):rounded-2xl 扁平外框(textarea 透明内嵌);
+ * 底部工具栏两组——左:附加文件(paperclip)、权限档 chip(shield-check,
+ * 完全访问染警示色);右:上下文环、模型(cpu)、思考强度(brain)、发送钮
+ * (arrow-up/停止 ■)。选择器 chips 右侧一律 caret-up-down(设计稿图标系)。
  *
  * 键盘:Enter 提交 / Shift+Enter 换行;`Shift+Tab` 循环权限档;`/` 开头弹
  * 命令菜单;粘贴与拖入图片 → 缩略图附件 chips(拖入非图片忽略)。
@@ -12,6 +13,7 @@ import type { ImageAttachment } from '@core/attachments';
 import { presetById } from '@core/schema';
 import { useModelCapabilities } from '../utils/use-model-capabilities.js';
 import { useDesktopStore } from '../state/desktopStore.js';
+import { newTask } from '../state/actions.js';
 import { t, useLocale } from '../i18n/index.js';
 import {
   builtinCommands,
@@ -27,8 +29,16 @@ import { MenuPopover } from './Menu.js';
 import { ModelMenuList } from './ModelMenu.js';
 import { PermissionMenuList } from './PermissionMenu.js';
 import { ReasoningMenuList } from './ReasoningMenu.js';
-import { EffortIcon, PlusIcon, ShieldIcon } from './icons.js';
+import {
+  ArrowUpIcon,
+  BrainIcon,
+  CaretUpDownIcon,
+  CpuIcon,
+  PaperclipIcon,
+  ShieldCheckIcon,
+} from './icons.js';
 import { localizeEffort, localizeMode } from '../utils/mode-label.js';
+import { formatContextWindow, formatTokens, percent } from '../utils/format.js';
 
 /** 剪贴板/拖入的图片文件 → ImageAttachment(base64)。 */
 async function toAttachment(file: File, index: number): Promise<ImageAttachment> {
@@ -44,6 +54,51 @@ async function toAttachment(file: File, index: number): Promise<ImageAttachment>
 
 const rpc = (request: Parameters<typeof window.mojocode.rpc>[0]) =>
   void window.mojocode.rpc(request).catch((error: unknown) => console.error('RPC 失败', error));
+
+/**
+ * 上下文环(设计稿):28px 悬停区里一个 15px conic-gradient 圆环(已用扇区
+ * 亮色 #cfd3e5、剩余 #3f424d,9px 内孔挖回输入框底色),悬停出三行 tooltip。
+ * 数据:快照的权威 contextUsage(provider 上报/换史后估算);首轮之前回退
+ * 当前模型的窗口标称值(0 已用)。
+ */
+function ContextRing() {
+  useLocale();
+  const reportedUsage = useDesktopStore((s) => s.snapshot?.agent.contextUsage);
+  const providerWindow = useDesktopStore((s) => s.snapshot?.provider.contextWindow);
+  const [tipOpen, setTipOpen] = useState(false);
+  const usage = reportedUsage ?? (providerWindow ? { used: 0, window: providerWindow } : undefined);
+  if (!usage || usage.window <= 0) return null;
+
+  const pct = percent(usage.used, usage.window);
+  return (
+    <div
+      className="ctx-ring-wrap"
+      onMouseEnter={() => setTipOpen(true)}
+      onMouseLeave={() => setTipOpen(false)}
+    >
+      <div
+        className="ctx-ring"
+        style={{ background: `conic-gradient(#cfd3e5 0 ${pct}%, #3f424d ${pct}% 100%)` }}
+      >
+        <div className="ctx-ring-hole" />
+      </div>
+      {tipOpen ? (
+        <div className="ctx-tip">
+          <div className="ctx-tip-title">{t('composer.ctxTitle')}</div>
+          <div className="ctx-tip-line">
+            {t('composer.ctxUsedPct', { pct: String(pct), left: String(100 - pct) })}
+          </div>
+          <div className="ctx-tip-sub">
+            {t('composer.ctxTokens', {
+              used: formatTokens(usage.used),
+              total: formatContextWindow(usage.window),
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /** 模式值变化时品牌色环闪 2s(原顶栏徽章闪动的迁入)。 */
 function useFlash(value: string | undefined): boolean {
@@ -68,7 +123,16 @@ export function Composer() {
   const snapshot = useDesktopStore((s) => s.snapshot);
   const requestModelsMenu = useDesktopStore((s) => s.requestModelsMenu);
   const modelMenuRequest = useDesktopStore((s) => s.modelMenuRequest);
+  const composerPrefill = useDesktopStore((s) => s.composerPrefill);
   const [text, setText] = useState('');
+
+  // 外部预填(评审面板「请求修改」等):nonce 变化即取 text 填入并聚焦。
+  useEffect(() => {
+    if (!composerPrefill) return;
+    setText(composerPrefill.text);
+    textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- nonce 即意图。
+  }, [composerPrefill?.nonce]);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [cursor, setCursor] = useState(0);
   const [suppressed, setSuppressed] = useState(false);
@@ -125,7 +189,7 @@ export function Composer() {
         requestModelsMenu();
         return;
       case 'new':
-        rpc({ kind: 'newSession' });
+        newTask();
         return;
       case 'compact':
         rpc({ kind: 'compact' });
@@ -302,11 +366,12 @@ export function Composer() {
           <div className="composer-tools">
             <button
               type="button"
-              className="composer-tool composer-plus"
+              className="composer-tool"
               title={t('composer.attach')}
               onClick={() => fileRef.current?.click()}
             >
-              <PlusIcon size={16} />
+              <PaperclipIcon size={13} />
+              {t('composer.attach')}
             </button>
             <input
               ref={fileRef}
@@ -327,9 +392,11 @@ export function Composer() {
                       flash ? 'composer-tool-flash' : ''
                     }`}
                   >
-                    <ShieldIcon />
+                    <ShieldCheckIcon size={13} />
                     {badge && localizeMode(badge)}
-                    <span className="composer-caret">⌄</span>
+                    <span className="composer-caret">
+                      <CaretUpDownIcon size={11} />
+                    </span>
                   </span>
                 }
                 width={320}
@@ -345,13 +412,17 @@ export function Composer() {
               </MenuPopover>
             ) : null}
           </div>
-          {/* 右组:模型 → 思考强度 → 发送(ZCode 顺序) */}
+          {/* 右组:上下文环 → 模型 → 思考强度 → 发送(设计稿构成) */}
+          <ContextRing />
           {snapshot ? (
             <MenuPopover
               label={
                 <span className="composer-tool composer-tool-model">
+                  <CpuIcon size={13} />
                   {snapshot.provider.model}
-                  <span className="composer-caret">⌄</span>
+                  <span className="composer-caret">
+                      <CaretUpDownIcon size={11} />
+                    </span>
                 </span>
               }
               width={360}
@@ -364,16 +435,18 @@ export function Composer() {
           ) : null}
           {customReasoning ? (
             <span className="composer-tool composer-effort" title={t('reasoningMenu.customTitle')}>
-              <EffortIcon />
+              <BrainIcon size={13} />
               {t('effort.custom')}
             </span>
           ) : effortLevels?.length === 0 ? null : effort ? ( // 目录说该模型无思考能力:chip 整个不渲染
             <MenuPopover
               label={
                 <span className="composer-tool composer-effort" title={t('reasoningMenu.title')}>
-                  <EffortIcon />
+                  <BrainIcon size={13} />
                   {localizeEffort(effort)}
-                  <span className="composer-caret">⌄</span>
+                  <span className="composer-caret">
+                      <CaretUpDownIcon size={11} />
+                    </span>
                 </span>
               }
               title={t('reasoningMenu.title')}
@@ -394,7 +467,7 @@ export function Composer() {
             title={running ? t('composer.abort') : t('composer.send')}
             onClick={primaryAction}
           >
-            {running ? '■' : '↑'}
+            {running ? '■' : <ArrowUpIcon size={15} />}
           </button>
         </div>
         {dragging ? (

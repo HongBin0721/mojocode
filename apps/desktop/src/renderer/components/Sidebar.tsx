@@ -1,70 +1,142 @@
 /**
- * 侧栏(ZCode 形态):
- *  1. 顶部拖拽区(mac 让位红绿灯 96px):logo + 折叠按钮;
- *  2. 图标导航行(新建任务 ⌘N / 搜索 ⌘K,搜索行展开输入框);
- *  3. 「项目」区:标题行右侧「+ 添加项目」走原生目录选择器;项目 = 手动
- *     添加的文件夹列表(projectsStore,localStorage)∪ 当前工作区 root ∪
- *     会话里出现过的 root。每组是可折叠的文件夹标题行 + 缩进任务行(标题
- *     左、相对时间右,运行中的会话带脉冲点),空项目显示「暂无任务」;
- *     悬停出「新任务」(其他项目 → 重启 sidecar 切工作区)与「移除」;
- *  4. 底部 Settings 菜单(语言切换)。
+ * 侧栏(Codex 设计稿形态,252px 起可拖宽):
+ *  1. 项目切换器(文件夹图标 + 项目名/路径 + ⇕),弹层列出项目(任务计数、
+ *     当前项目打勾)+ 底部「导入项目文件夹」(原生目录选择器);
+ *  2. 全宽「+ 新建任务」按钮(落在当前项目的 root);
+ *  3. 主导航:首页 / 任务(badge = 当前项目任务数)/ 归档;
+ *  4. 「任务」分组:当前项目的任务行(TONE 状态点 + 标题 + 状态·时间),
+ *     ⌘K 搜索行按需展开;右键菜单(重命名/归档/分支/复制/删除);
+ *  5. 底部设置入口。
  *
- * 右缘可拖宽(264~50vw,双击复位),⌘B 折叠(App 里监听)。
+ * 右缘可拖宽(264~50vw,双击复位),⌘B 折叠(App 里监听;折叠态的展开钮
+ * 在 TitleBar)。窗口拖拽区归 TitleBar,侧栏不再承担。
  */
 
 import React, { memo, useEffect, useMemo, useState } from 'react';
-import type { SessionMetaSummary } from '../../shared/ipc.js';
+import type { TaskSummary } from '../../shared/ipc.js';
 import { useDesktopStore } from '../state/desktopStore.js';
-import { useUiStore } from '../state/uiStore.js';
+import { useUiStore, type View } from '../state/uiStore.js';
 import { useProjectsStore } from '../state/projectsStore.js';
-import { newSession } from '../state/actions.js';
+import { newTask, openTask } from '../state/actions.js';
+import { taskTone, toneColorVar, toneLabelKey } from '../utils/task-tone.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { t, useLocale } from '../i18n/index.js';
-import { CirclePlusIcon, FolderIcon, GearIcon, PlusIcon, SearchIcon } from './icons.js';
+import { MenuPopover, MenuCloseContext } from './Menu.js';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
+import { ImportProjectDialog } from './ImportProjectDialog.js';
+import {
+  ArchiveIcon,
+  CopyIcon,
+  FolderOpenIcon,
+  GitBranchIcon,
+  HashIcon,
+  PencilIcon,
+  PushPinIcon,
+  TrashIcon,
+  CaretUpDownIcon,
+  ChatTeardropDotsIcon,
+  CheckIcon,
+  FolderPlusIcon,
+  FolderSimpleIcon,
+  GearIcon,
+  HouseIcon,
+  PlusIcon,
+} from './icons.js';
 
-/** 任务行:标题左、相对时间右;仅运行中的会话带脉冲点(ZCode 形态)。
- * memo:Sidebar 随每次 state 推送重渲染,N 条 props 稳定的行不必跟着重建。
- * 行内的相对时间与 title 都是本地化文案,自己订阅 locale——props 不变时
- * memo 会拦掉父组件的重渲染,不订阅的话切语言后时间戳停在旧语言。 */
-const SessionRow = memo(function SessionRow({
-  session,
+/** 任务行:TONE 状态点 + 标题,第二行 状态 · 相对时间(设计稿双行形态)。 */
+const TaskRow = memo(function TaskRow({
+  task,
   active,
-  running,
+  pinned,
+  onContextMenu,
 }: {
-  session: SessionMetaSummary;
+  task: TaskSummary;
   active: boolean;
-  running: boolean;
+  pinned: boolean;
+  onContextMenu: (task: TaskSummary, x: number, y: number) => void;
 }) {
   useLocale();
-  const onOpen = () => {
-    void window.mojocode.rpc({ kind: 'resumeSession', idOrPrefix: session.id }).catch((error) => {
-      console.error('resume 失败', error);
-    });
-  };
+  const tone = taskTone(task);
   return (
     <button
       type="button"
-      className={`session-row ${active ? 'session-active' : ''}`}
-      onClick={onOpen}
+      className={`task-row ${active ? 'task-row-active' : ''}`}
+      onClick={() => openTask(task.id)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(task, e.clientX, e.clientY);
+      }}
     >
-      {running ? <span className="session-dot" title={t('badge.running')} /> : null}
-      <span className="session-title">{session.title || session.id.slice(0, 8)}</span>
-      <span className="session-when">{formatRelativeTime(session.updatedAt)}</span>
+      <span className="task-row-head">
+        <span className="task-dot" style={{ background: toneColorVar(tone) }} />
+        <span className="task-row-title">{task.title || task.id.slice(0, 8)}</span>
+        {pinned ? (
+          <span className="task-pin">
+            <PushPinIcon size={11} />
+          </span>
+        ) : null}
+        {task.hasPendingPermission ? <span className="task-badge-permission" /> : null}
+      </span>
+      <span className="task-row-meta">
+        {t(toneLabelKey(tone))} · {formatRelativeTime(task.updatedAt)}
+      </span>
     </button>
   );
 });
 
-/** 底部设置按钮:进入全屏设置页(语言切换已移入常规节)。 */
-function SettingsButton() {
+/** 项目切换器弹层内容:项目行(名称/路径/任务数/当前勾)+ 导入入口。 */
+function ProjectMenu({
+  currentRoot,
+  taskCountOf,
+  onImport,
+}: {
+  currentRoot: string | undefined;
+  taskCountOf: (root: string) => number;
+  onImport: () => void;
+}) {
   useLocale();
-  const openSettings = useUiStore((s) => s.openSettings);
+  const close = React.useContext(MenuCloseContext);
+  const projects = useProjectsStore((s) => s.projects);
+  const select = useProjectsStore((s) => s.select);
+
+  const roots = useMemo(
+    () => [...new Set([...(currentRoot ? [currentRoot] : []), ...projects])],
+    [currentRoot, projects],
+  );
+
+  const importFolder = () => {
+    close();
+    onImport(); // 设计稿形态:打开导入对话框(拖放 + 选择)
+  };
+
   return (
-    <button type="button" className="settings-row side-nav" onClick={() => openSettings()}>
-      <span className="side-nav-icon">
-        <GearIcon size={16} />
-      </span>
-      {t('sidebar.settings')}
-    </button>
+    <>
+      {roots.map((root) => (
+        <button
+          key={root}
+          type="button"
+          className="menu-item project-item"
+          onClick={() => {
+            select(root);
+            close();
+          }}
+        >
+          <FolderSimpleIcon size={15} />
+          <span className="project-item-body">
+            <span className="project-item-name">{projectName(root)}</span>
+            <span className="project-item-path">{root}</span>
+          </span>
+          <span className="project-item-count">
+            {t('sidebar.taskCount', { count: String(taskCountOf(root)) })}
+          </span>
+          {root === currentRoot ? <CheckIcon size={13} /> : null}
+        </button>
+      ))}
+      <button type="button" className="menu-item project-import" onClick={importFolder}>
+        <FolderPlusIcon size={15} />
+        {t('sidebar.importProject')}
+      </button>
+    </>
   );
 }
 
@@ -82,9 +154,13 @@ function SidebarResizer() {
       onMouseDown={(e) => {
         // 宽度 = 手柄 X - 侧栏左缘(手柄贴侧栏右缘,随宽度移动)。
         const sidebarLeft = e.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+        // 右面板占宽按下时量一次(拖侧栏时它不变):上限要给中间区留最小宽。
+        const reserved =
+          document.querySelector('.right-panel:not(.right-panel-full)')?.getBoundingClientRect()
+            .width ?? 0;
         setDragging(true);
         const move = (ev: MouseEvent) => {
-          setWidth(ev.clientX - sidebarLeft, window.innerWidth);
+          setWidth(ev.clientX - sidebarLeft, window.innerWidth, reserved);
         };
         const up = () => {
           setDragging(false);
@@ -103,232 +179,334 @@ function SidebarResizer() {
 
 export function Sidebar() {
   useLocale();
-  const sessions = useDesktopStore((s) => s.sessions);
+  const tasks = useDesktopStore((s) => s.tasks);
   // 窄选择器:Sidebar 随每个 bus 事件收 state 推送,订阅整份 snapshot 会把
   // 流式轮次里的几十次推送全变成全树重渲染。
   const storeId = useDesktopStore((s) => s.snapshot?.storeId);
   const running = useDesktopStore((s) => s.snapshot?.agent.isRunning ?? false);
-  const currentRoot = useDesktopStore((s) => s.snapshot?.root);
+  const focusedRoot = useDesktopStore((s) => s.snapshot?.root);
+  const view = useUiStore((s) => s.view);
+  const navigate = useUiStore((s) => s.navigate);
   const width = useUiStore((s) => s.width);
   const collapsed = useUiStore((s) => s.collapsed);
-  const toggleCollapsed = useUiStore((s) => s.toggleCollapsed);
   const searchOpen = useUiStore((s) => s.searchOpen);
-  const openSearch = useUiStore((s) => s.openSearch);
   const closeSearchState = useUiStore((s) => s.closeSearch);
   const [query, setQuery] = useState('');
 
-  const projects = useProjectsStore((s) => s.projects);
+  const selectedProject = useProjectsStore((s) => s.selected);
   const addProjectToList = useProjectsStore((s) => s.add);
-  const removeProjectFromList = useProjectsStore((s) => s.remove);
-  const [collapsedRoots, setCollapsedRoots] = useState<ReadonlySet<string>>(new Set());
+  const pinned = useProjectsStore((s) => s.pinned);
+  const togglePin = useProjectsStore((s) => s.togglePin);
+  /** 当前项目:手动选择优先,否则跟随聚焦任务的 root。 */
+  const currentRoot = selectedProject ?? focusedRoot;
 
-  // 打开过的工作区自动入项目列表(持久化)——否则切走后原项目会从侧栏消失。
+  // 打开过的工作区自动入项目列表(持久化)——聚焦任务的项目要能被切回来。
   useEffect(() => {
-    if (currentRoot) addProjectToList(currentRoot);
-  }, [currentRoot, addProjectToList]);
+    if (focusedRoot) addProjectToList(focusedRoot);
+  }, [focusedRoot, addProjectToList]);
 
-  const filtered = useMemo(() => {
-    // 0 消息的空会话不进列表(每次启动/切换工作区 server 都会留一个,点进
-    // 去时间线是空的,只添乱)——当前会话除外,不然新任务在侧栏里没有落点。
-    const list = (sessions ?? []).filter(
-      (session) => session.messageCount > 0 || session.id === storeId,
-    );
+  /** 未归档、有内容(或是当前会话)的任务。 */
+  const liveTasks = useMemo(
+    () =>
+      (tasks ?? []).filter(
+        (task) => (task.messageCount > 0 || task.id === storeId) && !task.archivedAt,
+      ),
+    [tasks, storeId],
+  );
+
+  const taskCountOf = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of liveTasks) counts.set(task.root, (counts.get(task.root) ?? 0) + 1);
+    return (root: string) => counts.get(root) ?? 0;
+  }, [liveTasks]);
+
+  /** 当前项目的任务(置顶前置;搜索时在其中过滤)。 */
+  const projectTasks = useMemo(() => {
+    const list = liveTasks.filter((task) => task.root === currentRoot);
     const q = query.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
-      (session) =>
-        session.title.toLowerCase().includes(q) || session.id.toLowerCase().startsWith(q),
-    );
-  }, [sessions, query, storeId]);
+    const filtered = q
+      ? list.filter(
+          (task) => task.title.toLowerCase().includes(q) || task.id.toLowerCase().startsWith(q),
+        )
+      : list;
+    // 置顶前置,置顶内与未置顶内都保持 updatedAt 倒序(list 本身已按此排序)。
+    const pinnedSet = new Set(pinned);
+    return [
+      ...filtered.filter((task) => pinnedSet.has(task.id)),
+      ...filtered.filter((task) => !pinnedSet.has(task.id)),
+    ];
+  }, [liveTasks, currentRoot, query, pinned]);
 
-  /**
-   * 项目分组:当前 root 置顶,其余按手动列表序(currentRoot 经上面的 effect
-   * 必然已在 projects 里,单列它只为置顶与首帧)。会话列表是跨工作区的
-   * (bridge 以 all 拉取),但只渲染项目列表里的 root——「项目」是用户手动
-   * 管理的集合,不该被别处跑过的会话撑开。搜索时隐藏无命中的组。
-   */
-  const groups = useMemo(() => {
-    const byRoot = new Map<string, SessionMetaSummary[]>();
-    for (const session of filtered) {
-      const list = byRoot.get(session.root);
-      if (list) list.push(session);
-      else byRoot.set(session.root, [session]);
-    }
-    const roots = [...new Set([...(currentRoot ? [currentRoot] : []), ...projects])];
-    const searching = query.trim().length > 0;
-    return roots
-      .map((root) => ({ root, list: byRoot.get(root) ?? [] }))
-      .filter((group) => !searching || group.list.length > 0);
-  }, [filtered, projects, currentRoot, query]);
-
-  /** 「+ 添加项目」:原生目录选择器,选中即入列表(不切换工作区)。 */
-  const pickProject = () => {
-    void window.mojocode
-      .pickDirectory()
-      .then((root) => {
-        if (root) addProjectToList(root);
-      })
-      .catch((error: unknown) => console.error('pickDirectory 失败', error));
-  };
-
-  /** 项目组里的「新任务」:当前项目直接开新会话,其他项目先切工作区。 */
-  const newTaskIn = (root: string) => {
-    if (running) return;
-    if (root === currentRoot) {
-      newSession();
-      return;
-    }
-    void window.mojocode
-      .switchWorkspace(root)
-      .catch((error: unknown) => console.error('switchWorkspace 失败', error));
-  };
-
-  const toggleGroup = (root: string) => {
-    setCollapsedRoots((prev) => {
-      const next = new Set(prev);
-      if (next.has(root)) next.delete(root);
-      else next.add(root);
-      return next;
-    });
-  };
+  const archivedCount = useMemo(
+    () => (tasks ?? []).filter((task) => task.archivedAt).length,
+    [tasks],
+  );
 
   const closeSearch = () => {
     closeSearchState();
     setQuery('');
   };
 
-  return (
-    <aside
-      className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`}
-      style={collapsed ? undefined : { width: `${width}px` }}
+  const [contextMenu, setContextMenu] = useState<
+    { task: TaskSummary; x: number; y: number } | undefined
+  >();
+  const [renaming, setRenaming] = useState<string | undefined>();
+  const [importing, setImporting] = useState(false);
+
+  /** 右键菜单条目:按可用能力条件渲染(缺失即不显示,不做假按钮)。 */
+  const contextItems = (task: TaskSummary): ContextMenuItem[] => [
+    {
+      id: 'pin',
+      label: pinned.includes(task.id) ? t('ctxMenu.unpin') : t('ctxMenu.pin'),
+      icon: <PushPinIcon size={14} />,
+    },
+    { id: 'rename', label: t('ctxMenu.rename'), icon: <PencilIcon size={14} /> },
+    { id: 'archive', label: t('ctxMenu.archive'), icon: <ArchiveIcon size={14} /> },
+    {
+      id: 'reveal',
+      label: t('ctxMenu.reveal'),
+      icon: <FolderOpenIcon size={14} />,
+      separatorBefore: true,
+    },
+    { id: 'copyRoot', label: t('ctxMenu.copyRoot'), icon: <CopyIcon size={14} /> },
+    { id: 'copyId', label: t('ctxMenu.copyId'), icon: <HashIcon size={14} /> },
+    {
+      id: 'fork',
+      label: t('ctxMenu.fork'),
+      icon: <GitBranchIcon size={14} />,
+      separatorBefore: true,
+    },
+    {
+      id: 'delete',
+      label: t('ctxMenu.delete'),
+      icon: <TrashIcon size={14} />,
+      separatorBefore: true,
+      danger: true,
+    },
+  ];
+
+  const runContextAction = (task: TaskSummary, id: string): void => {
+    const rpc = window.mojocode.rpc;
+    switch (id) {
+      case 'pin':
+        togglePin(task.id);
+        return;
+      case 'reveal':
+        void window.mojocode.revealPath(task.root).catch((error: unknown) =>
+          console.error('Finder 显示失败', error),
+        );
+        return;
+      case 'rename':
+        setRenaming(task.id);
+        return;
+      case 'archive':
+        void rpc({ kind: 'archiveSession', id: task.id, archived: true }).catch((error: unknown) =>
+          console.error('归档失败', error),
+        );
+        return;
+      case 'fork':
+        void window.mojocode
+          .createTask({ root: task.root, resume: task.id, fork: true })
+          .catch((error: unknown) => console.error('创建分支任务失败', error));
+        return;
+      case 'copyRoot':
+        void navigator.clipboard?.writeText(task.root);
+        return;
+      case 'copyId':
+        void navigator.clipboard?.writeText(task.id);
+        return;
+      case 'delete':
+        // 活跃会话由 server 拒删(英文错误),这里只报到控制台。
+        void rpc({ kind: 'deleteSession', id: task.id }).catch((error: unknown) =>
+          console.error('删除会话失败', error),
+        );
+        return;
+      default:
+        return;
+    }
+  };
+
+  const navRow = (
+    target: Exclude<View, 'settings'>,
+    icon: React.ReactNode,
+    label: string,
+    badge?: string,
+  ) => (
+    <button
+      type="button"
+      className={`nav-row ${view === target ? 'nav-row-active' : ''}`}
+      onClick={() => navigate(target)}
     >
-      <div className="sidebar-top">
-        <span className="sidebar-logo">M</span>
-        <button
-          type="button"
-          className="sidebar-collapse"
-          onClick={toggleCollapsed}
-          title={t('sidebar.collapse')}
+      <span className="nav-row-icon">{icon}</span>
+      <span className="nav-row-label">{label}</span>
+      {badge ? <span className="nav-row-badge">{badge}</span> : null}
+    </button>
+  );
+
+  if (collapsed) return null;
+
+  return (
+    <aside className="sidebar" style={{ width: `${width}px` }}>
+      <div className="sidebar-head">
+        <MenuPopover
+          block
+          width={290}
+          title={t('sidebar.switchProject')}
+          label={
+            <span className="project-trigger">
+              <FolderSimpleIcon size={15} />
+              <span className="project-trigger-body">
+                <span className="project-trigger-name">
+                  {currentRoot ? projectName(currentRoot) : t('sidebar.projects')}
+                </span>
+                {currentRoot ? <span className="project-trigger-path">{currentRoot}</span> : null}
+              </span>
+              <CaretUpDownIcon size={13} />
+            </span>
+          }
         >
-          «
-        </button>
-      </div>
-      <div className="sidebar-body">
+          <ProjectMenu
+            currentRoot={currentRoot}
+            taskCountOf={taskCountOf}
+            onImport={() => setImporting(true)}
+          />
+        </MenuPopover>
         <button
           type="button"
-          className="side-nav"
-          onClick={newSession}
+          className="new-task-btn"
+          onClick={() => newTask(currentRoot)}
           disabled={running}
           title={running ? t('sidebar.busy') : undefined}
         >
-          <span className="side-nav-icon">
-            <CirclePlusIcon size={15} />
-          </span>
-          <span className="side-nav-label">{t('sidebar.newTask')}</span>
-          <kbd className="side-kbd">⌘N</kbd>
+          <PlusIcon size={14} />
+          {t('sidebar.newTask')}
         </button>
-        {sessions !== undefined ? (
-          <button
-            type="button"
-            className="side-nav"
-            onClick={() => (searchOpen ? closeSearch() : openSearch())}
-          >
-            <span className="side-nav-icon">
-              <SearchIcon size={15} />
-            </span>
-            <span className="side-nav-label">{t('sidebar.searchNav')}</span>
-            <kbd className="side-kbd">⌘K</kbd>
-          </button>
-        ) : null}
-        {searchOpen ? (
-          <input
-            className="task-search"
-            value={query}
-            placeholder={t('sidebar.search')}
-            autoFocus
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') closeSearch();
-            }}
-          />
-        ) : null}
-        <div className="sidebar-section-head">
-          <span className="sidebar-section-title">{t('sidebar.projects')}</span>
-          <button
-            type="button"
-            className="section-icon"
-            title={t('sidebar.addProject')}
-            onClick={pickProject}
-          >
-            <PlusIcon size={14} />
-          </button>
-        </div>
-        <div className="session-list">
-          {sessions === undefined ? (
-            <div className="sidebar-empty">{t('sidebar.unsupported')}</div>
-          ) : query && groups.length === 0 ? (
-            <div className="sidebar-empty">{t('sidebar.noMatch')}</div>
-          ) : (
-            groups.map(({ root, list }) => {
-              const collapsed = collapsedRoots.has(root);
-              const isCurrent = root === currentRoot;
-              return (
-                <div key={root} className="session-group">
-                  <div className={`session-group-title ${isCurrent ? 'session-group-current' : ''}`}>
-                    <button
-                      type="button"
-                      className="session-group-toggle"
-                      title={root}
-                      onClick={() => toggleGroup(root)}
-                    >
-                      <FolderIcon size={13} />
-                      <span className="session-group-name">{projectName(root)}</span>
-                      <span className="session-group-caret">{collapsed ? '▸' : '▾'}</span>
-                    </button>
-                    <span className="session-group-actions">
-                      <button
-                        type="button"
-                        className="section-icon"
-                        title={running ? t('sidebar.busy') : t('sidebar.newTask')}
-                        disabled={running}
-                        onClick={() => newTaskIn(root)}
-                      >
-                        <PlusIcon size={13} />
-                      </button>
-                      {projects.includes(root) && !isCurrent ? (
-                        <button
-                          type="button"
-                          className="section-icon"
-                          title={t('sidebar.removeProject')}
-                          onClick={() => removeProjectFromList(root)}
-                        >
-                          ✕
-                        </button>
-                      ) : null}
-                    </span>
-                  </div>
-                  {collapsed ? null : list.length === 0 ? (
-                    <div className="session-group-empty">{t('sidebar.noTasks')}</div>
-                  ) : (
-                    list.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        active={session.id === storeId}
-                        running={session.id === storeId && running}
-                      />
-                    ))
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
+      </div>
+      <nav className="nav-list">
+        {navRow('home', <HouseIcon size={15} />, t('nav.home'))}
+        {navRow(
+          'task',
+          <ChatTeardropDotsIcon size={15} />,
+          t('nav.tasks'),
+          currentRoot ? String(taskCountOf(currentRoot)) : undefined,
+        )}
+        {navRow(
+          'archive',
+          <ArchiveIcon size={15} />,
+          t('nav.archive'),
+          archivedCount > 0 ? String(archivedCount) : undefined,
+        )}
+      </nav>
+      <div className="sidebar-section-head">
+        <span className="sidebar-section-title">{t('sidebar.tasksSection')}</span>
+      </div>
+      {searchOpen ? (
+        <input
+          className="task-search"
+          value={query}
+          placeholder={t('sidebar.search')}
+          autoFocus
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') closeSearch();
+          }}
+        />
+      ) : null}
+      <div className="task-list">
+        {tasks === undefined ? (
+          <div className="sidebar-empty">{t('sidebar.unsupported')}</div>
+        ) : projectTasks.length === 0 ? (
+          <div className="sidebar-empty">{query ? t('sidebar.noMatch') : t('sidebar.noTasks')}</div>
+        ) : (
+          projectTasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              active={task.id === storeId}
+              pinned={pinned.includes(task.id)}
+              onContextMenu={(target, x, y) => setContextMenu({ task: target, x, y })}
+            />
+          ))
+        )}
       </div>
       <div className="sidebar-footer">
-        <SettingsButton />
+        <button
+          type="button"
+          className="nav-row"
+          onClick={() => useUiStore.getState().openSettings()}
+        >
+          <span className="nav-row-icon">
+            <GearIcon size={15} />
+          </span>
+          <span className="nav-row-label">{t('sidebar.settings')}</span>
+        </button>
       </div>
-      {!collapsed ? <SidebarResizer /> : null}
+      <SidebarResizer />
+      {contextMenu ? (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          title={contextMenu.task.title || contextMenu.task.id.slice(0, 8)}
+          items={contextItems(contextMenu.task)}
+          onPick={(id) => runContextAction(contextMenu.task, id)}
+          onClose={() => setContextMenu(undefined)}
+        />
+      ) : null}
+      {importing ? <ImportProjectDialog onClose={() => setImporting(false)} /> : null}
+      {renaming ? (
+        <RenameDialog
+          taskId={renaming}
+          initial={(tasks ?? []).find((task) => task.id === renaming)?.title ?? ''}
+          onClose={() => setRenaming(undefined)}
+        />
+      ) : null}
     </aside>
+  );
+}
+
+/** 重命名对话框(右键菜单「重命名」):提交走 renameSession RPC。 */
+function RenameDialog({
+  taskId,
+  initial,
+  onClose,
+}: {
+  taskId: string;
+  initial: string;
+  onClose: () => void;
+}) {
+  useLocale();
+  const [value, setValue] = useState(initial);
+  const submit = () => {
+    const title = value.trim();
+    if (!title) return;
+    void window.mojocode
+      .rpc({ kind: 'renameSession', id: taskId, title })
+      .catch((error: unknown) => console.error('重命名失败', error));
+    onClose();
+  };
+  return (
+    <div className="overlay-backdrop" onClick={onClose}>
+      <div className="overlay-card overlay-card-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="overlay-title">{t('ctxMenu.rename')}</div>
+        <input
+          className="rename-input"
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+            if (e.key === 'Escape') onClose();
+          }}
+        />
+        <div className="overlay-actions">
+          <button type="button" onClick={onClose}>
+            {t('panel.discardCancel')}
+          </button>
+          <button type="button" className="btn-primary" disabled={!value.trim()} onClick={submit}>
+            {t('ctxMenu.renameSave')}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

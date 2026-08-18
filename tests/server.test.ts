@@ -171,6 +171,27 @@ function fakeSession() {
     reviewCommits: spies.reviewCommits,
     startReview: spies.startReview,
     startSimplify: spies.startSimplify,
+    archiveSession: vi.fn(async (id: string, archived: boolean) => ({
+      id,
+      root: '/tmp/fake-root',
+      title: 't',
+      ...(archived ? { archivedAt: '2026-01-01T00:00:00.000Z' } : {}),
+    })),
+    renameSession: vi.fn(async (id: string, title: string) => ({ id, root: '/tmp/fake-root', title })),
+    deleteSession: vi.fn(async () => {}),
+    listFiles: vi.fn(async () => ({ files: ['a.ts', 'dir/b.ts'], truncated: false })),
+    readFile: vi.fn(async (path: string) => ({
+      ok: true,
+      path,
+      content: 'hello',
+      size: 5,
+      truncated: false,
+    })),
+    changedFiles: [{ path: 'src/x.ts', kind: 'modified', count: 2 }],
+    switchBranch: vi.fn(async (name: string) => ({ ok: true, branch: name })),
+    commitAll: vi.fn(async () => ({ ok: true, sha: 'a'.repeat(40) })),
+    undoCommit: vi.fn(async () => ({ ok: true })),
+    discardAll: vi.fn(async () => ({ ok: false, reason: 'no-repo' })),
     dispose: vi.fn(async () => {}),
   } as unknown as Session;
 
@@ -481,6 +502,65 @@ describe('server ↔ remote client', () => {
 
     const diff = await remote.fileDiff('a.ts');
     expect(diff).toMatchObject({ ok: false, reason: 'no-repo', path: 'a.ts' });
+  });
+
+  it('会话生命周期与文件树 RPC 过线;changedFiles 进快照镜像', async () => {
+    const { remote, parts } = await boot();
+
+    const archived = await remote.archiveSession('s-1', true);
+    expect(archived.archivedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect((parts.session.archiveSession as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual([
+      's-1',
+      true,
+    ]);
+
+    const renamed = await remote.renameSession('s-1', '新标题');
+    expect(renamed.title).toBe('新标题');
+
+    await remote.deleteSession('s-2');
+    expect((parts.session.deleteSession as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual(['s-2']);
+
+    const files = await remote.listFiles();
+    expect(files).toEqual({ files: ['a.ts', 'dir/b.ts'], truncated: false });
+
+    const content = await remote.readFile('a.ts');
+    expect(content).toMatchObject({ ok: true, path: 'a.ts', content: 'hello' });
+
+    // 任务级变更索引来自 StateSnapshot 的镜像(旧 server 缺省时回退空表)。
+    expect(remote.changedFiles).toEqual([{ path: 'src/x.ts', kind: 'modified', count: 2 }]);
+  });
+
+  it('git 写操作 RPC 过线,reason 码原样返回', async () => {
+    const { remote, parts } = await boot();
+    expect(await remote.switchBranch('feature')).toMatchObject({ ok: true, branch: 'feature' });
+    expect((parts.session.switchBranch as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual([
+      'feature',
+    ]);
+    expect(await remote.commitAll('msg')).toMatchObject({ ok: true });
+    expect(await remote.undoCommit()).toMatchObject({ ok: true });
+    expect(await remote.discardAll()).toMatchObject({ ok: false, reason: 'no-repo' });
+  });
+
+  it('tool-output-delta 是瞬态帧:到达 client 总线,但断线期间的不重放', async () => {
+    const { parts, server, remote } = await boot();
+    const chunks: string[] = [];
+    remote.bus.on((event) => {
+      if (event.type === 'tool-output-delta') chunks.push(event.chunk);
+    });
+
+    parts.bus.emit({ type: 'tool-output-delta', callId: 'c1', chunk: 'live' });
+    await waitFor(() => chunks.includes('live'));
+
+    // 断线窗口内的 delta 不进重放缓冲;用一条普通事件确认重连已完成。
+    const seen: string[] = [];
+    remote.bus.on((event) => {
+      if (event.type === 'notice') seen.push(event.message);
+    });
+    server.dropConnections();
+    parts.bus.emit({ type: 'tool-output-delta', callId: 'c1', chunk: 'offline' });
+    parts.bus.emit({ type: 'notice', level: 'info', message: 'after-delta' });
+    await waitFor(() => seen.includes('after-delta'), 5000);
+    expect(chunks).not.toContain('offline');
   });
 
   it('鉴权:缺 token 一律 401', async () => {

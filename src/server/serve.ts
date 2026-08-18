@@ -63,7 +63,17 @@ const STATE_NEUTRAL_EVENTS = new Set([
   // 压缩摘要的流式进度与文本增量同性质:isCompacting 的翻转由前后的
   // 非中性事件(notice / compaction / call ack)带出快照,进度本身不沾。
   'compaction-progress',
+  // bash 的流式输出:不沾快照任何字段,且量大(它同时也是 transient 帧)。
+  'tool-output-delta',
 ]);
+
+/**
+ * 瞬态事件:广播时不带 id、不进重放缓冲(state 帧同款路径)。断线窗口内
+ * 丢失无害——tool-end 的全量 output 兜底,消费端本来就该在 tool-end 到达时
+ * 用全量替换积累的 delta。放进缓冲反而危险:64KB×并发调用可能把 4MB 缓冲
+ * 滚过 call-result,而丢 call-result 是致命的(pending promise 永不 settle)。
+ */
+const TRANSIENT_EVENTS = new Set(['tool-output-delta']);
 
 /**
  * 授权中介:gate 的 ask 回调落在这里,请求本身经 bus 的 permission-request
@@ -165,6 +175,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       },
       todos: session.todos.get(),
       skills: session.skills,
+      changedFiles: session.changedFiles,
       sentAt: Date.now(),
     };
   };
@@ -188,7 +199,10 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
 
   const broadcast = (message: ServerMessage): void => {
     let frame: string;
-    if (message.kind === 'state') {
+    const isTransientEvent =
+      message.kind === 'event' &&
+      TRANSIENT_EVENTS.has((message.event as { type?: string })?.type ?? '');
+    if (message.kind === 'state' || isTransientEvent) {
       frame = frameOf(message);
     } else {
       const id = ++seq;
@@ -310,6 +324,29 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return collectWorkspaceStatus(session.root);
       case 'fileDiff':
         return collectFileDiff(session.root, args['path'] as string);
+      // GUI 任务列表的会话生命周期:归档/改名/删除(活跃会话拒删)。
+      case 'archiveSession':
+        return session.archiveSession(args['id'] as string, args['archived'] === true);
+      case 'renameSession':
+        return session.renameSession(args['id'] as string, args['title'] as string);
+      case 'deleteSession':
+        await session.deleteSession(args['id'] as string);
+        return undefined;
+      // GUI 文件树/文件预览:server 侧读盘(--attach 时仓库在这台机器)。
+      case 'listFiles':
+        return session.listFiles();
+      case 'readFile':
+        return session.readFile(args['path'] as string);
+      // GUI diff 面板的 git 写操作(用户显式操作;调用后 pushState 带出
+      // 清空后的 changedFiles)。
+      case 'switchBranch':
+        return session.switchBranch(args['name'] as string);
+      case 'commitAll':
+        return session.commitAll(args['message'] as string);
+      case 'undoCommit':
+        return session.undoCommit();
+      case 'discardAll':
+        return session.discardAll();
       case 'refreshEnvironment':
         await session.refreshEnvironment();
         return undefined;

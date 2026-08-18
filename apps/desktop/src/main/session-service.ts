@@ -39,6 +39,8 @@ export async function startDesktopSession(options: {
   root: string;
   attach: AttachOptions | undefined;
   runtime: ServerRuntime;
+  /** 追加到 serve 的参数(TaskManager 用:`--resume <id>` / `--fork-session`)。 */
+  serveExtraArgs?: string[];
   spawnServer?: SpawnFn;
   connect?: ConnectFn;
 }): Promise<DesktopSession> {
@@ -74,7 +76,11 @@ export async function startDesktopSession(options: {
     url = options.attach.url;
     token = options.attach.token;
   } else {
-    spawned = await spawnServer(options.runtime, ['--cwd', options.root], onServerExit);
+    spawned = await spawnServer(
+      options.runtime,
+      ['--cwd', options.root, ...(options.serveExtraArgs ?? [])],
+      onServerExit,
+    );
     url = spawned.url;
     token = spawned.token;
   }

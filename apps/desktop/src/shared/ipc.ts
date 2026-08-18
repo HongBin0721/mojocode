@@ -21,6 +21,22 @@ import type { ImageAttachment } from '@core/attachments';
 import type { TimelineItem } from '@core/types';
 
 /**
+ * 多任务信封:所有 per-task 下行通道(state/event/replay/connection/permission)
+ * 的载荷都包一层 taskId,renderer 侧按 id 分桶。通道拓扑保持静态——preload 的
+ * 白名单映射不随任务数变化(动态通道名会让收窄失效且无法枚举测试)。
+ */
+export interface TaskScoped<T> {
+  taskId: string;
+  data: T;
+}
+
+/**
+ * 任务(= 会话)的生命周期状态:starting(sidecar 握手中)/ connected /
+ * lost(sidecar 意外退出)/ dormant(无进程,历史在磁盘,点开即复活)。
+ */
+export type TaskStatus = 'starting' | 'connected' | 'lost' | 'dormant';
+
+/**
  * 会话列表条目。形状复制自根仓库 src/session/store.ts 的 SessionMeta(wire
  * 契约都是 JSON 原生类型;store.ts 带 node:fs,进不了两端共用的 shared)。
  */
@@ -33,6 +49,64 @@ export interface SessionMetaSummary {
   updatedAt: string;
   title: string;
   messageCount: number;
+  /** 归档时间(ISO)。缺省 = 未归档;归档视图按它过滤与排序。 */
+  archivedAt?: string;
+}
+
+/**
+ * 任务列表行(tasks 通道全量推):SessionStore.list() 的 meta ∪ 运行时状态。
+ * dormant 行只有 meta 部分有意义(isRunning 恒 false)。
+ */
+export interface TaskSummary extends SessionMetaSummary {
+  status: TaskStatus;
+  isRunning: boolean;
+  /** 有待决审批(后台任务行的角标数据源)。 */
+  hasPendingPermission: boolean;
+  lastActivityAt?: number;
+}
+
+/** 任务级变更索引条目。形状复制自根仓库 src/session/store.ts 的 ChangedFileEntry。 */
+export interface ChangedFileSummary {
+  path: string;
+  kind: 'created' | 'modified';
+  count: number;
+}
+
+/** 文件预览结果。形状复制自根仓库 src/app/workspace-read.ts 的 FileContent。 */
+export type FileReadFailure = 'not-found' | 'binary' | 'too-large' | 'denied' | 'is-directory';
+
+export interface FileContentSummary {
+  ok: boolean;
+  reason?: FileReadFailure;
+  path: string;
+  content?: string;
+  size: number;
+  truncated: boolean;
+}
+
+/** 文件树数据源(listFiles RPC):工作区扁平相对路径清单。 */
+export interface WorkspaceFilesSummary {
+  files: string[];
+  truncated: boolean;
+}
+
+/** git 写操作结果。形状复制自根仓库 src/agent/workspace-write.ts 的 GitOpResult。 */
+export type GitOpFailure =
+  | 'no-repo'
+  | 'dirty'
+  | 'unknown-branch'
+  | 'invalid-name'
+  | 'clean-tree'
+  | 'no-commit'
+  | 'git-error';
+
+export interface GitOpSummary {
+  ok: boolean;
+  reason?: GitOpFailure;
+  branch?: string;
+  sha?: string;
+  /** git-error 时的 stderr 首行(英文,单行截断)。 */
+  detail?: string;
 }
 
 /**
@@ -73,7 +147,12 @@ export interface ProviderModelsSummary {
   providerId: string;
   label: string;
   contextWindows?: Record<string, number>;
-  models: Array<{ id: string; ownedBy?: string }>;
+  models: Array<{
+    id: string;
+    ownedBy?: string;
+    /** 该条目配置了思考(档位或自定义参数)——模型菜单行的「思考」tag。 */
+    thinks?: boolean;
+  }>;
   error?: string;
 }
 
@@ -106,11 +185,18 @@ export const IPC_CHANNELS = {
   replay: 'bridge:replay',
   connection: 'bridge:connection',
   permission: 'bridge:permission',
-  sessions: 'bridge:sessions',
-  /* 下面两个是 main 本地能力(Electron dialog / sidecar 重启),不进 bridge
-   * 的 RPC 白名单——bridge 保持 electron-free 可测。 */
+  /** 任务列表(TaskSummary[] 全量推),TaskManager 拥有;替代旧 sessions 通道。 */
+  tasks: 'bridge:tasks',
+  /* 下面这些是 main 本地能力(Electron dialog / TaskManager 生命周期),不进
+   * bridge 的 RPC 白名单——bridge 保持 electron-free 可测。「切工作区」已随
+   * 多任务退役:每个任务自带 root,换项目 = 在那个 root 新建/打开任务。 */
   pickDirectory: 'desktop:pick-directory',
-  switchWorkspace: 'desktop:switch-workspace',
+  taskCreate: 'task:create',
+  taskOpen: 'task:open',
+  taskClose: 'task:close',
+  taskFocus: 'task:focus',
+  revealPath: 'desktop:reveal-path',
+  openPath: 'desktop:open-path',
 } as const;
 
 export type ConnectionState = 'connecting' | 'connected' | 'lost';
@@ -120,9 +206,8 @@ export type RpcRequest =
   | { kind: 'inject'; text: string; images?: ImageAttachment[] }
   | { kind: 'abort' }
   | { kind: 'compact' }
-  | { kind: 'newSession' }
-  | { kind: 'resumeSession'; idOrPrefix: string }
-  | { kind: 'forkSession' }
+  /* 换会话三连(newSession/resumeSession/forkSession)已退役:一个 sidecar
+   * 终生绑定一个会话,新任务/打开历史/fork 一律走 task:create / task:open。 */
   | { kind: 'switch'; change: { provider?: string; model?: string; apiKey?: string } }
   /* 设置页·模型设置:保存/删除 provider 条目(server 侧落盘全局配置)。
    * config 只含用户真正改过的键——快照里的配置是脱敏副本,整对象回写会
@@ -143,15 +228,39 @@ export type RpcRequest =
   | { kind: 'startSimplify'; target: string }
   | { kind: 'workspaceStatus' }
   | { kind: 'fileDiff'; path: string }
+  /* 任务列表的会话生命周期:归档/改名/删除(活跃会话拒删,server 侧把关)。 */
+  | { kind: 'archiveSession'; id: string; archived: boolean }
+  | { kind: 'renameSession'; id: string; title: string }
+  | { kind: 'deleteSession'; id: string }
+  /* 右侧面板·文件 tab:工作区文件清单与单文件预览(server 侧读盘)。 */
+  | { kind: 'listFiles' }
+  | { kind: 'readFile'; path: string }
+  /* diff 面板批准流与分支切换的 git 写操作(用户显式操作,server 侧执行)。 */
+  | { kind: 'switchBranch'; name: string }
+  | { kind: 'commitAll'; message: string }
+  | { kind: 'undoCommit' }
+  | { kind: 'discardAll' }
+  /* 分支菜单数据源(核心 reviewTargets:当前分支 + 本地分支列表)。 */
+  | { kind: 'reviewTargets' }
   | { kind: 'permission'; id: string; decision: PermissionDecision };
 
 /** 下行推送通道的白名单(preload 据此收窄 renderer 可订阅的 channel)。 */
-export type PushChannel = 'state' | 'event' | 'replay' | 'connection' | 'permission' | 'sessions';
+export type PushChannel = 'state' | 'event' | 'replay' | 'connection' | 'permission' | 'tasks';
+
+/** 一个活跃任务的即时状态(subscribe 返回;replayItems 只有聚焦任务带)。 */
+export interface LiveTaskState {
+  taskId: string;
+  state: StateSnapshot;
+  connection: ConnectionState;
+  permission?: PermissionRequest;
+  replayItems?: TimelineItem[];
+}
 
 export interface SubscribeResult {
-  state: StateSnapshot;
-  replayItems: TimelineItem[];
-  connection: ConnectionState;
+  /** undefined = 会话列表读取失败(降级提示)。 */
+  tasks: TaskSummary[] | undefined;
+  focusedTaskId: string | undefined;
+  live: LiveTaskState[];
 }
 
 /**

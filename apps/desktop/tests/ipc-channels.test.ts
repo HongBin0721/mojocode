@@ -17,7 +17,7 @@ const DOWNLINK: readonly PushChannel[] = [
   'replay',
   'connection',
   'permission',
-  'sessions',
+  'tasks',
 ];
 
 describe('IPC 通道契约', () => {
@@ -34,7 +34,10 @@ describe('IPC 通道契约', () => {
       IPC_CHANNELS.subscribe,
       IPC_CHANNELS.rpc,
       IPC_CHANNELS.pickDirectory,
-      IPC_CHANNELS.switchWorkspace,
+      IPC_CHANNELS.taskCreate,
+      IPC_CHANNELS.taskOpen,
+      IPC_CHANNELS.taskClose,
+      IPC_CHANNELS.taskFocus,
     ];
     expect(new Set(uplink).size).toBe(uplink.length);
     const downlink = DOWNLINK.map((key) => IPC_CHANNELS[key]);

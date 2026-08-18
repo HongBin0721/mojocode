@@ -1,21 +1,19 @@
 /**
- * Electron main 入口:app 生命周期、窗口、与 server 的编排。
+ * Electron main 入口:app 生命周期、窗口、TaskManager 编排。
  *
- * 进程模型(与 TUI 一致):本进程拉起受管 `mojocode serve --managed` 子进程,
- * 经 connectRemote 建立镜像,再由 bridge(src/main/bridge.ts)把镜像暴露给
- * renderer。`--attach <url>` 时连接外部 server,token 取自
- * MOJOCODE_SERVER_TOKEN(缺失则报错退出——不接受明文无鉴权连接)。
+ * 进程模型:一个任务 = 一个受管 `mojocode serve --managed` sidecar,由
+ * TaskManager(src/main/task-manager.ts)统一管理;`--attach <url>` 时唯一
+ * 任务连接外部 server,token 取自 MOJOCODE_SERVER_TOKEN(缺失则报错退出——
+ * 不接受明文无鉴权连接)。
  */
 
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
-import { createBridge, type Bridge } from './bridge.js';
-import { buildReplayItems } from './replay.js';
 import { resolveRuntime } from './resolve-runtime.js';
-import { startDesktopSession, type DesktopSession } from './session-service.js';
+import { createTaskManager, type TaskManager } from './task-manager.js';
 import { IPC_CHANNELS, type RpcRequest } from '../shared/ipc.js';
 
 /**
@@ -39,33 +37,31 @@ const argvValue = (flag: string): string | undefined => {
 };
 
 let mainWindow: BrowserWindow | undefined;
-let desktop: DesktopSession | undefined;
-let bridge: Bridge | undefined;
+let manager: TaskManager | undefined;
 let quitting = false;
 
 /**
- * 桥就绪信号(deferred):bootstrap/切换工作区创建桥后兑现。切换工作区会
- * 重置 deferred——期间到达的 subscribe/rpc 挂起等新桥,而不是打在已 dispose
- * 的旧桥上(handler 体内读的是 let,调用时自然取到当前的 promise)。
+ * 管理器就绪信号(deferred):bootstrap 创建 TaskManager 后兑现。IPC handler
+ * 在 app ready 就注册,内部 await 它——renderer 加载完成早于首个 sidecar
+ * 握手时,invoke 挂起而不是失败。
  */
-let resolveBridge: (b: Bridge) => void = () => {};
-let bridgeReady = new Promise<Bridge>((resolve) => {
-  resolveBridge = resolve;
+let resolveManager: (m: TaskManager) => void = () => {};
+const managerReady = new Promise<TaskManager>((resolve) => {
+  resolveManager = resolve;
 });
 
 /**
- * 窗口视觉选项(ZCode 桌面端同款,仅 darwin):隐藏标题栏 + 红绿灯内嵌到
- * 内容区(22,23),底色透明 + under-window vibrancy——内容层的
- * --color-background-alt 半透明 tint 压在毛玻璃上。非 darwin 保持原生框。
+ * 窗口视觉选项(仅 darwin):隐藏标题栏 + 红绿灯内嵌到内容区。底色是
+ * 设计稿的不透明 --color-bg(#161826)——不开 vibrancy:半透明 tint 会让
+ * 壁纸透进来把色板染偏,设计稿是纯色形态。非 darwin 保持原生框。
  */
 function windowVisualOptions(): Electron.BrowserWindowConstructorOptions {
   if (process.platform !== 'darwin') return {};
   return {
     titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 22, y: 23 },
-    backgroundColor: '#00000000',
-    vibrancy: 'under-window',
-    visualEffectState: 'active',
+    // 44px 标题栏(设计稿):红绿灯垂直居中 (44-12)/2 = 16。
+    trafficLightPosition: { x: 22, y: 16 },
+    backgroundColor: '#161826',
   };
 }
 
@@ -73,7 +69,8 @@ const createWindow = (): void => {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 720,
+    // 三栏最紧凑 = 侧栏 264 + 中间区下限 360 + 右面板下限 240,留点余量。
+    minWidth: 880,
     minHeight: 480,
     title: 'mojocode',
     show: false,
@@ -96,69 +93,9 @@ const createWindow = (): void => {
 const teardown = async (): Promise<void> => {
   if (quitting) return;
   quitting = true;
-  bridge?.dispose();
-  bridge = undefined;
-  await desktop?.dispose();
-  desktop = undefined;
+  await manager?.disposeAll();
+  manager = undefined;
   app.quit();
-};
-
-/** 拉起 session + 桥(bootstrap 与切换工作区共用),就绪后兑现 deferred。 */
-const startBridge = async (
-  root: string,
-  attach?: { url: string; token: string },
-): Promise<Bridge> => {
-  desktop = await startDesktopSession({ root, attach, runtime: resolveRuntime() });
-  const current = desktop;
-  const next = createBridge({
-    target: {
-      // 只推给活着的窗口;重载窗口(新 webContents)后靠 renderer 重新 subscribe 拿快照。
-      send: (channel, ...args) => {
-        const contents = mainWindow?.webContents;
-        if (contents && !contents.isDestroyed()) contents.send(channel, ...args);
-      },
-    },
-    session: current.session,
-    replay: async () => buildReplayItems(current.session),
-  });
-  next.setConnection('connected');
-  bridge = next;
-  resolveBridge(next);
-  return next;
-};
-
-/**
- * 切换工作区:停掉当前受管 sidecar,以新 root 重新拉起,再强推整套镜像
- * (subscribe() 的 target.send 路径:state/replay/connection/sessions)。
- * attach 模式(不拥有 server)与运行中的轮直接拒绝。
- */
-let switching = false;
-const switchWorkspace = async (root: string): Promise<void> => {
-  if (switching) throw new Error('正在切换项目,稍候再试');
-  const current = desktop;
-  if (!current?.spawned) throw new Error('attach 模式不支持切换项目');
-  if (current.session.snapshot.agent.isRunning) throw new Error('先结束或中断当前这轮');
-  switching = true;
-  try {
-    bridge?.setConnection('connecting');
-    bridge?.dispose();
-    bridge = undefined;
-    bridgeReady = new Promise<Bridge>((resolve) => {
-      resolveBridge = resolve;
-    });
-    desktop = undefined;
-    await current.dispose();
-    const next = await startBridge(root);
-    await next.subscribe();
-  } catch (error) {
-    // 半途失败(新 sidecar 起不来):没有可用会话,提示后整体退出。
-    const message = error instanceof Error ? error.message : String(error);
-    dialog.showErrorBox('切换项目失败', message);
-    await teardown();
-    throw error;
-  } finally {
-    switching = false;
-  }
 };
 
 const bootstrap = async (): Promise<void> => {
@@ -184,20 +121,56 @@ const bootstrap = async (): Promise<void> => {
     await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   }
 
-  await startBridge(root, attach);
+  const next = createTaskManager({
+    runtime: resolveRuntime(),
+    attach,
+    target: {
+      // 只推给活着的窗口;重载窗口(新 webContents)后靠 renderer 重新 subscribe 拿快照。
+      send: (channel, ...args) => {
+        const contents = mainWindow?.webContents;
+        if (contents && !contents.isDestroyed()) contents.send(channel, ...args);
+      },
+    },
+  });
+  manager = next;
+  // 先把首个任务建起来再兑现 managerReady:renderer 的 subscribe 是一次性的,
+  // 若在任务就绪前返回,它拿到的是空的 live 列表,而此后没有任何东西会再触发
+  // 一次全量同步(空闲会话不产生 bus 事件)。
+  await next.createTask({ root });
+  resolveManager(next);
 };
 
 app.whenReady().then(
   async () => {
-    // IPC handler 必须此刻注册:renderer 加载完成可能早于 server 握手(spawn
-    // + MCP bootstrap 要几秒),晚注册的话 subscribe 会打到「No handler
-    // registered」。handler 内部 await 桥就绪——invoke 挂起而不是失败,
-    // renderer 侧无需重试。
-    ipcMain.handle(IPC_CHANNELS.subscribe, async () => (await bridgeReady).subscribe());
-    ipcMain.handle(IPC_CHANNELS.rpc, (_event, request) =>
-      bridgeReady.then((b) => b.dispatchRpc(request as RpcRequest)),
+    // IPC handler 必须此刻注册:renderer 加载完成可能早于首个 sidecar 握手
+    // (spawn + MCP bootstrap 要几秒),晚注册的话 subscribe 会打到「No
+    // handler registered」。handler 内部 await 管理器就绪。
+    ipcMain.handle(IPC_CHANNELS.subscribe, async () => (await managerReady).subscribe());
+    ipcMain.handle(IPC_CHANNELS.rpc, (_event, request, taskId) =>
+      managerReady.then((m) =>
+        m.dispatchRpc(request as RpcRequest, taskId as string | undefined),
+      ),
     );
-    // main 本地能力:目录选择器(添加项目)与工作区切换(sidecar 重启)。
+    ipcMain.handle(IPC_CHANNELS.taskCreate, (_event, opts) =>
+      managerReady.then((m) => m.createTask(opts as { root: string; resume?: string; fork?: boolean })),
+    );
+    ipcMain.handle(IPC_CHANNELS.taskOpen, (_event, sessionId) =>
+      managerReady.then((m) => m.openTask(String(sessionId))),
+    );
+    ipcMain.handle(IPC_CHANNELS.taskClose, (_event, taskId) =>
+      managerReady.then((m) => m.closeTask(String(taskId))),
+    );
+    ipcMain.handle(IPC_CHANNELS.taskFocus, (_event, taskId) =>
+      managerReady.then((m) => m.focusTask(String(taskId))),
+    );
+    // main 本地能力:Finder 显示 / 系统默认程序打开(右键菜单与 diff 菜单)。
+    ipcMain.handle(IPC_CHANNELS.revealPath, (_event, path) => {
+      shell.showItemInFolder(String(path));
+    });
+    ipcMain.handle(IPC_CHANNELS.openPath, async (_event, path) => {
+      await shell.openPath(String(path));
+    });
+    // main 本地能力:目录选择器(添加/导入项目)。
     ipcMain.handle(IPC_CHANNELS.pickDirectory, async () => {
       if (!mainWindow) return undefined;
       const result = await dialog.showOpenDialog(mainWindow, {
@@ -205,7 +178,6 @@ app.whenReady().then(
       });
       return result.canceled ? undefined : result.filePaths[0];
     });
-    ipcMain.handle(IPC_CHANNELS.switchWorkspace, (_event, root) => switchWorkspace(String(root)));
     try {
       await bootstrap();
     } catch (error) {
@@ -223,7 +195,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
-  // Cmd+Q / 系统关机路径:先拦下,走统一 teardown(bridge → session → quit)。
+  // Cmd+Q / 系统关机路径:先拦下,走统一 teardown(全部任务 dispose → quit)。
   if (quitting) return;
   event.preventDefault();
   void teardown();

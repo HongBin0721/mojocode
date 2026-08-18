@@ -1,0 +1,158 @@
+/* ---- 审批卡:rounded-2xl 浮层卡 + 编号选项列表(ZCode 形态)---- */
+
+.permission {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  background: var(--color-popover);
+  padding: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.permission-wrap {
+  flex: none;
+  margin: 8px 16px;
+}
+
+.permission-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.permission-heading {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--color-foreground-subtle);
+}
+
+.permission-subtitle {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--color-foreground);
+  margin: 0 0 10px;
+  word-break: break-all;
+}
+
+.permission-plan-body {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.permission-rule {
+  color: var(--color-foreground-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.permission-detail {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: var(--color-menu);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 编号选项:数字键直选,方向键/Tab 移动高亮,回车确认 */
+.permission-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.permission-option {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-xl);
+  padding: 8px 10px;
+  color: var(--color-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.permission-option:hover {
+  background: var(--color-surface-hover);
+  border-color: transparent;
+}
+.permission-option-selected,
+.permission-option-selected:hover {
+  background: var(--color-selected);
+}
+
+.permission-option-num {
+  flex: none;
+  width: 16px;
+  color: var(--color-foreground-subtlest);
+  font-size: 12px;
+}
+
+.permission-option-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.permission-option-label {
+  font-weight: 500;
+  font-size: 13px;
+}
+.permission-option-label-danger {
+  color: var(--color-destructive);
+}
+.permission-option-desc {
+  color: var(--color-foreground-subtle);
+  font-size: 11.5px;
+}
+
+.permission-footer {
+  margin-top: 8px;
+  color: var(--color-foreground-subtlest);
+  font-size: 11px;
+  user-select: none;
+}
+
+.permission-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* ---- 风险 chip ---- */
+
+.risk-chip {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-foreground-subtle);
+}
+.risk-write {
+  border-color: rgba(239, 68, 68, 0.5);
+  color: var(--color-destructive);
+}
+.risk-execute {
+  border-color: rgba(234, 179, 8, 0.5);
+  color: var(--color-warning);
+}
+.risk-network {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+}
+

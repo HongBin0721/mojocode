@@ -63,11 +63,11 @@ describe('SettingsPage', () => {
     setLocale('zh-CN');
   });
 
-  it('「返回工作区」切回聊天视图', async () => {
+  it('「返回工作区」切回来处视图(returnView)', async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
     await user.click(screen.getByText('返回工作区'));
-    expect(useUiStore.getState().view).toBe('chat');
+    expect(useUiStore.getState().view).toBe('task');
   });
 
   it('外观节:主题固定深色(禁用),字号输入可用', async () => {
@@ -90,7 +90,7 @@ describe('SettingsPage', () => {
     // 默认选中当前 provider(glm):徽章 + 已配置模型行 + 上下文徽章。
     expect(screen.getByText('已启用')).toBeTruthy();
     expect(screen.getByText('GLM-5.3')).toBeTruthy();
-    expect(screen.getByText('1.0M')).toBeTruthy();
+    expect(screen.getByText('1M')).toBeTruthy();
   });
 
   it('添加模型:弹窗保存后发 saveProvider RPC(整组替换 models,预填 200000 窗口)', async () => {

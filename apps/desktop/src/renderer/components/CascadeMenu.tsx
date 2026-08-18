@@ -23,6 +23,8 @@ export interface CascadeItem {
   id: string;
   label: string;
   note?: string;
+  /** 行内小 tag(模型菜单的「思考」)。 */
+  tag?: string;
   current?: boolean;
 }
 
@@ -38,6 +40,7 @@ function ItemButton({ item, onPick }: { item: CascadeItem; onPick: () => void })
       onClick={onPick}
     >
       <span className="menu-item-label">{item.label}</span>
+      {item.tag ? <span className="menu-item-tag">{item.tag}</span> : null}
       {item.note ? <span className="menu-item-note">{item.note}</span> : null}
     </button>
   );

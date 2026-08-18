@@ -1,10 +1,60 @@
 /**
- * 行内 SVG 图标(ZCode 视觉语言:1.8px 描边、圆角端点、currentColor)。
- * 统一在这里维护,组件按需引用——不引第三方图标库。加新图标只写 path,
- * 包装样板由 icon() 工厂生成。
+ * 图标统一出口。Codex 风格重构起改用 @phosphor-icons/react(具名 import、
+ * SVG 内嵌 JS、离线可用),全部经本文件转发——组件永不直接 import 图标库,
+ * 上游换库/换版本只动这一个文件。旧的行内 SVG(ZCode 1.8px 描边)与
+ * Phosphor 并存,随组件逐个改造退役。
  */
 
 import React from 'react';
+
+/* ---- Phosphor 转发:regular 默认;fill 形态用 weight="fill" prop ---- */
+export {
+  CheckCircle as CheckCircleIcon,
+  House as HouseIcon,
+  ChatTeardropDots as ChatTeardropDotsIcon,
+  Archive as ArchiveIcon,
+  FolderSimple as FolderSimpleIcon,
+  FolderPlus as FolderPlusIcon,
+  FolderOpen as FolderOpenIcon,
+  GitBranch as GitBranchIcon,
+  CaretDown as CaretDownIcon,
+  CaretUp as CaretUpIcon,
+  CaretUpDown as CaretUpDownIcon,
+  Sparkle as SparkleIcon,
+  Brain as BrainIcon,
+  CircleDashed as CircleDashedIcon,
+  CircleNotch as CircleNotchIcon,
+  FileCode as FileCodeIcon,
+  PaperPlaneRight as PaperPlaneRightIcon,
+  Paperclip as PaperclipIcon,
+  Cpu as CpuIcon,
+  ArrowUp as ArrowUpIcon,
+  ArrowsOutSimple as ArrowsOutSimpleIcon,
+  ArrowsInSimple as ArrowsInSimpleIcon,
+  ArrowSquareOut as ArrowSquareOutIcon,
+  PushPin as PushPinIcon,
+  Envelope as EnvelopeIcon,
+  Hash as HashIcon,
+  Copy as CopyIcon,
+  DotsThree as DotsThreeIcon,
+  Translate as TranslateIcon,
+  SlidersHorizontal as SlidersHorizontalIcon,
+  Stack as StackIcon,
+  Terminal as TerminalIcon,
+  Tree as TreeIcon,
+  MagnifyingGlass as MagnifyingGlassIcon,
+  Globe as GlobeIcon,
+  ListChecks as ListChecksIcon,
+  Robot as RobotIcon,
+  Check as CheckIcon,
+  Eye as EyeIcon,
+  EyeSlash as EyeOffIcon,
+  Hand as HandIcon,
+  ShieldCheck as ShieldCheckIcon,
+  ClipboardText as ClipboardIcon,
+  LockSimpleOpen as UnlockIcon,
+  Gear as GearIcon,
+} from '@phosphor-icons/react';
 
 interface IconProps {
   size?: number;
@@ -29,9 +79,6 @@ function icon(paths: React.ReactNode): (props: IconProps) => React.JSX.Element {
     );
   };
 }
-
-/** 盾牌(权限档 chip)。 */
-export const ShieldIcon = icon(<path d="M12 3l7 3.2v5.3c0 4.6-3 8.1-7 9.5-4-1.4-7-4.9-7-9.5V6.2z" />);
 
 /** 加号(附件按钮/分组「新任务」)。 */
 export const PlusIcon = icon(<path d="M12 5v14M5 12h14" />);
@@ -64,14 +111,6 @@ export const BranchIcon = icon(
     <circle cx="6" cy="18" r="2.5" />
     <circle cx="18" cy="8" r="2.5" />
     <path d="M6 8.5v7M18 10.5c0 3-2.5 4.5-6 4.5" />
-  </>,
-);
-
-/** 齿轮(设置)。 */
-export const GearIcon = icon(
-  <>
-    <circle cx="12" cy="12" r="3.2" />
-    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03z" />
   </>,
 );
 
@@ -126,23 +165,6 @@ export const LinkIcon = icon(
   </>,
 );
 
-/** 眼睛(API Key 明文切换)。 */
-export const EyeIcon = icon(
-  <>
-    <path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" />
-    <circle cx="12" cy="12" r="2.8" />
-  </>,
-);
-
-/** 划线的眼睛(隐藏 API Key)。 */
-export const EyeOffIcon = icon(
-  <>
-    <path d="M4 4l16 16" />
-    <path d="M9.9 5.9A9.9 9.9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17.6 17.6 0 0 1-3.2 3.9M6 7.3A16.8 16.8 0 0 0 2.5 12S6 18.5 12 18.5a9.7 9.7 0 0 0 3.5-.7" />
-    <path d="M9.8 9.8a2.8 2.8 0 0 0 4 4" />
-  </>,
-);
-
 /** 下箭头(弹窗「高级」折叠)。 */
 export const ChevronDownIcon = icon(<path d="M6 9l6 6 6-6" />);
 
@@ -152,52 +174,7 @@ export const ChevronRightIcon = icon(<path d="M9 6l6 6-6 6" />);
 /** 叉(弹窗关闭)。 */
 export const XIcon = icon(<path d="M6 6l12 12M18 6L6 18" />);
 
-/** 手掌(权限档·询问:改动前先确认)。 */
-export const HandIcon = icon(
-  <>
-    <path d="M18 11.5V7a1.5 1.5 0 0 0-3 0" />
-    <path d="M15 10.5V5a1.5 1.5 0 0 0-3 0" />
-    <path d="M12 10.5V6a1.5 1.5 0 0 0-3 0v7" />
-    <path d="M18 8.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-1c-2.3 0-3.7-.7-4.9-2l-3.4-3.5a1.7 1.7 0 0 1 2.4-2.4L9 15" />
-  </>,
-);
-
-/** 盾+勾(权限档·自动编辑)。 */
-export const ShieldCheckIcon = icon(
-  <>
-    <path d="M12 3l7 3.2v5.3c0 4.6-3 8.1-7 9.5-4-1.4-7-4.9-7-9.5V6.2z" />
-    <path d="M9 12l2 2 4-4.5" />
-  </>,
-);
-
-/** 剪贴板(权限档·计划模式)。 */
-export const ClipboardIcon = icon(
-  <>
-    <rect x="8" y="3" width="8" height="4" rx="1" />
-    <path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H16" />
-  </>,
-);
-
-/** 开锁(权限档·完全访问)。 */
-export const UnlockIcon = icon(
-  <>
-    <rect x="5" y="11" width="14" height="9" rx="2" />
-    <path d="M8 11V7a4 4 0 0 1 7.8-1.2" />
-  </>,
-);
-
-/** 勾(选择器当前项)。 */
-export const CheckIcon = icon(<path d="M5 12.5l4.5 4.5L19 7" />);
-
 /** 月亮(外观·深色主题)。 */
 export const MoonIcon = icon(
   <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z" />,
-);
-
-/** 思考强度(「脑回路」风格的圆)。 */
-export const EffortIcon = icon(
-  <>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M8.5 12c1.2-2.2 2-2.2 3.5 0s2.3 2.2 3.5 0" />
-  </>,
 );

@@ -561,3 +561,91 @@ describe('轮末用量记录(kind: usage)', () => {
     expect(reopened.messages.map((m) => m.content)).toEqual(['你好', '在', '继续']);
   });
 });
+
+describe('会话生命周期(归档/改名/删除)', () => {
+  it('setArchived:JSONL 追加 meta 记录、旁车同步,list 带 archivedAt', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const meta = await SessionStore.setArchived(store.id, true, dir);
+    expect(meta.archivedAt).toBeDefined();
+
+    // JSONL 权威:末尾要有带 archivedAt 的 meta 记录(只写旁车会被慢路径重建冲掉)。
+    const records = await readRecords(store.id);
+    const lastMeta = [...records].reverse().find((r) => r.kind === 'meta') as unknown as {
+      meta: { archivedAt?: string };
+    };
+    expect(lastMeta.meta.archivedAt).toBe(meta.archivedAt);
+
+    const listed = await SessionStore.list('/w', dir);
+    expect(listed[0]!.archivedAt).toBe(meta.archivedAt);
+
+    // 取消归档:字段整个消失。
+    const restored = await SessionStore.setArchived(store.id, false, dir);
+    expect(restored.archivedAt).toBeUndefined();
+    expect((await SessionStore.list('/w', dir))[0]!.archivedAt).toBeUndefined();
+  });
+
+  it('活跃会话 rename 后再 save 不冲掉标题(内存 meta 需同步)', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await store.save([msg('user', 'hello world')]);
+
+    await SessionStore.rename(store.id, '手动标题', dir);
+    store.setTitle('手动标题'); // Session 层的同步动作(bootstrap.renameSession)
+
+    await store.save([msg('user', 'hello world'), msg('assistant', 'hi')]);
+    const listed = await SessionStore.list('/w', dir);
+    expect(listed[0]!.title).toBe('手动标题');
+  });
+
+  it('remove 真删两个文件且幂等', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await SessionStore.remove(store.id, dir);
+    await expect(fs.access(path.join(dir, `${store.id}.jsonl`))).rejects.toThrow();
+    await expect(fs.access(path.join(dir, `${store.id}.meta.json`))).rejects.toThrow();
+    await SessionStore.remove(store.id, dir); // 不存在也不抛
+    expect(await SessionStore.list('/w', dir)).toEqual([]);
+  });
+
+  it('cleanup 跳过归档会话', async () => {
+    const oldStore = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const archived = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await SessionStore.setArchived(archived.id, true, dir);
+
+    // 两个会话都做旧到 10 天前。
+    const past = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    for (const id of [oldStore.id, archived.id]) {
+      await fs.utimes(path.join(dir, `${id}.jsonl`), past, past);
+    }
+
+    const removed = await SessionStore.cleanup({ days: 7, dir });
+    expect(removed).toBe(1);
+    const remaining = await SessionStore.list('/w', dir);
+    expect(remaining.map((m) => m.id)).toEqual([archived.id]);
+  });
+});
+
+describe('changedFiles 状态往返', () => {
+  it('空时字段不出现;非空经 state 记录往返', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    // 空的 changedFiles 不产生字段:与加此功能前的 state JSON 一字不差
+    //(初始 EMPTY_STATE 的脏检查直接跳过,这里换个非空 state 触发写入)。
+    await store.saveState({
+      todos: [{ content: 'x', status: 'pending' }],
+      allowBash: [],
+      allowWrite: [],
+    });
+    const records = await readRecords(store.id);
+    const stateRecord = records.find((r) => r.kind === 'state') as unknown as {
+      state: Record<string, unknown>;
+    };
+    expect('changedFiles' in stateRecord.state).toBe(false);
+
+    await store.saveState({
+      todos: [],
+      allowBash: [],
+      allowWrite: [],
+      changedFiles: [{ path: 'a.ts', kind: 'created', count: 1 }],
+    });
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.state.changedFiles).toEqual([{ path: 'a.ts', kind: 'created', count: 1 }]);
+  });
+});

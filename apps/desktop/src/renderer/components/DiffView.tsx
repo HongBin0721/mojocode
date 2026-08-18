@@ -5,6 +5,7 @@
  */
 
 import React, { useMemo } from 'react';
+import { hasCjk, tokenize } from '../utils/tokenize.js';
 
 export interface ParsedDiffLine {
   kind: 'add' | 'del' | 'context' | 'hunk' | 'meta' | 'plain';
@@ -24,7 +25,23 @@ export function parseDiffLines(diff: string): ParsedDiffLine[] {
   let oldLine: number | undefined;
   let newLine: number | undefined;
   for (const text of diff.split('\n')) {
-    if (text.startsWith('+++') || text.startsWith('---')) {
+    // 补丁头(git 版 unified diff 的前几行)一律 meta:不带行号、可整体隐藏。
+    // 不识别的话 `diff --git`/`index` 因为不以 +/- 开头会被当成上下文行,
+    // 在带行号的视图里凭空多出两行"代码"。
+    if (
+      text.startsWith('+++') ||
+      text.startsWith('---') ||
+      text.startsWith('diff --git ') ||
+      text.startsWith('index ') ||
+      text.startsWith('new file mode') ||
+      text.startsWith('deleted file mode') ||
+      text.startsWith('old mode') ||
+      text.startsWith('new mode') ||
+      text.startsWith('similarity index') ||
+      text.startsWith('rename from') ||
+      text.startsWith('rename to') ||
+      text.startsWith('\\ No newline')
+    ) {
       out.push({ kind: 'meta', text });
       continue;
     }
@@ -60,25 +77,59 @@ export function commentTargetOf(line: ParsedDiffLine): { line: number; side: 'ol
   return undefined;
 }
 
+/** add/del/context 行的正文(剥掉 +/- 前缀)过 tokenize 上色;CJK 行不上色。 */
+function HighlightedDiffText({ text, lang }: { text: string; lang: string }) {
+  const prefix = text.slice(0, 1);
+  const body = text.slice(1);
+  const tokens = useMemo(() => (hasCjk(body) ? undefined : tokenize(body, lang)), [body, lang]);
+  if (!tokens) return <span className="diff-text">{text || ' '}</span>;
+  return (
+    <span className="diff-text">
+      {prefix}
+      {tokens.map((token, i) =>
+        token.kind === 'ws' ? (
+          token.t
+        ) : (
+          <span key={i} className={`tok-${token.kind}`}>
+            {token.t}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
+
 export function DiffView({
   diff,
   showLineNumbers,
   onLineClick,
+  highlight,
+  showStat,
+  hideMeta,
 }: {
   diff: string;
   showLineNumbers?: boolean;
   onLineClick?: (line: ParsedDiffLine) => void;
+  /** 语言标识(langOf 的产物):传入则 add/del/context 正文过 tokenize。 */
+  highlight?: string;
+  /** 顶部 +N −N 统计(默认显示);面板里文件条已给过统计,传 false 去重。 */
+  showStat?: boolean;
+  /** 隐藏补丁头(diff --git / index / ± 文件名行)。 */
+  hideMeta?: boolean;
 }) {
-  const lines = useMemo(() => parseDiffLines(diff), [diff]);
-  const adds = lines.filter((line) => line.kind === 'add').length;
-  const dels = lines.filter((line) => line.kind === 'del').length;
+  const all = useMemo(() => parseDiffLines(diff), [diff]);
+  const lines = hideMeta ? all.filter((line) => line.kind !== 'meta') : all;
+  const adds = all.filter((line) => line.kind === 'add').length;
+  const dels = all.filter((line) => line.kind === 'del').length;
   const commentable = onLineClick !== undefined;
 
   return (
     <div className="diff">
-      <div className="diff-stat">
-        <span className="diff-add">+{adds}</span> <span className="diff-del">−{dels}</span>
-      </div>
+      {showStat !== false ? (
+        <div className="diff-stat">
+          <span className="diff-add">+{adds}</span> <span className="diff-del">−{dels}</span>
+        </div>
+      ) : null}
       <pre className="diff-body">
         {lines.map((line, index) => {
           const clickable = commentable && commentTargetOf(line) !== undefined;
@@ -94,7 +145,11 @@ export function DiffView({
                   <span className="diff-lineno">{line.newLine ?? ''}</span>
                 </span>
               ) : null}
-              <span className="diff-text">{line.text || ' '}</span>
+              {highlight && (line.kind === 'add' || line.kind === 'del' || line.kind === 'context') ? (
+                <HighlightedDiffText text={line.text} lang={highlight} />
+              ) : (
+                <span className="diff-text">{line.text || ' '}</span>
+              )}
               {clickable ? <span className="diff-comment-hint">💬</span> : null}
             </div>
           );

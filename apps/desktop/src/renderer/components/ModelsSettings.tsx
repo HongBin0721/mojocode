@@ -25,7 +25,7 @@ import { useModelCapabilities } from '../utils/use-model-capabilities.js';
 import { PROVIDER_PRESETS, isBuiltinProvider } from '@core/providers';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { t, useLocale } from '../i18n/index.js';
-import { formatTokens } from '../utils/format.js';
+import { formatTokens, formatContextWindow } from '../utils/format.js';
 import { localizeEffort } from '../utils/mode-label.js';
 import { deriveProviderId, providerLabel, providerList, upsertModel } from '../utils/model-settings.js';
 import { Select } from './Select.js';
@@ -266,7 +266,7 @@ function ModelModal({
           {caps ? (
             <div className="field-hint">
               {t('settings.catalogHint', {
-                context: caps.contextWindow !== undefined ? formatTokens(caps.contextWindow) : '—',
+                context: caps.contextWindow !== undefined ? formatContextWindow(caps.contextWindow) : '—',
                 output: caps.maxOutputTokens !== undefined ? formatTokens(caps.maxOutputTokens) : '—',
               })}
             </div>
@@ -376,7 +376,7 @@ function ModelRow({
       <div className={`model-row ${current ? 'model-row-current' : ''}`}>
         <span className="model-row-id">{model.label ?? model.id}</span>
         {model.contextWindow ? (
-          <span className="model-row-ctx">{formatTokens(model.contextWindow)}</span>
+          <span className="model-row-ctx">{formatContextWindow(model.contextWindow)}</span>
         ) : null}
         <span className="model-row-actions">
           {onTest ? (

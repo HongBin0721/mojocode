@@ -33,7 +33,9 @@ import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalState, GoalStatus } from '../agent/goal.js';
 import type { GoalStopReason } from '../core/events.js';
-import type { SessionMeta } from '../session/store.js';
+import type { ChangedFileEntry, SessionMeta } from '../session/store.js';
+import type { FileContent } from '../app/workspace-read.js';
+import type { GitOpResult } from '../agent/workspace-write.js';
 import type { FileDiff, WorkspaceStatus } from '../agent/workspace.js';
 import type { ModelTestResult, ProviderModels } from '../model/registry.js';
 import type { ModelCapabilities } from '../model/catalog.js';
@@ -117,6 +119,20 @@ export interface RemoteSession extends SessionHandle {
   workspaceStatus(): Promise<WorkspaceStatus>;
   /** 单文件 diff(vs HEAD;untracked 为全新增补丁)。 */
   fileDiff(path: string): Promise<FileDiff>;
+  /** 会话生命周期(GUI 任务列表):归档/改名/删除。旧 server 报 unknown method,调用方降级。 */
+  archiveSession(id: string, archived: boolean): Promise<SessionMeta>;
+  renameSession(id: string, title: string): Promise<SessionMeta>;
+  deleteSession(id: string): Promise<void>;
+  /** GUI 文件树/文件预览(server 侧读盘)。走并行通道,不压权限决策队列。 */
+  listFiles(): Promise<{ files: string[]; truncated: boolean }>;
+  readFile(path: string): Promise<FileContent>;
+  /** git 写操作(GUI diff 面板/分支切换的显式操作)。 */
+  switchBranch(name: string): Promise<GitOpResult>;
+  commitAll(message: string): Promise<GitOpResult>;
+  undoCommit(): Promise<GitOpResult>;
+  discardAll(): Promise<GitOpResult>;
+  /** 任务级变更索引的镜像(来自 StateSnapshot;旧 server 缺省回退空表)。 */
+  readonly changedFiles: ChangedFileEntry[];
   /**
    * 受管子进程意外退出时由拥有它的前端调用(spawn 侧的 onExit 回调接线):
    * 不必等 5 次重连白白烧完 4.5 秒,立即断线收尾,并把死因(退出码 +
@@ -607,6 +623,31 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       call<SessionMeta[]>('listSessions', all === true ? { all: true } : undefined),
     workspaceStatus: () => call<WorkspaceStatus>('workspaceStatus'),
     fileDiff: (path: string) => call<FileDiff>('fileDiff', { path }),
+    archiveSession: (id: string, archived: boolean) =>
+      call<SessionMeta>('archiveSession', { id, archived }),
+    renameSession: (id: string, title: string) => call<SessionMeta>('renameSession', { id, title }),
+    deleteSession: (id: string) => call<void>('deleteSession', { id }),
+    listFiles: () => callParallel<{ files: string[]; truncated: boolean }>('listFiles'),
+    readFile: (path: string) => callParallel<FileContent>('readFile', { path }),
+    switchBranch: async (name: string) => {
+      const result = await call<GitOpResult>('switchBranch', { name });
+      await refreshState();
+      return result;
+    },
+    commitAll: async (message: string) => {
+      const result = await call<GitOpResult>('commitAll', { message });
+      await refreshState();
+      return result;
+    },
+    undoCommit: () => call<GitOpResult>('undoCommit'),
+    discardAll: async () => {
+      const result = await call<GitOpResult>('discardAll');
+      await refreshState();
+      return result;
+    },
+    get changedFiles() {
+      return state.changedFiles ?? [];
+    },
     saveProvider: async (id, patch) => {
       // 与 switch 的 apiKey 同一道闸:明文非环回传输上拒绝发 key。
       if (patch.apiKey !== undefined && !isTrustedTransport(url)) {

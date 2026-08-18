@@ -114,12 +114,16 @@ export function createFileTools(ctx: ToolContext) {
 
       // 写盘之后才检查:诊断永远描述已落地的内容,失败也只是拿不到诊断。
       const diagnostics = await ctx.lsp?.check(resolved.absolute, content);
+      // 结果统一带 unified diff(对齐 edit):新建文件渲染成全新增 diff,
+      // GUI/TUI 才能用同一套 diff 渲染器;权限卡的 detail 维持原样(新建给原文更直观)。
+      const resultDiff = existed ? diff : renderDiff(resolved.relative, '', content);
       return {
         path: resolved.relative,
         changed: true,
         created: !existed,
         bytes: Buffer.byteLength(content, 'utf8'),
         lines: content.split('\n').length,
+        diff: resultDiff,
         ...(diagnostics ? { diagnostics } : {}),
       };
     },

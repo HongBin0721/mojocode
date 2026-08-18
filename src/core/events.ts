@@ -97,6 +97,13 @@ export type AgentEvent =
   | { type: 'reasoning-delta'; id: string; text: string }
   | { type: 'reasoning-end'; id: string }
   | { type: 'tool-start'; callId: string; toolName: string; input: unknown }
+  /**
+   * 工具运行中的增量输出(目前只有 bash 发)。工具侧节流聚合后发射,
+   * 单次调用总量封顶——尾部由 tool-end 的全量 output 兜底,消费端的推荐
+   * 用法是 tool-end 到达时用全量替换积累的 delta。serve 侧按 transient 帧
+   * 广播(不占序号、不进重放缓冲),TUI/headless 的 switch 落空即兼容。
+   */
+  | { type: 'tool-output-delta'; callId: string; chunk: string }
   | {
       type: 'tool-end';
       callId: string;

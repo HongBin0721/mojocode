@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTimelineStore } from '../state/timelineStore.js';
 import { useLocale, t } from '../i18n/index.js';
-import { formatDuration, formatTokens, percent } from '../utils/format.js';
+import { formatContextWindow, formatDuration, formatTokens, percent } from '../utils/format.js';
 
 const PHASE_KEYS = {
   thinking: 'work.thinking',
@@ -33,8 +33,6 @@ export function StatusLine() {
   if (!work) return null;
 
   const pct = percent(usage.used, usage.window);
-  const filled = usage.window > 0 ? Math.round((usage.used / usage.window) * 12) : 0;
-  const bar = '▰'.repeat(Math.min(12, filled)) + '▱'.repeat(Math.max(0, 12 - filled));
 
   return (
     <div className="status-line conv-col">
@@ -46,8 +44,12 @@ export function StatusLine() {
       <span className="status-elapsed">{formatDuration(Date.now() - work.since)}</span>
       <span className="status-right">
         {turnTokens > 0 ? <span>+{formatTokens(turnTokens)} </span> : null}
-        <span className="status-bar">{bar}</span>
-        <span>{pct}%</span>
+        {/* 上下文用量:设计稿语言的 mono 胶囊(41K / 128K · 32%),不是 TUI 的 ▰▱ 条 */}
+        {usage.window > 0 ? (
+          <span className="status-ctx">
+            {formatContextWindow(usage.used)} / {formatContextWindow(usage.window)} · {pct}%
+          </span>
+        ) : null}
       </span>
     </div>
   );

@@ -7,9 +7,18 @@ export const SIDEBAR_DEFAULT_WIDTH = 264;
 export const SIDEBAR_WIDTH_KEY = 'mojocode.sidebar-width';
 export const SIDEBAR_COLLAPSED_KEY = 'mojocode.sidebar-collapsed';
 
-/** 拖宽钳制:264 起,上限为窗口宽的一半(ZCode 的 max 50vw)。 */
-export function clampSidebarWidth(width: number, viewportWidth: number): number {
-  const max = Math.max(SIDEBAR_DEFAULT_WIDTH, Math.floor(viewportWidth / 2));
+/** 中间会话区的最小可用宽:两侧拖宽的上限都要给它留位(CSS 同值兜底)。 */
+export const CHAT_MIN_WIDTH = 360;
+
+/**
+ * 拖宽钳制:264 起,上限为窗口宽的一半(ZCode 的 max 50vw);传 reserved
+ * (右面板当前占宽)时再收紧到「不把中间区压破 CHAT_MIN_WIDTH」。
+ */
+export function clampSidebarWidth(width: number, viewportWidth: number, reserved = 0): number {
+  const max = Math.max(
+    SIDEBAR_DEFAULT_WIDTH,
+    Math.min(Math.floor(viewportWidth / 2), Math.floor(viewportWidth - reserved - CHAT_MIN_WIDTH)),
+  );
   const clamped = Math.min(max, Math.max(SIDEBAR_DEFAULT_WIDTH, Math.round(width)));
   return Number.isFinite(clamped) ? clamped : SIDEBAR_DEFAULT_WIDTH;
 }

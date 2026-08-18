@@ -790,6 +790,8 @@ export function App(props: Props): JSX.Element {
       resume: async (): Promise<CommandOption[]> => {
         const metas = await SessionStore.list(session.root);
         return metas
+          // 归档会话不进恢复选择器(GUI 的归档视图才列它们)。
+          .filter((m) => !m.archivedAt)
           .filter((m) => m.id !== session.store.id)
           .map((m) => ({
             value: m.id.slice(0, 8),

@@ -22,14 +22,29 @@ function EmptyState() {
   );
 }
 
-/** 进行中的工具行(含子 agent 进度贴条)。 */
-function ActiveToolRow({ call }: { call: { callId: string; toolName: string; startedAt: number } }) {
+/** 进行中的工具行(含子 agent 进度贴条)。bash 显示「正在运行 <命令>」(设计稿)。 */
+function ActiveToolRow({
+  call,
+}: {
+  call: { callId: string; toolName: string; input: unknown; startedAt: number };
+}) {
+  useLocale();
   const progress = useTimelineStore((s) => s.taskProgress[call.callId]);
   const elapsed = Date.now() - call.startedAt;
+  const command =
+    call.toolName === 'bash'
+      ? (call.input as { command?: string } | undefined)?.command
+      : undefined;
   return (
     <div className="tool-card tool-active">
       <div className="tool-row">
-        <span className="tool-name">{call.toolName}</span>
+        {command !== undefined ? (
+          <span className="tool-name tool-running-label">
+            {t('timeline.running')} <code>{command}</code>
+          </span>
+        ) : (
+          <span className="tool-name">{call.toolName}</span>
+        )}
         {progress ? (
           <span className="tool-summary">
             {progress.steps} steps · {progress.currentTool ? `${progress.currentTool}…` : ''}

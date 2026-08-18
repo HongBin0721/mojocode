@@ -27,6 +27,15 @@ describe('sidebar geometry', () => {
     expect(clampSidebarWidth(400, 400)).toBe(264);
   });
 
+  it('reserved(右面板占宽):上限再收紧到给中间区留 CHAT_MIN_WIDTH', () => {
+    // 1200 - 512(面板) - 360(中间下限) = 328 —— 比 50vw(600) 更紧。
+    expect(clampSidebarWidth(900, 1200, 512)).toBe(328);
+    // 收紧后仍不越 50vw:reserved 小到不构成约束时维持原上限。
+    expect(clampSidebarWidth(900, 1200, 100)).toBe(600);
+    // 极端挤压下上限退到默认值,不许负空间。
+    expect(clampSidebarWidth(900, 900, 512)).toBe(264);
+  });
+
   it('非法输入:NaN 回默认,+Infinity 钳到上限', () => {
     expect(clampSidebarWidth(Number.NaN, 1200)).toBe(SIDEBAR_DEFAULT_WIDTH);
     expect(clampSidebarWidth(Number.POSITIVE_INFINITY, 1200)).toBe(600);

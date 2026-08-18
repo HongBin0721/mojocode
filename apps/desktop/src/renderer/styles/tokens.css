@@ -1,0 +1,141 @@
+/*
+ * 桌面客户端样式 —— Codex 风格设计稿的 nocturne 蓝灰色板(自设计稿取值):
+ * 深蓝灰表面阶梯(#0f1119 → #282b38)+ 七档文字阶梯(#e9e9ed → #595d6c),
+ * 1px 环一律用 box-shadow(--ring-*),浮层统一 --shadow-pop。无品牌强调色
+ * ——主按钮是灰底白字,唯一的暖色是状态黄(待审查/警告)。仅深色形态;
+ * token 命名沿用旧语义(--color-*),换值即换肤,组件引用面不动。
+ */
+
+:root {
+  /* ---- 表面:nocturne 蓝灰阶梯(由深到浅) ---- */
+  --color-background: #161826; /* 主区底(nocturne --color-bg 真值) */
+  /* 设计稿是不透明纯色形态,vibrancy 已退役——alt 与主底同值,别名保留 */
+  --color-background-alt: #161826;
+  --color-sidebar: #1b1e2b; /* 侧栏/标题栏/右面板 */
+  --color-panel: #1b1e2b; /* 同侧栏(历史上是 tint 的不透明对偶,现已同值) */
+  --color-card: #1c1f2c; /* 卡片/plan 卡/composer 外框/二级表面 */
+  --color-card-hover: #21242f;
+  --color-card-selected: #282b38; /* 选中态/弹层选中行/user 气泡 */
+  --color-popover: #232532; /* 审批卡等嵌入式浮层(设计稿 surface) */
+  --color-menu: #232532; /* 下拉菜单 */
+  --color-menu-hover: #282b38;
+  --color-input: #1c1f2c; /* 对话输入容器 */
+  --color-input-focused: #14161f; /* 设置页表单输入(最深表面) */
+  --color-tag: #22242f; /* tag/胶囊/hunk 行底 */
+  --color-surface-sunken: rgba(0, 0, 0, 0.22);
+  --color-output: #14161f; /* 工具输出/终端底 */
+
+  /* ---- 主按钮(设计稿:灰底白字,不再是白底黑字) ---- */
+  --color-primary: #22242f;
+  --color-primary-hover: #303341;
+  --color-primary-foreground: #e9e9ed;
+  --color-primary-border: #4b4f5c;
+  --color-primary-border-hover: #6a6e7c;
+  --color-primary-disabled: #1c1f2c;
+  --color-primary-disabled-foreground: #595d6c;
+
+  /* ---- 线与叠层:三档实色环 + 低透明度悬浮叠层 ---- */
+  --color-border: #2c2f3c;
+  --color-border-strong: #3f424d;
+  --color-border-hover: #595d6c;
+  --color-surface: rgba(255, 255, 255, 0.05);
+  --color-surface-hover: rgba(255, 255, 255, 0.1);
+  --color-selected: rgba(255, 255, 255, 0.12);
+
+  /* ---- 文字:七档阶梯 ---- */
+  --color-foreground: #e9e9ed; /* 一级正文/选中态 */
+  --color-foreground-body: #dcdde5; /* agent 消息正文 */
+  --color-foreground-mid: #cfd3e5; /* 强调次级(分支名/工具 label) */
+  --color-foreground-soft: #b2b6ca; /* 二级(未选中导航/次按钮文字) */
+  --color-foreground-dim: #9397ab; /* 三级(说明/工具展开正文) */
+  --color-foreground-subtle: #75798c; /* 最弱(meta/小标题/占位图标) */
+  --color-foreground-subtlest: #595d6c; /* 幽灵(分隔符/draft 点) */
+
+  /* ---- 状态色(nocturne 无品牌强调;brand 收敛为状态黄,存量引用兜底) ---- */
+  --color-brand: #c2a35f;
+  --color-brand-hover: #d9a13f;
+  --color-brand-soft: rgba(194, 163, 95, 0.35);
+  --color-brand-foreground: #d9a13f;
+  --color-accent: #9184d9; /* nocturne accent(紫);链接 hover 用 --color-accent-soft */
+  --color-accent-soft: #d2cefd;
+  --color-success: #6f9f7e;
+  --color-success-bright: #9ad6b1; /* 已提交提示/启用徽章文字 */
+  --color-destructive: #c26a72;
+  --color-warning: #d9a13f; /* 「完全访问」警示 */
+  /* git 状态(与 TONE/diff 系对齐) */
+  --color-git-modified: #c2a35f;
+  --color-git-added: #7fc79a;
+  --color-git-untracked: #7fc79a;
+  --color-git-deleted: #e0949b;
+  --color-git-renamed: #a8adbf;
+
+  /* ---- 任务状态点(TONE) ---- */
+  --tone-review: #c2a35f;
+  --tone-run: #a8adbf;
+  --tone-done: #6f9f7e;
+  --tone-draft: #595d6c;
+  /* 归档结果列 */
+  --result-merged: #6f9f7e;
+  --result-dropped: #9397ab;
+  --result-manual: #c2a35f;
+
+  /* ---- diff 四件套(新增/删除各:底/左边条/正文/行号) ---- */
+  --diff-add-bg: rgba(64, 150, 100, 0.26);
+  --diff-add-border: #4fa373;
+  --diff-add-fg: #dcf3e2;
+  --diff-add-accent: #7fc79a;
+  --diff-del-bg: rgba(178, 74, 84, 0.26);
+  --diff-del-border: #c26a72;
+  --diff-del-fg: #f6dadd;
+  --diff-del-accent: #e0949b;
+
+  /* ---- 语法高亮 8 色(设计稿 TOK_FG) ---- */
+  --tok-kw: #7fa7d0;
+  --tok-ty: #86b8b0;
+  --tok-str: #9fc48a;
+  --tok-num: #d6b077;
+  --tok-cm: #6f7484;
+  --tok-fn: #dcdde5;
+  --tok-pn: #9397ab;
+  --tok-id: #c3c7d4;
+
+  /* ---- 环与影:1px 环一律 box-shadow(不占布局),浮层统一投影 ---- */
+  --ring-card: 0 0 0 1px #2c2f3c;
+  --ring-strong: 0 0 0 1px #3f424d;
+  --ring-pop: 0 0 0 1px #595d6c;
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.65);
+  --overlay-backdrop: rgba(8, 9, 14, 0.66);
+
+  /* ---- 字体/字号/圆角 ---- */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI Symbol', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --ui-font-size: 14px;
+  /* 设计稿字号阶(10.5–13.5);代码字号三档经 data-font-scale 整体覆盖 --fs-code */
+  --fs-10: 10.5px;
+  --fs-11: 11px;
+  --fs-115: 11.5px;
+  --fs-12: 12px;
+  --fs-125: 12.5px;
+  --fs-13: 13px;
+  --fs-135: 13.5px;
+  --fs-code: 12px;
+  --radius-sm: 6px;
+  --radius-md: 7px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+  --radius-window: 14px;
+
+  /* 标题栏高度(设计稿 44px;mac 红绿灯内嵌其中,见平台类) */
+  --topbar-h: 44px;
+  /* mac 红绿灯让位宽(标题栏左内边距) */
+  --topbar-lead: 16px;
+}
+
+/* 代码字号三档(设置·外观):紧凑 11 / 标准 12 / 宽松 14 */
+:root[data-font-scale='compact'] {
+  --fs-code: 11px;
+}
+:root[data-font-scale='relaxed'] {
+  --fs-code: 14px;
+}

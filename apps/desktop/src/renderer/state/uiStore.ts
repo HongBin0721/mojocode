@@ -1,6 +1,11 @@
 /**
- * 界面几何状态(zustand):侧栏宽度与折叠。与业务 store 分开——这些只关乎
- * 本机布局偏好,持久化走 localStorage(width/collapsed 各一个 key)。
+ * 界面状态(zustand):视图状态机 + 侧栏几何。
+ *
+ * 视图:home(首页)/ task(任务工作区)/ archive(归档)/ settings(全屏
+ * 设置,覆盖态——returnView 记录来处,关闭回去)。task 视图另有两个正交
+ * 维度:taskLayout(chat = 三栏 / review = 右面板全宽评审)与 rightTab
+ * (右面板三 tab)。全部不持久化——重启回到任务工作区。
+ * 侧栏宽度/折叠持久化走 localStorage(utils/sidebar.ts)。
  */
 
 import { create } from 'zustand';
@@ -13,20 +18,29 @@ import {
   saveSidebarWidth,
 } from '../utils/sidebar.js';
 
-/** 设置页的三节(ZCode 形态:常规 / 外观 / 模型设置)。 */
+/** 设置页的三节(常规 / 外观 / 模型设置)。 */
 export type SettingsSection = 'general' | 'appearance' | 'models';
+
+export type View = 'home' | 'task' | 'archive' | 'settings';
+export type TaskLayout = 'chat' | 'review';
+export type RightTab = 'diff' | 'terminal' | 'files';
 
 export interface UiStore {
   width: number;
   collapsed: boolean;
   /** 侧栏搜索框的展开态(⌘K 与侧栏搜索行共用,不持久化)。 */
   searchOpen: boolean;
-  /** 当前视图:聊天工作区或全屏设置页(侧栏底部设置按钮进入)。不持久化——
-   * 设置页是临时驻留,重启回到工作区。 */
-  view: 'chat' | 'settings';
+  view: View;
+  /** settings 是覆盖态:记录来处,closeSettings 回去。 */
+  returnView: Exclude<View, 'settings'>;
+  /** task 视图布局:三栏聊天 或 右面板全宽评审。 */
+  taskLayout: TaskLayout;
+  /** 右侧面板当前 tab。 */
+  rightTab: RightTab;
   settingsSection: SettingsSection;
+
   /** 拖拽中直接设宽(已钳制);拖拽结束才落盘。 */
-  setWidth(width: number, viewportWidth: number): void;
+  setWidth(width: number, viewportWidth: number, reserved?: number): void;
   /** 拖拽结束:持久化当前宽度。 */
   commitWidth(): void;
   /** 双击手柄:复位默认宽并落盘。 */
@@ -34,17 +48,28 @@ export interface UiStore {
   toggleCollapsed(): void;
   openSearch(): void;
   closeSearch(): void;
+  /** 主导航(首页/任务/归档)。进 task 时布局回到 chat。 */
+  navigate(view: Exclude<View, 'settings'>): void;
   openSettings(section?: SettingsSection): void;
   closeSettings(): void;
   setSettingsSection(section: SettingsSection): void;
+  /** 评审全宽 ⇄ 三栏聊天(标题栏/面板头按钮)。 */
+  toggleReviewLayout(): void;
+  setRightTab(tab: RightTab): void;
 }
 
 export const useUiStore = create<UiStore>((set, get) => ({
   width: typeof window === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : loadSidebarWidth(window.innerWidth),
   collapsed: loadSidebarCollapsed(),
   searchOpen: false,
+  view: 'task',
+  returnView: 'task',
+  taskLayout: 'chat',
+  rightTab: 'diff',
+  settingsSection: 'general',
 
-  setWidth: (width, viewportWidth) => set({ width: clampSidebarWidth(width, viewportWidth) }),
+  setWidth: (width, viewportWidth, reserved) =>
+    set({ width: clampSidebarWidth(width, viewportWidth, reserved) }),
   commitWidth: () => saveSidebarWidth(get().width),
   resetWidth: () => {
     set({ width: SIDEBAR_DEFAULT_WIDTH });
@@ -58,10 +83,17 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () => set({ searchOpen: false }),
 
-  view: 'chat',
-  settingsSection: 'general',
+  navigate: (view) => set({ view, ...(view === 'task' ? { taskLayout: 'chat' } : {}) }),
   openSettings: (section) =>
-    set((state) => ({ view: 'settings', settingsSection: section ?? state.settingsSection })),
-  closeSettings: () => set({ view: 'chat' }),
+    set((state) => ({
+      view: 'settings',
+      // 从非 settings 视图进入时记录来处;settings 内切节不覆盖。
+      ...(state.view !== 'settings' ? { returnView: state.view as Exclude<View, 'settings'> } : {}),
+      settingsSection: section ?? state.settingsSection,
+    })),
+  closeSettings: () => set((state) => ({ view: state.returnView })),
   setSettingsSection: (section) => set({ settingsSection: section }),
+  toggleReviewLayout: () =>
+    set((state) => ({ taskLayout: state.taskLayout === 'chat' ? 'review' : 'chat' })),
+  setRightTab: (tab) => set({ rightTab: tab }),
 }));

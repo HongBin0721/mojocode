@@ -26,7 +26,7 @@ const status = (branch: string) => ({ ok: true, branch, entries: [], additions: 
 
 describe('reviewStore.refresh 的合并与补跑', () => {
   beforeEach(() => {
-    useReviewStore.setState({ status: undefined, unsupported: false, fileDiffs: {}, expandedPaths: [] });
+    useReviewStore.setState({ status: undefined, unsupported: false, fileDiffs: {}, selectedPath: undefined, approval: 'idle' });
   });
 
   it('扫描期间的并发调用合并成一次 RPC,并补跑一次拿到之后的状态', async () => {
@@ -70,8 +70,10 @@ describe('reviewStore.refresh 的合并与补跑', () => {
       unsupported: true,
       fileDiffs: { 'src/index.ts': { ok: true, path: 'src/index.ts', truncated: false } },
       loadingPaths: { 'src/index.ts': true },
-      expandedPaths: ['src/index.ts'],
+      selectedPath: 'src/index.ts',
       commentTarget: { path: 'src/index.ts', line: 3, side: 'new' },
+      approval: 'committed',
+      lastCommit: { branch: 'main' },
     });
     useReviewStore.getState().reset();
     const after = useReviewStore.getState();
@@ -79,7 +81,58 @@ describe('reviewStore.refresh 的合并与补跑', () => {
     expect(after.unsupported).toBe(false);
     expect(after.fileDiffs).toEqual({});
     expect(after.loadingPaths).toEqual({});
-    expect(after.expandedPaths).toEqual([]);
+    expect(after.selectedPath).toBeUndefined();
     expect(after.commentTarget).toBeUndefined();
+    expect(after.approval).toBe('idle');
+    expect(after.lastCommit).toBeUndefined();
+  });
+
+  it('批准流:approve 成功进入 committed;新 pending 出现时回落 idle', async () => {
+    const pendingResolves: Array<(value: unknown) => void> = [];
+    const rpc = vi.fn((request: { kind: string }) => {
+      if (request.kind === 'commitAll') return Promise.resolve({ ok: true, sha: 'a'.repeat(40) });
+      if (request.kind === 'workspaceStatus') {
+        return new Promise((resolve) => pendingResolves.push(resolve));
+      }
+      return Promise.resolve(undefined);
+    });
+    (globalThis as { mojocode?: unknown }).mojocode = { rpc };
+    useReviewStore.setState({
+      status: { ok: true, branch: 'main', entries: [], additions: 0, deletions: 0, truncated: false },
+    });
+
+    const approving = useReviewStore.getState().approve('msg');
+    // commitAll 是异步的:等 refresh 的 workspaceStatus RPC 真正发出再兑现。
+    while (pendingResolves.length === 0) await Promise.resolve();
+    pendingResolves[0]!(status('main')); // 提交后的干净树
+    await approving;
+    expect(useReviewStore.getState().approval).toBe('committed');
+    expect(useReviewStore.getState().lastCommit?.branch).toBe('main');
+
+    // 不变量:又出现新 pending 时 committed 必须回落——横幅不能盖住新变更。
+    const refreshing = useReviewStore.getState().refresh();
+    pendingResolves[1]!({
+      ok: true,
+      branch: 'main',
+      entries: [{ path: 'a.ts', change: 'modified', staged: false }],
+      additions: 1,
+      deletions: 0,
+      truncated: false,
+    });
+    await refreshing;
+    expect(useReviewStore.getState().approval).toBe('idle');
+  });
+
+  it('approve 失败:回 idle 并留 approvalError', async () => {
+    const rpc = vi.fn((request: { kind: string }) => {
+      if (request.kind === 'commitAll') {
+        return Promise.resolve({ ok: false, reason: 'git-error', detail: 'boom' });
+      }
+      return Promise.resolve(status('main'));
+    });
+    (globalThis as { mojocode?: unknown }).mojocode = { rpc };
+    await useReviewStore.getState().approve('msg');
+    expect(useReviewStore.getState().approval).toBe('idle');
+    expect(useReviewStore.getState().approvalError).toBe('boom');
   });
 });

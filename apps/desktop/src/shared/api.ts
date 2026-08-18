@@ -9,8 +9,9 @@ import type {
   ConnectionState,
   PushChannel,
   RpcRequest,
-  SessionMetaSummary,
   SubscribeResult,
+  TaskScoped,
+  TaskSummary,
   WireEvent,
 } from './ipc.js';
 import type { StateSnapshot } from '@core/protocol';
@@ -18,30 +19,43 @@ import type { PermissionRequest } from '@core/events';
 import type { TimelineItem } from '@core/types';
 
 export interface MojocodeDesktopApi {
-  /** 订阅桥(幂等):返回初始快照 + 回放条目 + 连接状态。 */
+  /** 订阅桥(幂等):返回任务列表 + 各活跃任务的即时状态(聚焦任务带回放)。 */
   subscribe(): Promise<SubscribeResult>;
-  /** 调用白名单方法。失败以 rejection 形式返回(message 过 IPC 保留)。 */
-  rpc(request: RpcRequest): Promise<unknown>;
+  /**
+   * 调用白名单方法。缺省路由到聚焦任务;带 taskId 时定向(后台任务的审批
+   * 决策等)。失败以 rejection 形式返回(message 过 IPC 保留)。
+   */
+  rpc(request: RpcRequest, taskId?: string): Promise<unknown>;
   /** 订阅下行通道,载荷类型按通道推导。返回退订函数。 */
   on<C extends PushChannel>(channel: C, listener: (payload: PushPayloads[C]) => void): () => void;
   /** 主进程平台('darwin' 等):侧栏红绿灯让位 / drag region 仅 mac 需要。 */
   readonly platform: string;
   /** 原生目录选择器(添加项目)。取消返回 undefined。 */
   pickDirectory(): Promise<string | undefined>;
-  /**
-   * 切换工作区:重启受管 sidecar 到新 root,随后 main 强推整套镜像
-   * (state/replay/sessions)。attach 模式或当前有运行中的轮会 reject。
-   */
-  switchWorkspace(root: string): Promise<void>;
+  /** 新建任务(在指定 root 拉一个 sidecar;resume/fork 复活历史)。返回 taskId。 */
+  createTask(opts: { root: string; resume?: string; fork?: boolean }): Promise<string>;
+  /** 打开任务:活跃的直接聚焦,休眠的以 --resume 复活。返回 taskId。 */
+  openTask(sessionId: string): Promise<string>;
+  /** 关停任务的 sidecar(行保留,变 dormant)。 */
+  closeTask(taskId: string): Promise<void>;
+  /** 聚焦切换:main 重推该任务的回放。 */
+  focusTask(taskId: string): Promise<void>;
+  /** 在 Finder/资源管理器中显示(右键菜单「在 Finder 中显示」)。 */
+  revealPath(path: string): Promise<void>;
+  /** 用系统默认程序打开文件(diff 菜单「在编辑器中打开」)。 */
+  openPath(path: string): Promise<void>;
+  /** 拖入的 File 对象 → 磁盘绝对路径(导入项目对话框的拖放区;sandbox 下
+   * renderer 拿不到 file.path,只能经 preload 的 webUtils)。 */
+  pathForFile(file: File): string;
 }
 
-/** 各通道的载荷类型(on 的 listener 参数由此推导)。 */
+/** 各通道的载荷类型(on 的 listener 参数由此推导);per-task 通道包 TaskScoped 信封。 */
 export interface PushPayloads {
-  state: StateSnapshot;
-  event: WireEvent[];
-  replay: TimelineItem[];
-  connection: ConnectionState;
-  permission: PermissionRequest;
-  /** undefined = server 过旧(unknown method),侧栏降级提示。 */
-  sessions: SessionMetaSummary[] | undefined;
+  state: TaskScoped<StateSnapshot>;
+  event: TaskScoped<WireEvent[]>;
+  replay: TaskScoped<TimelineItem[]>;
+  connection: TaskScoped<ConnectionState>;
+  permission: TaskScoped<PermissionRequest>;
+  /** undefined = 会话列表读取失败(降级提示)。 */
+  tasks: TaskSummary[] | undefined;
 }

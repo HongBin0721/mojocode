@@ -21,6 +21,7 @@ import { t, useLocale } from '../i18n/index.js';
 import { configuredModelGroups } from '../utils/model-settings.js';
 import { CascadeMenuList, type CascadeItem, type CascadeSection } from './CascadeMenu.js';
 import { MenuCloseContext } from './Menu.js';
+import { GearIcon } from './icons.js';
 
 export function ModelMenuList() {
   useLocale();
@@ -74,6 +75,8 @@ export function ModelMenuList() {
     group.models.map((model) => ({
       id: model.id,
       label: model.id,
+      // 配置了思考(档位/自定义参数)的条目带「思考」tag(设计稿形态)。
+      ...(model.thinks ? { tag: t('modelMenu.thinks') } : {}),
       current: snapshot?.provider.id === group.providerId && snapshot?.provider.model === model.id,
     }));
 
@@ -89,7 +92,12 @@ export function ModelMenuList() {
     <CascadeMenuList
       sections={sections}
       footer={{
-        label: t('modelMenu.manage'),
+        label: (
+          <span className="cascade-footer-label">
+            <GearIcon size={13} />
+            {t('modelMenu.manage')}
+          </span>
+        ),
         onClick: () => {
           closeMenu();
           openSettings('models');

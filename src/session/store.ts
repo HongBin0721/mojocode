@@ -17,6 +17,12 @@ export interface SessionMeta {
   /** 第一条用户消息,用作 `mojocode --resume` 中的标签。 */
   title: string;
   messageCount: number;
+  /**
+   * 归档时间(ISO)。缺省 = 未归档;用时间戳而非布尔,归档视图可按它排序,
+   * 旧 meta 文件没有此字段天然兼容。归档会话仍出现在 `list()` 里,由消费端
+   * 过滤(GUI 归档视图与任务列表用同一 RPC)。
+   */
+  archivedAt?: string;
 }
 
 /** 消息之外需要跨会话恢复的东西:todos、会话级授权规则、两轴权限。 */
@@ -37,6 +43,19 @@ export interface SessionState {
    * 「已设定但不自动开跑」——打开一个旧会话不该凭空烧掉一轮 token。
    */
   goal?: { condition: string };
+  /**
+   * 本会话经 write/edit 落地过的文件(任务视角的变更索引)。可选:空时
+   * 整个字段不出现,老会话的状态 JSON 一字不差、脏检查不多写记录。
+   * bash 造成的变更不在此列——git 真相仍以 workspaceStatus 为准。
+   */
+  changedFiles?: ChangedFileEntry[];
+}
+
+/** 一条任务级变更索引:文件路径 + 首见形态 + 落地次数。 */
+export interface ChangedFileEntry {
+  path: string;
+  kind: 'created' | 'modified';
+  count: number;
 }
 
 const EMPTY_STATE: SessionState = { todos: [], allowBash: [], allowWrite: [] };
@@ -269,6 +288,20 @@ export class SessionStore {
     this.meta_.model = model;
   }
 
+  /**
+   * 活跃会话的归档/改名走实例方法同步内存 meta_:save() 每轮都用内存 meta
+   * 重写 meta 记录和旁车,只改磁盘(静态路径)会在下一轮被冲掉。落盘由
+   * 调用方随后的静态方法或下一次 save 完成。
+   */
+  setArchivedFlag(archived: boolean): void {
+    if (archived) this.meta_.archivedAt = new Date().toISOString();
+    else delete this.meta_.archivedAt;
+  }
+
+  setTitle(title: string): void {
+    this.meta_.title = title;
+  }
+
   /** 已落盘的模型历史(压缩后是摘要+尾巴)。恢复会话时喂给 agent。 */
   get messages(): ModelMessage[] {
     return this.persisted;
@@ -441,6 +474,14 @@ export class SessionStore {
       try {
         const stat = await fs.stat(file);
         if (stat.mtimeMs >= cutoff) continue;
+        // 归档会话不清理:归档后不再写 → mtime 停走,按过期删会把用户明确
+        // 想留的任务清掉。旁车读不到时按未归档处理(维持旧行为)。
+        try {
+          const raw = await fs.readFile(path.join(dir, `${id}.meta.json`), 'utf8');
+          if ((JSON.parse(raw) as SessionMeta).archivedAt) continue;
+        } catch {
+          // 无旁车/损坏:视作未归档
+        }
         await fs.rm(file, { force: true });
         await fs.rm(path.join(dir, `${id}.meta.json`), { force: true });
         removed += 1;
@@ -449,6 +490,65 @@ export class SessionStore {
       }
     }
     return removed;
+  }
+
+  /**
+   * 会话生命周期的静态侧(GUI 的归档/改名/删除走这里)。
+   *
+   * 写入纪律:JSONL 是权威、旁车是缓存——meta 变更必须「追加 meta 记录 +
+   * 原子写旁车」两处都落。只写旁车的话,旁车一旦损坏,list() 慢路径会从
+   * JSONL 重建出没有该变更的 meta,归档状态凭空消失。
+   */
+  private static async updateMeta(
+    id: string,
+    dir: string | undefined,
+    mutate: (meta: SessionMeta) => void,
+  ): Promise<SessionMeta> {
+    const dir_ = dir ?? sessionsDir();
+    const file = path.join(dir_, `${id}.jsonl`);
+    // 快路径读旁车拿当前 meta;损坏/缺失时慢路径解析 JSONL。
+    let meta: SessionMeta | undefined;
+    try {
+      meta = JSON.parse(await fs.readFile(path.join(dir_, `${id}.meta.json`), 'utf8')) as SessionMeta;
+    } catch {
+      meta = (await SessionStore.open(id, dir_)).meta_;
+    }
+    if (!meta) throw new SessionNotFoundError(id);
+
+    mutate(meta);
+    // 先确认 JSONL 还在(并发删除的会话不该被"复活"出一个孤儿旁车)。
+    try {
+      await fs.access(file);
+    } catch {
+      throw new SessionNotFoundError(id);
+    }
+    await fs.appendFile(file, `${JSON.stringify({ kind: 'meta', meta })}\n`, 'utf8');
+    const tmp = path.join(dir_, `${id}.meta.json.tmp`);
+    await fs.writeFile(tmp, JSON.stringify(meta), 'utf8');
+    await fs.rename(tmp, path.join(dir_, `${id}.meta.json`));
+    return meta;
+  }
+
+  /** 归档/取消归档。返回更新后的 meta。 */
+  static setArchived(id: string, archived: boolean, dir?: string): Promise<SessionMeta> {
+    return SessionStore.updateMeta(id, dir, (meta) => {
+      if (archived) meta.archivedAt = new Date().toISOString();
+      else delete meta.archivedAt;
+    });
+  }
+
+  /** 重命名(设 title)。返回更新后的 meta。 */
+  static rename(id: string, title: string, dir?: string): Promise<SessionMeta> {
+    return SessionStore.updateMeta(id, dir, (meta) => {
+      meta.title = title;
+    });
+  }
+
+  /** 真删磁盘文件(JSONL + 旁车)。幂等:文件不存在也算成功。 */
+  static async remove(id: string, dir?: string): Promise<void> {
+    const dir_ = dir ?? sessionsDir();
+    await fs.rm(path.join(dir_, `${id}.jsonl`), { force: true });
+    await fs.rm(path.join(dir_, `${id}.meta.json`), { force: true });
   }
 
   /**

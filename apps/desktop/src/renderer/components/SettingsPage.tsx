@@ -18,6 +18,11 @@ import {
   clampUiFontSize,
   loadUiFontSize,
   saveUiFontSize,
+  applyCodeFontScale,
+  loadCodeFontScale,
+  saveCodeFontScale,
+  CODE_FONT_SCALES,
+  type CodeFontScale,
 } from '../utils/appearance.js';
 import { ModelsSettings } from './ModelsSettings.js';
 import { Select } from './Select.js';
@@ -70,11 +75,17 @@ function GeneralSection() {
 function AppearanceSection() {
   useLocale();
   const [fontSize, setFontSize] = React.useState(loadUiFontSize);
+  const [codeScale, setCodeScale] = React.useState(loadCodeFontScale);
   const commitFontSize = (value: number) => {
     const next = clampUiFontSize(value);
     setFontSize(next);
     applyUiFontSize(next);
     saveUiFontSize(next);
+  };
+  const commitCodeScale = (next: CodeFontScale) => {
+    setCodeScale(next);
+    applyCodeFontScale(next);
+    saveCodeFontScale(next);
   };
   return (
     <>
@@ -102,6 +113,21 @@ function AppearanceSection() {
               onChange={(e) => commitFontSize(Number(e.target.value))}
             />
             px
+          </span>
+        </SettingRow>
+        {/* 代码字号:diff / 终端 / 工具输出等宽区域的三档(设计稿) */}
+        <SettingRow label={t('settings.codeFontSize')} desc={t('settings.codeFontSizeDesc')}>
+          <span className="chip-group">
+            {CODE_FONT_SCALES.map((scale) => (
+              <button
+                key={scale}
+                type="button"
+                className={`chip ${codeScale === scale ? 'chip-active' : ''}`}
+                onClick={() => commitCodeScale(scale)}
+              >
+                {t(`settings.codeFont.${scale}` as 'settings.codeFont.compact')}
+              </button>
+            ))}
           </span>
         </SettingRow>
       </div>

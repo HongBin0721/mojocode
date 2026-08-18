@@ -1,0 +1,267 @@
+/* ---- 输入区:ZCode 输入块(rounded-2xl 外框 + 内嵌卡片 textarea + 底部工具栏)---- */
+
+.composer {
+  position: relative;
+  flex: none;
+  padding: 6px 16px 10px;
+}
+
+.composer-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--color-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  padding: 12px;
+  transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+}
+.composer-box:focus-within {
+  border-color: var(--color-border-hover);
+  box-shadow: 0 0 0 1px var(--color-border-hover);
+}
+/* 聚焦只抬边框,底色保持不变(不换 input-focused 深底) */
+/* 拖附件悬停:品牌色边框 + 内发光(ZCode file-drag 态) */
+.composer-box-dragging {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 1px var(--color-brand), 0 0 0 4px var(--color-brand-soft);
+}
+
+.composer-attachments {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 3px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-menu);
+  font-size: 12px;
+  color: var(--color-foreground-subtle);
+  max-width: 220px;
+}
+.attachment-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex: none;
+}
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--color-foreground-subtlest);
+  font-size: 13px;
+}
+.chip-remove:hover {
+  background: none;
+  color: var(--color-foreground);
+}
+
+/* 扁平内嵌:textarea 透明,与外框融为一体(ZCode 输入块) */
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  max-height: 156px;
+  resize: none;
+  padding: 4px 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.composer textarea:focus {
+  outline: none;
+}
+.composer textarea::placeholder {
+  color: var(--color-foreground-subtlest);
+}
+
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* 工具栏胶囊(设计稿:28px 高、全圆角、透明底;hover 抬底 + 环) */
+.composer-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-foreground-dim);
+  font: inherit;
+  font-size: var(--fs-115);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.composer-tool:not(:disabled):hover {
+  background: var(--color-card-selected);
+  border-color: var(--color-border-strong);
+  color: var(--color-foreground);
+}
+/* 完全访问:ZCode 橙(chip 文字与图标整体染色) */
+.composer-tool-danger,
+.composer-tool-danger:not(:disabled):hover {
+  color: var(--color-brand);
+}
+.composer-tool-danger .composer-caret {
+  color: var(--color-brand);
+}
+.composer-tool-flash {
+  box-shadow: 0 0 0 3px var(--color-brand-soft);
+}
+/* 模型名:亮白(ZCode 工具栏里模型是最亮的一段) */
+.composer-tool-model {
+  color: var(--color-foreground);
+}
+
+/* + 附件:纯图标钮 */
+.composer-plus {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* caret-up-down(设计稿 11px #75798c);inline-flex 让 SVG 与文字垂直对齐 */
+.composer-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-foreground-subtlest);
+}
+
+/* 发送/停止:30×30 灰底白箭头方钮(空闲 ↑ / 运行中 ■;设计稿形态) */
+.composer-send {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.composer-send:not(:disabled):hover {
+  background: var(--color-primary-hover);
+}
+.composer-send:disabled {
+  background: var(--color-primary-disabled);
+  color: var(--color-primary-disabled-foreground);
+  border-color: var(--color-border);
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 拖放覆盖:居中 pill 提示 */
+.composer-drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-2xl);
+  background: rgba(145, 132, 217, 0.12);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+.composer-drag-pill {
+  padding: 8px 16px;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border-hover);
+  background: rgba(145, 132, 217, 0.18);
+  color: var(--color-accent-soft);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+
+/* 上下文环(设计稿):28px 悬停区 / 15px conic 环 / 9px 内孔挖回输入底色 */
+.ctx-ring-wrap {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  cursor: default;
+}
+.ctx-ring-wrap:hover {
+  background: var(--color-card-selected);
+}
+.ctx-ring {
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+}
+.ctx-ring-hole {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--color-input);
+}
+.ctx-tip {
+  position: absolute;
+  bottom: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 210px;
+  padding: 10px 12px;
+  border-radius: var(--radius-xl);
+  background: var(--color-menu);
+  box-shadow: var(--ring-pop), var(--shadow-pop);
+  z-index: 25;
+}
+.ctx-tip-title {
+  font-size: var(--fs-115);
+  color: var(--color-foreground-mid);
+  margin-bottom: 4px;
+}
+.ctx-tip-line {
+  font-size: var(--fs-115);
+  color: var(--color-foreground-soft);
+}
+.ctx-tip-sub {
+  font-size: var(--fs-115);
+  color: var(--color-foreground-subtle);
+}

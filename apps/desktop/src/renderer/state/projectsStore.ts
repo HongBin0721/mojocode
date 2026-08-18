@@ -10,11 +10,19 @@ import { addProject, loadProjects, removeProject } from '../utils/projects.js';
 import { readLocal, writeLocal } from '../utils/host.js';
 
 const STORAGE_KEY = 'mojocode.projects';
+const SELECTED_KEY = 'mojocode.selectedProject';
+const PINNED_KEY = 'mojocode.pinnedTasks';
 
 export interface ProjectsStore {
   projects: string[];
+  /** 侧栏当前查看的项目(过滤视角;新任务落这个 root)。null = 跟随聚焦任务。 */
+  selected: string | null;
+  /** 置顶的任务 id(右键菜单「置顶」;排序时前置)。 */
+  pinned: string[];
   add(root: string): void;
   remove(root: string): void;
+  select(root: string): void;
+  togglePin(taskId: string): void;
 }
 
 /** 增删共用:纯函数没产生变化(同引用)就不落盘、不唤醒订阅者。 */
@@ -30,6 +38,24 @@ function apply(
 
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   projects: loadProjects(readLocal(STORAGE_KEY)),
+  selected: readLocal(SELECTED_KEY) || null,
+  pinned: loadProjects(readLocal(PINNED_KEY)),
   add: (root) => apply(set, get().projects, addProject(get().projects, root)),
-  remove: (root) => apply(set, get().projects, removeProject(get().projects, root)),
+  remove: (root) => {
+    apply(set, get().projects, removeProject(get().projects, root));
+    if (get().selected === root) {
+      writeLocal(SELECTED_KEY, '');
+      set({ selected: null });
+    }
+  },
+  select: (root) => {
+    writeLocal(SELECTED_KEY, root);
+    set({ selected: root });
+  },
+  togglePin: (taskId) => {
+    const prev = get().pinned;
+    const next = prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId];
+    writeLocal(PINNED_KEY, JSON.stringify(next));
+    set({ pinned: next });
+  },
 }));

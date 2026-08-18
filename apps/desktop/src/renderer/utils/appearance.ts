@@ -39,3 +39,36 @@ export function initUiFontSize(): void {
   const size = loadUiFontSize();
   if (size !== UI_FONT_SIZE_DEFAULT) applyUiFontSize(size);
 }
+
+/**
+ * 代码字号档(设置页·外观的三档:紧凑 11 / 标准 12 / 宽松 14)。应用方式是
+ * 给 `:root` 打 `data-font-scale`,tokens.css 里按属性选择器覆盖 --fs-code
+ * ——diff / 终端 / 工具输出等等宽区域统一跟着走,界面字号(--ui-font-size)
+ * 与它正交,各管各的。
+ */
+
+const CODE_SCALE_KEY = 'mojocode.codeFontScale';
+
+export type CodeFontScale = 'compact' | 'standard' | 'relaxed';
+
+export const CODE_FONT_SCALES: CodeFontScale[] = ['compact', 'standard', 'relaxed'];
+
+export function loadCodeFontScale(): CodeFontScale {
+  const raw = readLocal(CODE_SCALE_KEY);
+  return raw === 'compact' || raw === 'relaxed' ? raw : 'standard';
+}
+
+export function applyCodeFontScale(scale: CodeFontScale): void {
+  if (typeof document === 'undefined') return;
+  if (scale === 'standard') document.documentElement.removeAttribute('data-font-scale');
+  else document.documentElement.setAttribute('data-font-scale', scale);
+}
+
+export function saveCodeFontScale(scale: CodeFontScale): void {
+  writeLocal(CODE_SCALE_KEY, scale);
+}
+
+/** 启动时恢复(标准档不写属性,保持 stylesheet 原值)。 */
+export function initCodeFontScale(): void {
+  applyCodeFontScale(loadCodeFontScale());
+}

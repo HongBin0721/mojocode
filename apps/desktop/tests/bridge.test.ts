@@ -1,7 +1,8 @@
 /**
  * IPC 桥单测:createBridge 的依赖以最小形状注入,无需 mock electron。
- * 覆盖:事件批量合并、状态去重推送、权限 asker 往返、订阅幂等(含挂起审批
- * 重发)、dispose 收尾挂起审批、不可恢复错误 → lost、RPC 白名单透传。
+ * 覆盖:TaskScoped 信封、事件批量合并、状态去重推送、权限 asker 往返、
+ * 订阅幂等(含挂起审批重发)、dispose 收尾挂起审批、不可恢复错误 → lost、
+ * RPC 白名单透传、onSessionsMutated 通知。换会话三连已退役,不再有对应用例。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -37,6 +38,7 @@ interface AgentSpies {
 interface Harness {
   bridge: Bridge;
   bus: EventBus;
+  onSessionsMutated: ReturnType<typeof vi.fn>;
   /** (channel, args) 的发送记录。 */
   sends: Array<{ channel: string; args: unknown[] }>;
   asker: () => PermissionAsker;
@@ -105,12 +107,9 @@ function makeHarness(snapshotSeed = 1): Harness {
       },
     },
     agent: { ...agents, compact: vi.fn().mockResolvedValue(undefined) },
-    newSession: vi.fn().mockResolvedValue({ id: 's2' }),
-    resumeSession: vi.fn().mockResolvedValue({ id: 's2' }),
-    forkSession: vi.fn().mockResolvedValue({ id: 's3' }),
-    // 模拟旧 server:listSessions 尚不存在,pushSessions 捕获后以 undefined
-    // 下发(侧栏降级)。
+    // 模拟旧 server:listSessions 尚不存在(RPC 层不吞,调用方降级)。
     listSessions: vi.fn().mockRejectedValue(new Error('unknown method: listSessions')),
+    archiveSession: vi.fn().mockResolvedValue({ id: 's1', archivedAt: '2026-01-01T00:00:00Z' }),
     ...commands,
     switch: vi.fn().mockResolvedValue(undefined),
     ...providerOps,
@@ -118,7 +117,9 @@ function makeHarness(snapshotSeed = 1): Harness {
     setPlan: vi.fn(),
   } as unknown as RemoteSession;
 
+  const onSessionsMutated = vi.fn();
   const bridge = createBridge({
+    taskId: 'task-1',
     target: {
       send: (channel, ...args) => {
         sends.push({ channel, args });
@@ -126,11 +127,13 @@ function makeHarness(snapshotSeed = 1): Harness {
     },
     session,
     replay: async () => [],
+    onSessionsMutated,
   });
 
   return {
     bridge,
     bus,
+    onSessionsMutated,
     sends,
     asker: () => {
       if (!asker) throw new Error('asker 未注册');
@@ -148,6 +151,10 @@ function makeHarness(snapshotSeed = 1): Harness {
 
 const sendsOf = (h: Harness, channel: string) => h.sends.filter((entry) => entry.channel === channel);
 
+/** 下行推送都包 TaskScoped 信封:{ taskId, data }。 */
+const payloadOf = (entry: { args: unknown[] }): unknown =>
+  (entry.args[0] as { taskId: string; data: unknown }).data;
+
 const invokeRpc = async <T>(h: Harness, request: RpcRequest): Promise<T> =>
   (await h.bridge.dispatchRpc(request)) as T;
 
@@ -164,14 +171,15 @@ describe('createBridge', () => {
     await flushMicrotasks();
     const frames = sendsOf(h, IPC_CHANNELS.event);
     expect(frames).toHaveLength(1);
-    expect(frames[0]!.args[0]).toHaveLength(3);
+    expect((frames[0]!.args[0] as { taskId: string }).taskId).toBe('task-1');
+    expect(payloadOf(frames[0]!)).toHaveLength(3);
   });
 
   it('error 事件拆成 WireError 形态(可过 structured clone)', async () => {
     const h = makeHarness();
     h.bus.emit({ type: 'error', error: new Error('boom'), recoverable: true });
     await flushMicrotasks();
-    const events = sendsOf(h, IPC_CHANNELS.event)[0]!.args[0] as unknown[];
+    const events = payloadOf(sendsOf(h, IPC_CHANNELS.event)[0]!) as unknown[];
     expect(events[0]).toEqual({
       type: 'error',
       error: { name: 'Error', message: 'boom' },
@@ -203,7 +211,7 @@ describe('createBridge', () => {
     await flushMicrotasks();
     const pushes = sendsOf(h, IPC_CHANNELS.permission);
     expect(pushes).toHaveLength(1);
-    expect((pushes[0]!.args[0] as { id: string }).id).toBe('p1');
+    expect((payloadOf(pushes[0]!) as { id: string }).id).toBe('p1');
 
     const ok = await invokeRpc<boolean>(h, {
       kind: 'permission',
@@ -262,7 +270,7 @@ describe('createBridge', () => {
     const h = makeHarness();
     h.bus.emit({ type: 'error', error: new Error('server died'), recoverable: false });
     await flushMicrotasks();
-    const connections = sendsOf(h, IPC_CHANNELS.connection).map((e) => e.args[0]);
+    const connections = sendsOf(h, IPC_CHANNELS.connection).map((e) => payloadOf(e));
     expect(connections).toContain('lost');
   });
 
@@ -338,13 +346,54 @@ describe('createBridge', () => {
     await expect(invokeRpc(h, { kind: 'listSessions' })).rejects.toThrow('unknown method');
   });
 
-  it('newSession 后重推会话列表与回放(afterSessionSwitch);旧 server 降级为 undefined', async () => {
+  it('后台抑制:setForwarding(false) 后事件不过 IPC,但 state 照推', async () => {
     const h = makeHarness();
-    await invokeRpc(h, { kind: 'newSession' });
-    const replays = sendsOf(h, IPC_CHANNELS.replay);
-    expect(replays.length).toBeGreaterThanOrEqual(1);
-    const sessions = sendsOf(h, IPC_CHANNELS.sessions);
-    expect(sessions.length).toBeGreaterThanOrEqual(1); // 降级也是一次显式下发
-    expect(sessions.every((entry) => entry.args[0] === undefined)).toBe(true);
+    h.bridge.setForwarding(false);
+    h.bus.emit({ type: 'text-start', id: 't1' });
+    h.bus.emit({ type: 'text-delta', id: 't1', text: 'x' });
+    await flushMicrotasks();
+    expect(sendsOf(h, IPC_CHANNELS.event)).toHaveLength(0);
+    expect(sendsOf(h, IPC_CHANNELS.state).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('当前轮缓冲:聚焦回来时按序补齐;turn-start 清空、turn-end 收尾', async () => {
+    const h = makeHarness();
+    h.bridge.setForwarding(false);
+    h.bus.emit({ type: 'turn-start', userText: 'hi' });
+    h.bus.emit({ type: 'text-delta', id: 't1', text: '进行中' });
+    await flushMicrotasks();
+
+    h.bridge.replayBuffered();
+    const frames = sendsOf(h, IPC_CHANNELS.event);
+    expect(frames).toHaveLength(1);
+    const events = payloadOf(frames[0]!) as Array<{ type: string }>;
+    expect(events.map((event) => event.type)).toEqual(['turn-start', 'text-delta']);
+
+    // 轮结束后缓冲清空:再补齐没有内容可发。
+    h.bus.emit({
+      type: 'turn-end',
+      usage: { inputTokens: 1, outputTokens: 1 },
+      durationMs: 1,
+    } as never);
+    await flushMicrotasks();
+    const before = sendsOf(h, IPC_CHANNELS.event).length;
+    h.bridge.replayBuffered();
+    expect(sendsOf(h, IPC_CHANNELS.event)).toHaveLength(before);
+  });
+
+  it('archiveSession 成功后通知 onSessionsMutated(TaskManager 重推 tasks)', async () => {
+    const h = makeHarness();
+    await invokeRpc(h, { kind: 'archiveSession', id: 's1', archived: true });
+    expect(h.onSessionsMutated).toHaveBeenCalledTimes(1);
+  });
+
+  it('pendingPermissionRequest 反映挂起审批(TaskSummary 角标数据源)', async () => {
+    const h = makeHarness();
+    expect(h.bridge.pendingPermissionRequest()).toBeUndefined();
+    const pending = h.asker()({ id: 'p3', toolName: 'bash', title: 'bash: ls', risk: 'execute' });
+    expect(h.bridge.pendingPermissionRequest()?.id).toBe('p3');
+    await invokeRpc(h, { kind: 'permission', id: 'p3', decision: { type: 'deny' } });
+    expect(h.bridge.pendingPermissionRequest()).toBeUndefined();
+    await expect(pending).resolves.toEqual({ type: 'deny' });
   });
 });

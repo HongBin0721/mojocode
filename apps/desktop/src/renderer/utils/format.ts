@@ -28,6 +28,18 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+/** 上下文容量缩写(设计稿形态:大写 K/M,整数优先——200000 → "200K")。
+ * 与 formatTokens(轮 token 增量,小写)分开:容量是标称值,不该带小数噪音。 */
+export function formatContextWindow(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const k = n / 1000;
+    return Number.isInteger(k) ? `${k}K` : `${k.toFixed(1)}K`;
+  }
+  const m = n / 1_000_000;
+  return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;

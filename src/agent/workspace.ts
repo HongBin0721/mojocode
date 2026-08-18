@@ -5,8 +5,9 @@
  * reason 返回。差异是 git() 保留 exitCode——`git diff --no-index` 用 1 表示
  * 「有差异」的正常返回,不能像 review.ts 那样折叠进 ok。
  *
- * 只读:status/branch/diff,不做任何写操作(selective staging、revert 等由
- * 用户在自己的终端里完成)。
+ * 只读:status/branch/diff,本文件不做任何写操作。写侧对偶(GUI 显式操作
+ * 的 switchBranch/commitAll/discardAll/undoCommit)在 workspace-write.ts——
+ * 「哪些代码路径能改仓库」保持一 grep 便知,写操作绝不混进这里。
  */
 
 import { readFile } from 'node:fs/promises';
@@ -46,14 +47,15 @@ export interface FileDiff {
   truncated: boolean;
 }
 
-interface GitResult {
+export interface GitResult {
   exitCode: number | undefined;
   stdout: string;
   stderr: string;
 }
 
-/** host 侧跑 git:不抛异常,失败带回 exitCode/stderr(review.ts 同款样式 + exitCode)。 */
-async function git(root: string, args: string[]): Promise<GitResult> {
+/** host 侧跑 git:不抛异常,失败带回 exitCode/stderr(review.ts 同款样式 + exitCode)。
+ * 导出供 workspace-write.ts 复用——两侧共用一个 runner,超时/quotePath 语义一致。 */
+export async function git(root: string, args: string[]): Promise<GitResult> {
   try {
     const result = await execa(
       'git',
@@ -199,7 +201,14 @@ export async function collectFileDiff(root: string, file: string): Promise<FileD
   const inside = await git(root, ['rev-parse', '--is-inside-work-tree']);
   if (inside.exitCode !== 0 || inside.stdout.trim() !== 'true') return failDiff(file, 'no-repo');
 
-  const status = await git(root, ['status', '--porcelain', '--', file]);
+  // 路径基准必须是**仓库根**:collectWorkspaceStatus 的 porcelain 输出是相对
+  // toplevel 的,而 git 的 pathspec 默认相对 cwd——工作区是子目录时(GUI 在
+  // apps/desktop 打开而仓库根在上一级),拿 status 的路径回来查 diff 会被解析
+  // 成 <cwd>/<repo-relative>,一律 not-found。所以这里把 cwd 换成 toplevel。
+  const toplevel = await git(root, ['rev-parse', '--show-toplevel']);
+  const base = toplevel.exitCode === 0 && toplevel.stdout.trim() ? toplevel.stdout.trim() : root;
+
+  const status = await git(base, ['status', '--porcelain', '--', file]);
   if (status.exitCode === 0 && status.stdout.trim() === '') return failDiff(file, 'not-found');
   const entry = status.stdout
     .split('\n')
@@ -209,7 +218,7 @@ export async function collectFileDiff(root: string, file: string): Promise<FileD
 
   if (!isUntracked) {
     // vs HEAD(暂存 + 未暂存合并),与 review.ts 嵌给模型的命令同语义。
-    const diff = await git(root, ['diff', 'HEAD', '--', file]);
+    const diff = await git(base, ['diff', 'HEAD', '--', file]);
     if (diff.exitCode !== 0) return failDiff(file, 'git-error');
     // 已暂存但与 HEAD 无差异(如 rename 无内容变化)等情形:无补丁正文。
     const body = diff.stdout;
@@ -222,7 +231,7 @@ export async function collectFileDiff(root: string, file: string): Promise<FileD
   }
 
   // untracked:全新增补丁。二进制或超大文件直接降级。
-  const absolute = path.resolve(root, file);
+  const absolute = path.resolve(base, file);
   let content: Buffer;
   try {
     const stat = await readFile(absolute);
@@ -234,7 +243,7 @@ export async function collectFileDiff(root: string, file: string): Promise<FileD
   if (content.byteLength > MAX_UNTRACKED_BYTES) return failDiff(file, 'binary');
 
   // exitCode 1 = 有差异的正常返回;0 表示无差异(不该发生,防御处理)。
-  const diff = await git(root, ['diff', '--no-index', '--', '/dev/null', file]);
+  const diff = await git(base, ['diff', '--no-index', '--', '/dev/null', file]);
   if (diff.exitCode !== 0 && diff.exitCode !== 1) return failDiff(file, 'git-error');
   const body = diff.stdout;
   return {

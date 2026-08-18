@@ -12,7 +12,36 @@ import { ToolCard } from './ToolCard.js';
 import { TurnLine } from './TurnLine.js';
 import { TodoList } from './TodoList.js';
 import { localizeMode } from '../utils/mode-label.js';
-import { useLocale } from '../i18n/index.js';
+import { parsePlanSteps } from '../utils/plan-steps.js';
+import { t, useLocale } from '../i18n/index.js';
+import { CheckCircleIcon, CircleDashedIcon, SparkleIcon } from './icons.js';
+
+/** 计划卡:解析出步骤列表按设计稿渲染(勾/虚线圈);解析不出回退 Markdown。 */
+function PlanCard({ plan }: { plan: string }) {
+  useLocale();
+  const steps = parsePlanSteps(plan);
+  return (
+    <div className="plan-card">
+      <div className="plan-title">{t('plan.title')}</div>
+      {steps ? (
+        <div className="plan-steps">
+          {steps.map((step, index) => (
+            <div key={index} className={`plan-step ${step.done ? 'plan-step-done' : ''}`}>
+              {step.done ? (
+                <CheckCircleIcon size={14} weight="fill" />
+              ) : (
+                <CircleDashedIcon size={14} />
+              )}
+              <span>{step.text}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Markdown text={plan} />
+      )}
+    </div>
+  );
+}
 
 /** banner 单独成组件:它是唯一要跟随语言重渲染的分支(模式 pill 走
  * localizeMode),locale 订阅只挂在这里——挂在外层会让长会话的每一条
@@ -47,6 +76,14 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
     case 'assistant':
       return (
         <div className={`entry entry-assistant ${item.continuation ? 'entry-continuation' : ''}`}>
+          {/* 22px sparkle 头像方块(设计稿);同一轮的续段不重复头像 */}
+          {!item.continuation ? (
+            <span className="entry-avatar">
+              <SparkleIcon size={12} />
+            </span>
+          ) : (
+            <span className="entry-avatar entry-avatar-ghost" />
+          )}
           <div className="entry-body">
             <Markdown text={item.text} />
           </div>
@@ -56,14 +93,7 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
       return <ReasoningBlock durationMs={item.durationMs} text={item.text} />;
     case 'tool': {
       const plan = extractPlan(item);
-      if (plan) {
-        return (
-          <div className="plan-card">
-            <div className="plan-title">PLAN</div>
-            <Markdown text={plan} />
-          </div>
-        );
-      }
+      if (plan) return <PlanCard plan={plan} />;
       const todos = extractTodos(item);
       if (todos) return <TodoList todos={todos} />;
       return (

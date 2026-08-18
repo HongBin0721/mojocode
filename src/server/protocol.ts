@@ -25,6 +25,7 @@ import type { McpStatus } from '../mcp/client.js';
 import type { TodoItem } from '../tools/index.js';
 import type { GoalStatus } from '../agent/goal.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
+import type { ChangedFileEntry } from '../session/store.js';
 
 export interface WireError {
   name: string;
@@ -66,6 +67,12 @@ export interface StateSnapshot {
    * 调用走 runSkill RPC,在 server 侧展开。
    */
   skills: SkillCommandInfo[];
+  /**
+   * 本会话经 write/edit 落地过的文件(任务视角变更索引,按 path 排序保
+   * snapshotKey 稳定)。可选:旧 server 没有该字段,client 回退 `[]`;
+   * git 真相仍以 workspaceStatus 为准(bash 造成的变更不在此列)。
+   */
+  changedFiles?: ChangedFileEntry[];
   /** server 侧的取样时刻,client 外推 goal 计时用。 */
   sentAt: number;
 }

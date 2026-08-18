@@ -45,7 +45,21 @@ import {
   type TaskMode,
   type TaskToolDeps,
 } from '../tools/task.js';
-import { SessionStore, type SessionState } from '../session/store.js';
+import {
+  SessionStore,
+  type ChangedFileEntry,
+  type SessionMeta,
+  type SessionState,
+} from '../session/store.js';
+import { listWorkspaceFiles } from './file-index.js';
+import { readWorkspaceFile, type FileContent } from './workspace-read.js';
+import {
+  commitAll as gitCommitAll,
+  discardAll as gitDiscardAll,
+  switchBranch as gitSwitchBranch,
+  undoCommit as gitUndoCommit,
+  type GitOpResult,
+} from '../agent/workspace-write.js';
 import { t } from '../i18n/index.js';
 import fs from 'node:fs/promises';
 import { SkillManager } from '../skills/manager.js';
@@ -100,6 +114,29 @@ export interface Session {
    * 延续,只是从此写入新文件,源会话停在分叉点不再被写。
    */
   forkSession: () => Promise<SessionStore>;
+  /**
+   * 归档/取消归档任意会话(GUI 任务列表)。目标是当前活跃会话时同步内存
+   * meta——save() 每轮用内存 meta 重写记录,只改磁盘会在下一轮被冲掉。
+   */
+  archiveSession: (id: string, archived: boolean) => Promise<SessionMeta>;
+  /** 重命名任意会话(设 title);活跃会话同步内存 meta,理由同上。 */
+  renameSession: (id: string, title: string) => Promise<SessionMeta>;
+  /** 真删磁盘文件。当前活跃会话拒绝删除(serve 正拿着它写)。 */
+  deleteSession: (id: string) => Promise<void>;
+  /** GUI 文件树的数据源:工作区扁平文件清单(git ls-files 优先)。 */
+  listFiles: () => Promise<{ files: string[]; truncated: boolean }>;
+  /** GUI 文件预览:server 侧读文件(--attach 时仓库在 server 那台机器)。 */
+  readFile: (path: string) => Promise<FileContent>;
+  /** 本会话经 write/edit 落地过的文件(任务视角变更索引,进 StateSnapshot)。 */
+  readonly changedFiles: ChangedFileEntry[];
+  /**
+   * 工作区 git 写操作(GUI 显式操作,不经 PermissionGate;见 workspace-write.ts
+   * 的信任模型)。commit/discard 成功后清空 changedFiles(pending 已结清)。
+   */
+  switchBranch: (name: string) => Promise<GitOpResult>;
+  commitAll: (message: string) => Promise<GitOpResult>;
+  undoCommit: () => Promise<GitOpResult>;
+  discardAll: () => Promise<GitOpResult>;
   /**
    * 会话中途切换模型和/或 provider;返回新解析的 provider。apiKey 只在
    * "TUI 就地输入了新 key"的切换里出现,由实现并入配置后再解析。
@@ -224,6 +261,30 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
   const catalogSource = createCatalogSource();
 
+  /**
+   * 本会话经 write/edit 落地过的文件(任务视角的变更索引,进 StateSnapshot
+   * 与 SessionState)。局限写在明面上:bash 里的 git checkout / rm / 脚本生成
+   * 不会进列表也不会失效既有条目——GUI 的权威 pending 视图仍是
+   * workspaceStatus(git 真相),这份列表只回答「这个任务改过哪些文件」。
+   * 封顶 1000 条,超出丢弃(极端会话的快照体积保护)。
+   */
+  const changedFiles = new Map<string, { kind: 'created' | 'modified'; count: number }>();
+  const CHANGED_FILES_MAX = 1000;
+  const changedFilesList = (): Array<{ path: string; kind: 'created' | 'modified'; count: number }> =>
+    // 按 path 排序输出:snapshotKey 靠整份快照 stringify 去重,插入序抖动
+    // 会产生伪推送。
+    [...changedFiles.entries()]
+      .map(([path, entry]) => ({ path, ...entry }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  const restoreChangedFiles = (
+    entries: Array<{ path: string; kind: 'created' | 'modified'; count: number }> | undefined,
+  ): void => {
+    changedFiles.clear();
+    for (const entry of entries ?? []) {
+      changedFiles.set(entry.path, { kind: entry.kind, count: entry.count });
+    }
+  };
+
   // 会话状态快照:todos + 会话级授权规则 + 当前两轴权限。gate/store 在下方
   // 才创建,闭包按绑定取值,实际调用时都已就绪。
   const snapshotState = (): SessionState => {
@@ -251,6 +312,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 无目标时整个字段不出现:JSON.stringify 的结果与加这个功能之前一字
       // 不差,saveState 的脏检查因此不会为老会话平白多写一条 state 记录。
       ...(activeGoal ? { goal: { condition: activeGoal.condition } } : {}),
+      // changedFiles 同一手法:空时字段不出现。
+      ...(changedFiles.size > 0 ? { changedFiles: changedFilesList() } : {}),
     };
   };
   const persistState = (): void => {
@@ -575,6 +638,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // 跳过)。缓存命中率与成本核算都靠逐轮数据,而消息流里无从还原。取当下的
   // provider:/models 换过之后统计要记到实际服务的那个模型头上。尽力而为,
   // 失败只静默——统计缺一轮远好过打断一次会话。
+  // 聚合 write/edit 落地的文件(见 changedFiles 声明处的语义与局限)。
+  bus.on((event) => {
+    if (event.type !== 'tool-end' || event.isError) return;
+    if (event.toolName !== 'write' && event.toolName !== 'edit') return;
+    const out = event.output as { path?: string; changed?: boolean; created?: boolean } | undefined;
+    if (!out?.path || out.changed === false) return; // write 的"内容相同"短路不算变更
+    const prev = changedFiles.get(out.path);
+    if (prev) {
+      // created 只在首次为真;后续 edit 不把 kind 降级回 modified 之外的状态。
+      changedFiles.set(out.path, { kind: prev.kind, count: prev.count + 1 });
+    } else if (changedFiles.size < CHANGED_FILES_MAX) {
+      changedFiles.set(out.path, { kind: out.created ? 'created' : 'modified', count: 1 });
+    }
+  });
+
   bus.on((event) => {
     if (event.type !== 'turn-end') return;
     void store
@@ -602,6 +680,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   const restoreState = (state: SessionState): void => {
     todos.set(structuredClone(state.todos));
+    restoreChangedFiles(state.changedFiles);
     gate.setSessionRules(state);
     // else 分支同样重要:从一个带目标的会话 /resume 到不带目标的会话时,
     // 旧目标必须解除,否则它会悄悄接管新会话的轮次。
@@ -819,6 +898,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       agent.clear();
       todos.set([]);
       goal.clear();
+      changedFiles.clear();
       resetSkillActivation();
       persistState();
       return store;
@@ -851,6 +931,56 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 同一份旧值,脏检查会一直压住重写。这里按当前真实状态补一次。
       persistState();
       return store;
+    },
+    archiveSession: async (id, archived) => {
+      // 先落盘(静态路径是权威写入),再同步活跃实例的内存 meta——顺序反过来
+      // 也行,关键是两边一致;这里选"磁盘成功才改内存",失败时内存不脏。
+      const meta = await SessionStore.setArchived(id, archived);
+      if (id === store.id) store.setArchivedFlag(archived);
+      return meta;
+    },
+    renameSession: async (id, title) => {
+      const meta = await SessionStore.rename(id, title);
+      if (id === store.id) store.setTitle(title);
+      return meta;
+    },
+    deleteSession: async (id) => {
+      // 拒绝删除活跃会话:serve 正拿着它写,删了下一轮 save 会凭空重建文件。
+      // 措辞对齐 deleteProvider 的先例(英文过线,GUI 自己本地化)。
+      if (id === store.id) {
+        throw new Error(`Session "${id}" is active. Switch to another session first.`);
+      }
+      await SessionStore.remove(id);
+    },
+    listFiles: async () => {
+      // GUI 文件树要的清单比 @ 补全菜单全:limit 提到 20000,打满视为截断。
+      const limit = 20_000;
+      const files = await listWorkspaceFiles(root, limit);
+      return { files, truncated: files.length >= limit };
+    },
+    readFile: (filePath) => readWorkspaceFile(root, filePath, config.permissions.denyPath),
+    get changedFiles() {
+      return changedFilesList();
+    },
+    switchBranch: (name) => gitSwitchBranch(root, name),
+    commitAll: async (message) => {
+      const result = await gitCommitAll(root, message);
+      // pending 已结清,任务级变更索引一并清空(不发 notice:这是 GUI 发起的
+      // 操作,结果走 RPC 返回值,广播会打扰同 server 的其他客户端)。
+      if (result.ok) {
+        changedFiles.clear();
+        persistState();
+      }
+      return result;
+    },
+    undoCommit: () => gitUndoCommit(root),
+    discardAll: async () => {
+      const result = await gitDiscardAll(root);
+      if (result.ok) {
+        changedFiles.clear();
+        persistState();
+      }
+      return result;
     },
     switch: switchProvider,
     saveProvider: async (id, patch) => {

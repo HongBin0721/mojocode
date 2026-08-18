@@ -113,7 +113,11 @@ export function configuredModelGroups(
       providerId: id,
       label: providerLabel(id, override),
       contextWindows,
-      models: models.map((model) => ({ id: model.id })),
+      models: models.map((model) => ({
+        id: model.id,
+        // reasoning 配了(档位或 custom)即认为「会思考」——菜单行的 tag 数据源。
+        ...(model.reasoning !== undefined ? { thinks: true } : {}),
+      })),
     });
   }
   if (groups.length === 0) return undefined;

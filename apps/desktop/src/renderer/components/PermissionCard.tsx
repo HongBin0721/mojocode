@@ -65,9 +65,12 @@ function buildOptions(suggestedRule: string | undefined): OptionEntry[] {
 export function PermissionCard({
   request,
   onDecide,
+  sourceTask,
 }: {
   request: PermissionRequest;
   onDecide: (decision: PermissionDecision) => void;
+  /** 多任务下的来源标注(任务标题):切换瞬间的误批防线。 */
+  sourceTask?: string;
 }) {
   useLocale();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -119,6 +122,9 @@ export function PermissionCard({
         <span className="permission-heading">
           {isPlan ? request.title : t('permission.title')}
         </span>
+        {sourceTask ? (
+          <span className="permission-source">{t('permission.fromTask', { title: sourceTask })}</span>
+        ) : null}
       </div>
 
       {isPlan ? (

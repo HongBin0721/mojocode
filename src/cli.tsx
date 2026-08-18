@@ -378,7 +378,8 @@ async function resolveResume(
   }
 
   if (flags.resume === true && tui) {
-    const metas = await SessionStore.list(root);
+    // 归档会话不进恢复选择器(带精确 id 的 --resume <id> 仍可打开)。
+    const metas = (await SessionStore.list(root)).filter((m) => !m.archivedAt);
     if (metas.length === 0) {
       process.stderr.write(`${t('cli.noResume')}\n`);
       return undefined;

@@ -1,0 +1,91 @@
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-background);
+}
+
+html.platform-darwin {
+  /* 红绿灯内嵌在 44px 标题栏里(x:22),左内边距给它让位 */
+  --topbar-lead: 88px;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--ui-font-size);
+  line-height: 1.6;
+  color: var(--color-foreground);
+  overflow: hidden;
+  /* 桌面质感:界面 chrome(按钮/标签/导航)不可选中——全选或拖选不该把
+   * 整个界面染成选区色。内容区在下面按类放开。 */
+  user-select: none;
+}
+
+/* 可选中的内容面:消息正文、代码/diff/终端、文件预览、输入框。 */
+.markdown,
+.entry-bubble,
+.tool-output,
+.tool-output-code,
+.reasoning-body,
+.diff-body,
+.terminal-pane,
+.file-preview-body,
+input,
+textarea {
+  user-select: text;
+}
+
+::selection {
+  background: rgba(145, 132, 217, 0.3); /* accent 30%(DS 规格) */
+}
+
+/* 焦点环(DS 规格):鼠标点击不出环,键盘导航出 accent 双像素环。 */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 输入光标统一 accent(DS .input 规格)。 */
+input,
+textarea {
+  caret-color: var(--color-accent);
+}
+
+/* 表单控件不继承正文字体是浏览器默认——统一拉回 Inter 栈(DS 全局一种字体)。 */
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* 滚动条:宽 14,thumb 吃 3px 透明边,近于悬浮 */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  min-height: 32px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-hover);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner,
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
