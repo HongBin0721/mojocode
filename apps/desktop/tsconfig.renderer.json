@@ -3,7 +3,20 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    // renderer 白名单(与 electron.vite.config.ts 的 rendererAliases 对齐):
+    // extends 对 paths 是整体替换,这里只声明纯数据/纯类型模块 —— main-only
+    // 别名(remote/replay/i18n/session-store)在 renderer 里 typecheck 即报
+    // 「找不到模块」,不用等到 Vite 构建才暴露。
+    "paths": {
+      "@core/protocol": ["../../src/server/protocol.ts"],
+      "@core/events": ["../../src/core/events.ts"],
+      "@core/types": ["../../src/ui/types.ts"],
+      "@core/timeline-data": ["../../src/ui/timeline-data.ts"],
+      "@core/schema": ["../../src/config/schema.ts"],
+      "@core/providers": ["../../src/config/providers.ts"],
+      "@core/attachments": ["../../src/app/attachments.ts"]
+    }
   },
   "include": ["src/renderer", "src/shared", "tests/components"]
 }
