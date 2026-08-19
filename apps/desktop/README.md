@@ -23,10 +23,12 @@ Renderer(React + zustand:timelineReducer → 组件)
 - `src/renderer/` — React 界面(bridge/client.ts 订阅 → zustand store)
 - `tests/` — bridge / reducer / 组件测试(独立 vitest 配置)
 
-跨包引用:`@core/*` alias 直接编译仓库根 `src/` 里的纯模块(白名单见
-`tsconfig.json` 的 paths 与 `electron.vite.config.ts` 的同名 alias)。renderer
-侧新增 `@core/*` 引用前必须确认目标无 Node 依赖(浏览器构建会直接报错——
-这本身就是护栏)。
+跨包引用:`@core/*` alias 直接编译仓库根 `src/` 里的纯模块。白名单分两级:
+main 侧 11 条(`tsconfig.json` paths / `electron.vite.config.ts` mainAliases /
+`vitest.config.ts`),renderer 侧 7 条纯模块(`tsconfig.renderer.json` paths /
+rendererAliases)——renderer 误用 main-only 别名在 **typecheck 即报错**,多份
+拷贝的一致性由 `tests/alias-parity.test.ts` 锁定。两个根级配置文件本身也在
+typecheck 覆盖内(曾有 externalize 选项拼写错静默失效多时)。
 
 ## 开发
 
@@ -65,11 +67,13 @@ preload 的源码改动当前不会触发自动重建**(electron-vite 的 watch 
 - 不改 agent core、不改 TUI。server 侧只允许只读扩展(如 `listSessions`)。
 - token/url 永不进 renderer(state 快照已是脱敏产物);renderer 无 Node 访问
   (contextIsolation + sandbox,preload 只暴露类型化 API)。
-- 版本要求:Electron ≥ 37(内嵌 Node ≥ 22,与 CLI 的 engines 对齐);dev 模式
-  要求系统 node ≥ 22。
+- 版本要求:Electron 以 package.json 为准(内嵌 Node ≥ 22,与 CLI 的 engines
+  对齐);dev 模式要求系统 node ≥ 22。
 - 打包:electron-builder 骨架(files: out/ + extraResources 携带 `dist/` 与
   `node_modules` 的运行时依赖,`ELECTRON_RUN_AS_NODE=1 process.execPath` 充当
-  Node)已验证可行路径,配置在正式分发时落地,当前仅 dev 模式。
+  Node)已验证可行路径,配置在正式分发时落地,当前仅 dev 模式。本包
+  dependencies 刻意为空(renderer 依赖全打进 out/renderer,列在
+  devDependencies)——将来打包时 asar 不带冗余 node_modules。
 
 ## 已实现(M1–M4 + Codex 对齐 M-A/B/C + ZCode 对齐 M-D)
 
@@ -86,8 +90,8 @@ preload 的源码改动当前不会触发自动重建**(electron-vite 的 watch 
   server 侧新增只读 `workspaceStatus`/`fileDiff` RPC(src/agent/workspace.ts)
 - M-C 时间线 write/edit 卡走 DiffView;窄窗(<960px)面板转覆盖式抽屉
 - M-D ZCode 桌面端视觉/布局对齐(规格提取自 ZCode 3.7.7 产物):
-  - 窗口:mac 隐藏标题栏 + 红绿灯内嵌 (22,23) + 透明底 + under-window
-    vibrancy(`<html>.platform-darwin`);preload 暴露 `platform`
+  - 窗口:mac 隐藏标题栏 + 红绿灯内嵌 (22,16) + 不透明纯色 nocturne 底
+    (vibrancy 退役;`<html>.platform-darwin`);preload 暴露 `platform`
   - 设计令牌全面换为 ZCode 语义命名(--color-*:neutral 灰阶 + sky 品牌,
     层级用白色低透明度叠层表达),仅深色;14px 滚动条/圆角体系(气泡 12、
     输入块 16、菜单 12)
