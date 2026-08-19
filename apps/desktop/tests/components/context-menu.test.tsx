@@ -13,6 +13,10 @@ import { useDesktopStore } from '../../src/renderer/state/desktopStore.js';
 import { useProjectsStore } from '../../src/renderer/state/projectsStore.js';
 import { useUiStore } from '../../src/renderer/state/uiStore.js';
 import { setLocale } from '../../src/renderer/i18n/index.js';
+import {
+  acquireOverlayLayer,
+  resetOverlayStackForTest,
+} from '../../src/renderer/components/overlays/overlay-stack.js';
 import type { StateSnapshot } from '@core/protocol';
 import type { TaskSummary } from '../../src/shared/ipc.js';
 
@@ -36,6 +40,7 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
 
 beforeEach(() => {
   setLocale('zh-CN');
+  resetOverlayStackForTest();
   rpcMock.mockClear();
   createTaskMock.mockClear();
   window.mojocode = {
@@ -80,19 +85,17 @@ describe('ContextMenu', () => {
     expect(container).toBeTruthy();
   });
 
-  it('Esc 关闭;但更内层的 select 浮层存在时让位', () => {
+  it('Esc 关闭;但更内层浮层在栈顶时让位(浮层栈仲裁)', () => {
     const onClose = vi.fn();
     render(
       <ContextMenu x={0} y={0} items={[{ id: 'a', label: 'A' }]} onPick={vi.fn()} onClose={onClose} />,
     );
-    // 模拟内层 Select 打开:Esc 归它处理。
-    const inner = document.createElement('div');
-    inner.className = 'select-menu';
-    document.body.appendChild(inner);
+    // 模拟内层 Select 打开:Esc 归栈顶处理。
+    const inner = acquireOverlayLayer();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
 
-    inner.remove();
+    inner.release();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
   });

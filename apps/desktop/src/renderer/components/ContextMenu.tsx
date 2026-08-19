@@ -1,11 +1,12 @@
 /**
  * 通用右键菜单:全屏捕获层(点击/右键/滚动关闭)+ fixed 定位的菜单卡,
  * portal 到 body。Esc 在捕获阶段处理并 stopPropagation——只关自己;
- * 更内层的浮层(Select 的 .select-menu)存在时让位,与 ModelModal 同款守卫。
+ * 层级让位走浮层栈(useOverlayLayer 的栈顶判定),不再探测 DOM 类名。
  */
 
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayLayer } from './overlays/overlay-stack.js';
 
 export interface ContextMenuItem {
   id: string;
@@ -32,16 +33,18 @@ export function ContextMenu({
   onPick: (id: string) => void;
   onClose: () => void;
 }) {
+  const layer = useOverlayLayer(true);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      // 更内层的浮层自己处理 Esc(与 ModelModal 的 .select-menu 守卫同理)。
-      if (document.querySelector('.select-menu')) return;
+      if (!layer.isTop()) return; // 更内层的浮层(Select 等)先关
       event.stopPropagation();
       onClose();
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
+    // layer.isTop 是活引用,不进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose]);
 
   // 视口钳制:菜单不越出右/下缘(粗略按最大尺寸估算)。

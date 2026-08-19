@@ -5,15 +5,15 @@
  * (.modal-card)是 overflow-y:auto,就地 absolute 会被裁剪/顶出滚动;
  * 落点是 macOS 式:当前项那一行覆盖在触发器正上方(截图里 ZCode 的效果)。
  *
- * Esc 在捕获阶段监听并 stopPropagation:这拦得住 SettingsPage 的冒泡监听
- * (事件不再下行,冒泡相不会发生),拦不住同在 document 捕获相的 ModelModal
- * 监听(同节点上 stopPropagation 无效,那要 stopImmediatePropagation)——
- * 弹窗不被一并关掉靠的是它自己查 `.select-menu` 主动让行,见 ModelsSettings。
+ * Esc 在捕获阶段监听并 stopPropagation(拦住 SettingsPage 的冒泡监听);
+ * 展开期间入浮层栈(useOverlayLayer)——外层 Modal 的 Esc 处理器经栈顶判定
+ * 主动让位,`.select-menu` 类名从此只是样式,不再是层级仲裁哨兵。
  */
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAnchoredPortal } from '../utils/use-anchored-portal.js';
+import { useOverlayLayer } from './overlays/overlay-stack.js';
 import { CheckIcon, ChevronDownIcon } from './icons.js';
 
 export interface SelectOption {
@@ -39,6 +39,8 @@ export function Select({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const current = options.find((option) => option.value === value);
+  // 展开期间入浮层栈:外层 Modal 的 Esc 靠栈顶判定让位(浮层仲裁的新协议)。
+  useOverlayLayer(open);
 
   // 关闭的唯一出口;refocus 只给键盘路径(Esc/点选)——外点/滚动时用户的
   // 注意力已在别处,把焦点抢回触发器反而添乱。

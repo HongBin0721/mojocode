@@ -29,6 +29,7 @@ import { formatTokens, formatContextWindow } from '../utils/format.js';
 import { localizeEffort } from '../utils/mode-label.js';
 import { deriveProviderId, providerLabel, providerList, upsertModel } from '../utils/model-settings.js';
 import { Select } from './Select.js';
+import { Modal } from './overlays/Modal.js';
 import {
   ChevronDownIcon,
   EyeIcon,
@@ -184,19 +185,6 @@ function ModelModal({
       ? REASONING_EFFORTS.filter((level) => known.includes(level) || level === thinkMode)
       : REASONING_EFFORTS
   ).filter((level) => level !== 'auto' || thinkMode === 'auto');
-  // Esc 在捕获阶段拦下、只关弹窗:SettingsPage 在冒泡阶段听 Esc 关整个设置页。
-  // 思考模式选择器的浮层开着时让给它——它的捕获监听注册得晚、排在本处之后,
-  // 这里不让行会连弹窗一起关掉。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (document.querySelector('.select-menu')) return;
-      e.stopPropagation();
-      onClose();
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
   const submit = () => {
     const trimmed = id.trim();
     if (!trimmed) return;
@@ -226,14 +214,10 @@ function ModelModal({
     });
   };
   const title = initial ? t('settings.editModelTitle') : t('settings.addModel');
+  // portal/backdrop/Esc(捕获相 + 浮层栈仲裁:思考模式的 Select 开着时它是
+  // 栈顶,Esc 只关它)统一由 Modal 承担;SettingsPage 的冒泡 Esc 仍被拦住。
   return (
-    <div
-      className="modal-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="modal-card" role="dialog" aria-label={title}>
+    <Modal variant="modal" ariaLabel={title} onClose={onClose}>
         <div className="modal-head">
           <div className="modal-title">{title}</div>
           <button type="button" className="section-icon" title={t('settings.cancel')} onClick={onClose}>
@@ -340,8 +324,7 @@ function ModelModal({
             {t('settings.save')}
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
