@@ -80,6 +80,21 @@ describe('Sidebar(设计稿形态)', () => {
     expect(screen.getByText(/运行中 ·/)).toBeTruthy();
   });
 
+  it('空会话不进任务列表(聚焦中的新任务也不例外,首条消息落地才出现)', () => {
+    useDesktopStore.setState({
+      tasks: [
+        task({ id: 's-1', title: '修复登录' }),
+        task({ id: 's-empty', title: '', messageCount: 0 }),
+      ],
+      focusedTaskId: 's-empty',
+      snapshot: snapshot('/w', 's-empty'),
+    });
+    render(<Sidebar />);
+    expect(screen.getByText('修复登录')).toBeTruthy();
+    // 空会话无标题时行会退回 id 前缀显示——它压根不该有行。
+    expect(screen.queryByText('s-empty'.slice(0, 8))).toBeNull();
+  });
+
   it('点任务行走 openTask 动作', () => {
     render(<Sidebar />);
     fireEvent.click(screen.getByText('写测试'));

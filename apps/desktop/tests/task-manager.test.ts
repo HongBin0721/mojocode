@@ -25,6 +25,10 @@ interface FakeWorld {
   metas: TaskSummaryMeta[];
   /** 每个假会话的事件总线(测试据此模拟 sidecar 侧的事件/崩溃)。 */
   buses: Map<string, EventBus>;
+  /** 每个假会话镜像的 historyLength(模拟首条消息落地)。 */
+  historyLengths: Map<string, number>;
+  /** stateChanged 订阅者(测试据此触发镜像状态变化)。 */
+  stateListeners: Map<string, Set<() => void>>;
 }
 
 function makeWorld(): FakeWorld {
@@ -35,12 +39,21 @@ function makeWorld(): FakeWorld {
     disposed: [],
     metas: [],
     buses: new Map(),
+    historyLengths: new Map(),
+    stateListeners: new Map(),
   };
+}
+
+/** 模拟一帧 state 到达镜像(applyState 尾部的通知)。 */
+function fireStateChanged(world: FakeWorld, id: string): void {
+  for (const listener of world.stateListeners.get(id) ?? []) listener();
 }
 
 function fakeSession(world: FakeWorld, id: string): RemoteSession {
   const bus = new EventBus();
   world.buses.set(id, bus);
+  const stateListeners = new Set<() => void>();
+  world.stateListeners.set(id, stateListeners);
   return {
     bus,
     store: { id, messages: [], displayMessages: [] },
@@ -48,7 +61,11 @@ function fakeSession(world: FakeWorld, id: string): RemoteSession {
       return {
         root: '/w',
         storeId: id,
-        agent: { isRunning: world.running.has(id), isCompacting: false, historyLength: 0 },
+        agent: {
+          isRunning: world.running.has(id),
+          isCompacting: false,
+          historyLength: world.historyLengths.get(id) ?? 0,
+        },
         goal: { active: false, busy: false },
         todos: [],
         skills: [],
@@ -60,10 +77,19 @@ function fakeSession(world: FakeWorld, id: string): RemoteSession {
     },
     todos: { get: () => [], subscribe: () => () => {} },
     skillsChanged: () => () => {},
-    stateChanged: () => () => {},
+    stateChanged: (listener: () => void) => {
+      stateListeners.add(listener);
+      return () => stateListeners.delete(listener);
+    },
     gate: { setAsker: () => {} },
-    // 回放读 displayMessages(buildReplayItems)。
-    agent: {},
+    // 回放读 displayMessages(buildReplayItems);isRunning 是含乐观标志的
+    // getter(taskSummaries/容量淘汰读它),假对象同样从 world 取。
+    agent: {
+      get isRunning() {
+        return world.running.has(id);
+      },
+      run: vi.fn(async () => {}),
+    },
     dispose: vi.fn(async () => {
       world.disposed.push(id);
     }),
@@ -120,6 +146,59 @@ describe('createTaskManager', () => {
     expect(pushes.length).toBeGreaterThanOrEqual(1);
     const rows = pushes.at(-1)!.args[0] as TaskSummary[];
     expect(rows[0]).toMatchObject({ id: 's-1', status: 'connected', isRunning: false });
+  });
+
+  it('首条消息落地:镜像 historyLength 兜底 messageCount,state 变化重推 tasks', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-1'];
+    world.metas = [{ ...meta('s-1'), messageCount: 0 }];
+    const { manager, sends } = makeManager(world);
+    await manager.createTask({ root: '/w' });
+
+    const taskPushes = () => sends.filter((e) => e.channel === IPC_CHANNELS.tasks);
+    const lastRows = () => taskPushes().at(-1)!.args[0] as TaskSummary[];
+    // 新建时是空会话:messageCount 0(侧栏据此不显示行)。
+    expect(lastRows()[0]).toMatchObject({ id: 's-1', messageCount: 0 });
+
+    // 第一轮开始:isRunning 翻转 + 首条消息进镜像 → 重推,行即时「有内容」
+    // (磁盘 meta 还是 0,persist 有滞后)。
+    world.running.add('s-1');
+    world.historyLengths.set('s-1', 1);
+    const before = taskPushes().length;
+    fireStateChanged(world, 's-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(taskPushes().length).toBe(before + 1);
+    expect(lastRows()[0]).toMatchObject({ id: 's-1', messageCount: 1, isRunning: true });
+
+    // 行不关心的 state 帧(config/todos 等)不触发磁盘 list() 重推。
+    fireStateChanged(world, 's-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(taskPushes().length).toBe(before + 1);
+  });
+
+  it('首问乐观出现:run RPC 一经分发即重推,行带内容与乐观标题', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-1'];
+    world.metas = [{ ...meta('s-1'), messageCount: 0, title: '' }];
+    const { manager, sends } = makeManager(world);
+    await manager.createTask({ root: '/w' });
+    const taskPushes = () => sends.filter((e) => e.channel === IPC_CHANNELS.tasks);
+    const before = taskPushes().length;
+
+    // 不等镜像 state 帧(真实一轮里它最早在 step-end 才带出 historyLength)。
+    await manager.dispatchRpc({ kind: 'run', text: '帮我修个 bug' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(taskPushes().length).toBeGreaterThan(before);
+    const row = (taskPushes().at(-1)!.args[0] as TaskSummary[])[0]!;
+    expect(row).toMatchObject({ id: 's-1', messageCount: 1, title: '帮我修个 bug' });
+
+    // 磁盘 meta 生成标题后乐观标题让位。
+    world.metas = [{ ...meta('s-1'), messageCount: 2, title: '正式标题' }];
+    world.running.add('s-1');
+    fireStateChanged(world, 's-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const later = (taskPushes().at(-1)!.args[0] as TaskSummary[])[0]!;
+    expect(later).toMatchObject({ messageCount: 2, title: '正式标题', isRunning: true });
   });
 
   it('openTask:休眠会话以 --resume 复活(root 取自 meta);活跃的直接聚焦', async () => {

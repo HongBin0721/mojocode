@@ -45,6 +45,35 @@ interface ManagedTask {
   bridge: Bridge;
   status: TaskStatus;
   lastActivityAt: number;
+  /** 退订本任务镜像的 stateChanged(dispose 时调用)。 */
+  offState: () => void;
+  /**
+   * 首问乐观标记:run 类 RPC 一经分发就确定「有内容」。真实一轮里
+   * turn-start 发出时快照还没变(isRunning 未置位、消息未进 history),
+   * 第一个带出 historyLength 的 state 帧要等 step-end——不乐观置位的话,
+   * 整个首答期间侧栏都不会出现任务行。title 同理:磁盘 meta 的标题在
+   * 首次持久化之后才有。
+   */
+  optimistic?: { title: string };
+}
+
+/** 会开启一轮对话的 RPC(与 protocol 的 RUN_LIKE_METHODS 对应的 GUI 子集)。 */
+const RUN_RPC_KINDS = new Set(['run', 'runSkill', 'startReview', 'startSimplify']);
+
+/** 首问的乐观行标题(磁盘 meta 生成标题前的占位,取自用户输入)。 */
+function optimisticTitle(request: RpcRequest): string {
+  switch (request.kind) {
+    case 'run':
+      return (request.options?.display ?? request.text).trim().slice(0, 80);
+    case 'runSkill':
+      return request.display ?? `/${request.name}`;
+    case 'startReview':
+      return '/review';
+    case 'startSimplify':
+      return '/simplify';
+    default:
+      return '';
+  }
 }
 
 export interface TaskManagerDeps {
@@ -108,8 +137,18 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
       const managed = tasks.get(meta.id);
       return {
         ...meta,
+        // 活跃任务的行数据不等磁盘 meta(持久化 + list() 有滞后):messageCount
+        // 用镜像 historyLength 与首问乐观标记兜底,title 在 meta 生成标题前用
+        // 乐观标题占位,isRunning 读含乐观标志的 getter(与 Composer 同语义,
+        // run RPC 发出即为真,不等第一个 state 帧)。
+        messageCount: Math.max(
+          meta.messageCount,
+          managed?.desktop.session.snapshot.agent.historyLength ?? 0,
+          managed?.optimistic ? 1 : 0,
+        ),
+        title: meta.title || managed?.optimistic?.title || meta.title,
         status: managed?.status ?? 'dormant',
-        isRunning: managed?.desktop.session.snapshot.agent.isRunning ?? false,
+        isRunning: managed?.desktop.session.agent.isRunning ?? false,
         hasPendingPermission: managed?.bridge.pendingPermissionRequest() !== undefined,
         ...(managed ? { lastActivityAt: managed.lastActivityAt } : {}),
       };
@@ -122,6 +161,7 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
   };
 
   const disposeTask = async (task: ManagedTask): Promise<void> => {
+    task.offState();
     task.bridge.dispose();
     await task.desktop.dispose();
   };
@@ -131,7 +171,8 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     if (tasks.size < maxActive) return;
     const candidates = [...tasks.values()]
       .filter((task) => task.taskId !== focusedTaskId)
-      .filter((task) => !task.desktop.session.snapshot.agent.isRunning)
+      // 含乐观标志的 getter:run RPC 刚发出、state 帧未到的任务同样不可淘汰。
+      .filter((task) => !task.desktop.session.agent.isRunning)
       .sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     const victim = candidates[0];
     if (!victim) {
@@ -179,6 +220,7 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
       bridge: undefined as unknown as Bridge, // 下一行立即赋值
       status: 'connected',
       lastActivityAt: Date.now(),
+      offState: () => {}, // 建桥后立即换成真订阅
     };
     task.bridge = createBridge({
       taskId,
@@ -190,6 +232,18 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
         task.status = state === 'lost' ? 'lost' : 'connected';
         void pushTasks();
       },
+    });
+    // 行数据随镜像走:isRunning 翻转、首条消息落地(historyLength 0→N)时
+    // 重推任务列表——空会话不再显示行之后,「行的出现」就靠这里(磁盘 meta
+    // 的 messageCount 有持久化滞后,taskSummaries 已用镜像兜底)。按行关心
+    // 的字段去重,其余 state 变更(config/todos)不触发磁盘 list()。
+    let lastRowKey = '';
+    task.offState = desktop.session.stateChanged(() => {
+      const agent = desktop.session.snapshot.agent;
+      const rowKey = `${agent.isRunning}|${agent.historyLength > 0}`;
+      if (rowKey === lastRowKey) return;
+      lastRowKey = rowKey;
+      void pushTasks();
     });
     tasks.set(taskId, task);
     // 新任务即聚焦:旧的聚焦任务转后台(抑制事件转发)。
@@ -242,7 +296,16 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const task = taskId ? tasks.get(taskId) : focusedTaskId ? tasks.get(focusedTaskId) : undefined;
     if (!task) throw new Error('没有可用的活跃任务');
     task.lastActivityAt = Date.now();
-    return task.bridge.dispatchRpc(request);
+    // 首问即出现(Codex 形态):run 一经分发就乐观置位并立即重推任务行,
+    // 不等镜像的 state 帧(它最早在 step-end 才带出 historyLength)。先分发
+    // 再推:RemoteSession 在发出 POST 前同步置 optimistic.run,推送才能带上
+    // isRunning=true 的行。
+    const result = task.bridge.dispatchRpc(request);
+    if (!task.optimistic && RUN_RPC_KINDS.has(request.kind)) {
+      task.optimistic = { title: optimisticTitle(request) };
+      void pushTasks();
+    }
+    return result;
   };
 
   const subscribe = async (): Promise<SubscribeResult> => {
@@ -276,7 +339,7 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const now = Date.now();
     for (const task of [...tasks.values()]) {
       if (task.taskId === focusedTaskId) continue;
-      if (task.desktop.session.snapshot.agent.isRunning) continue;
+      if (task.desktop.session.agent.isRunning) continue;
       if (now - task.lastActivityAt < IDLE_SHUTDOWN_MS) continue;
       void closeTask(task.taskId).catch(() => {});
     }

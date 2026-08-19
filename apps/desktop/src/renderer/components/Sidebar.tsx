@@ -205,13 +205,13 @@ export function Sidebar() {
     if (focusedRoot) addProjectToList(focusedRoot);
   }, [focusedRoot, addProjectToList]);
 
-  /** 未归档、有内容(或是当前会话)的任务。 */
+  /**
+   * 未归档且已有真实内容的任务。空会话不进列表(聚焦中的也不例外):
+   * 新建任务先开聊天视图,首条消息落地后行才出现(对齐 Codex/zcode)。
+   */
   const liveTasks = useMemo(
-    () =>
-      (tasks ?? []).filter(
-        (task) => (task.messageCount > 0 || task.id === storeId) && !task.archivedAt,
-      ),
-    [tasks, storeId],
+    () => (tasks ?? []).filter((task) => task.messageCount > 0 && !task.archivedAt),
+    [tasks],
   );
 
   const taskCountOf = useMemo(() => {
