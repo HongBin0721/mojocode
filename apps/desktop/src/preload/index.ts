@@ -7,6 +7,12 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IPC_CHANNELS, pushChannelOf, type PushChannel, type RpcRequest } from '../shared/ipc.js';
 import type { MojocodeDesktopApi } from '../shared/api.js';
 
+/* GUI 偏好快照:sendSync 一次拿全量——renderer 的启动路径(store 模块初始化、
+ * main.tsx 预渲染字号)需要同步读到。main 侧 handler 先于窗口加载注册。 */
+const prefsSnapshot = ipcRenderer.sendSync(IPC_CHANNELS.prefsSnapshot) as
+  | Record<string, string>
+  | undefined;
+
 const api: MojocodeDesktopApi = {
   subscribe: () => ipcRenderer.invoke(IPC_CHANNELS.subscribe),
   rpc: (request: RpcRequest, taskId?: string) =>
@@ -22,6 +28,12 @@ const api: MojocodeDesktopApi = {
   openPath: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.openPath, path),
   // 同步 API:webUtils 在 preload 侧直接可用,不必绕 invoke。
   pathForFile: (file: File) => webUtils.getPathForFile(file),
+  prefs: {
+    snapshot: prefsSnapshot ?? {},
+    set: (key: string, value: string) => {
+      ipcRenderer.send(IPC_CHANNELS.prefsSet, key, value);
+    },
+  },
   on: (channel, listener) => {
     // 逻辑名 → 物理通道的映射在 shared/ipc.ts 的 pushChannelOf(preload 顶层
     // import electron 进不了 node 测试,映射逻辑放 shared 才测得到)。

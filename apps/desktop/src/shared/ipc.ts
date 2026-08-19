@@ -200,6 +200,10 @@ export const IPC_CHANNELS = {
   taskFocus: 'task:focus',
   revealPath: 'desktop:reveal-path',
   openPath: 'desktop:open-path',
+  /* GUI 本机偏好(~/.mojocode/gui.json):snapshot 是 sendSync(preload 启动
+   * 路径需要同步拿到全量),set 是 fire-and-forget 的 send。 */
+  prefsSnapshot: 'desktop:prefs-snapshot',
+  prefsSet: 'desktop:prefs-set',
 } as const;
 
 export type ConnectionState = 'connecting' | 'connected' | 'lost';

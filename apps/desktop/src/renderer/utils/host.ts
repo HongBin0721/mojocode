@@ -13,6 +13,8 @@ import type { MojocodeDesktopApi } from '../../shared/api.js';
 interface Host {
   mojocode?: MojocodeDesktopApi;
   localStorage?: {
+    length: number;
+    key(index: number): string | null;
     getItem(key: string): string | null;
     setItem(key: string, value: string): void;
   };
@@ -32,8 +34,48 @@ export function platform(): string {
   return host().mojocode?.platform ?? 'unknown';
 }
 
+/**
+ * 偏好缓存:桥在场时以 preload 的 gui.json 快照为底(写走 prefs.set,主进程
+ * 落盘 ~/.mojocode/gui.json),此后读写都打这份内存副本——set 是 fire-and-
+ * forget,快照不会自己更新。首次初始化时把当前 origin localStorage 里的历史
+ * mojocode.* 键一次性收编进落盘:旧版把偏好写在 localStorage,其位置是
+ * userData 目录 × origin,dev(localhost)与构建产物(file://)各存一份,
+ * 互不相通——这是"导入的项目重启后消失"的事故来源。
+ *
+ * 桥缺席(Node/组件测试、浏览器)时不缓存,逐次退回 localStorage,保持
+ * 测试可用真实 Storage 断言往返。
+ */
+let prefsCache: Record<string, string> | undefined;
+
+function prefsStore(): Record<string, string> | null {
+  if (prefsCache !== undefined) return prefsCache;
+  const api = host().mojocode;
+  if (!api?.prefs) return null;
+  const cache: Record<string, string> = { ...api.prefs.snapshot };
+  try {
+    const ls = host().localStorage;
+    if (ls) {
+      for (let i = 0; i < ls.length; i++) {
+        const key = ls.key(i);
+        if (!key?.startsWith('mojocode.') || cache[key] !== undefined) continue;
+        const value = ls.getItem(key);
+        if (value !== null) {
+          cache[key] = value;
+          api.prefs.set(key, value);
+        }
+      }
+    }
+  } catch {
+    // 迁移失败不影响本次会话。
+  }
+  prefsCache = cache;
+  return cache;
+}
+
 /** 读本机偏好;不可用(隐私模式/测试环境)或解析失败时回 null。 */
 export function readLocal(key: string): string | null {
+  const prefs = prefsStore();
+  if (prefs) return prefs[key] ?? null;
   try {
     return host().localStorage?.getItem(key) ?? null;
   } catch {
@@ -43,6 +85,12 @@ export function readLocal(key: string): string | null {
 
 /** 写本机偏好;失败静默——持久化不该影响本次会话。 */
 export function writeLocal(key: string, value: string): void {
+  const prefs = prefsStore();
+  if (prefs) {
+    prefs[key] = value;
+    host().mojocode?.prefs.set(key, value);
+    return;
+  }
   try {
     host().localStorage?.setItem(key, value);
   } catch {

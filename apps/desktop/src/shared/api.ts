@@ -50,6 +50,13 @@ export interface MojocodeDesktopApi {
   /** 拖入的 File 对象 → 磁盘绝对路径(导入项目对话框的拖放区;sandbox 下
    * renderer 拿不到 file.path,只能经 preload 的 webUtils)。 */
   pathForFile(file: File): string;
+  /** GUI 本机偏好(主进程落盘 ~/.mojocode/gui.json,localStorage 形状的字符
+   * 串键值):snapshot 是 preload 启动时同步取的一次性副本,set 走 fire-and-
+   * forget——写后的最新值由 renderer 侧 host.ts 的内存缓存维护。 */
+  prefs: {
+    readonly snapshot: Record<string, string>;
+    set(key: string, value: string): void;
+  };
 }
 
 /** 各通道的载荷类型(on 的 listener 参数由此推导);per-task 通道包 TaskScoped 信封。 */

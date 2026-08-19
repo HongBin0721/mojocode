@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { resolveRuntime } from './resolve-runtime.js';
 import { createTaskManager, type TaskManager } from './task-manager.js';
+import { createGuiPrefs } from './gui-prefs.js';
 import { IPC_CHANNELS, type RpcRequest } from '../shared/ipc.js';
 
 /**
@@ -39,6 +40,9 @@ const argvValue = (flag: string): string | undefined => {
 let mainWindow: BrowserWindow | undefined;
 let manager: TaskManager | undefined;
 let quitting = false;
+
+/** GUI 本机偏好(~/.mojocode/gui.json);同步读盘,窗口加载前就绪。 */
+const guiPrefs = createGuiPrefs();
 
 /**
  * 管理器就绪信号(deferred):bootstrap 创建 TaskManager 后兑现。IPC handler
@@ -93,6 +97,7 @@ const createWindow = (): void => {
 const teardown = async (): Promise<void> => {
   if (quitting) return;
   quitting = true;
+  guiPrefs.flush();
   await manager?.disposeAll();
   manager = undefined;
   app.quit();
@@ -169,6 +174,13 @@ app.whenReady().then(
     });
     ipcMain.handle(IPC_CHANNELS.openPath, async (_event, path) => {
       await shell.openPath(String(path));
+    });
+    // GUI 偏好:snapshot 是 preload 启动路径的 sendSync,必须先于窗口加载注册。
+    ipcMain.on(IPC_CHANNELS.prefsSnapshot, (event) => {
+      event.returnValue = guiPrefs.snapshot();
+    });
+    ipcMain.on(IPC_CHANNELS.prefsSet, (_event, key, value) => {
+      guiPrefs.set(key as string, value as string);
     });
     // main 本地能力:目录选择器(添加/导入项目)。
     ipcMain.handle(IPC_CHANNELS.pickDirectory, async () => {
