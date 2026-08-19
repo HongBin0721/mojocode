@@ -1,6 +1,7 @@
 /**
  * 右侧面板(设计稿)——外壳:三 tab(变更/终端/文件,各自在 panel/ 子目录)
- * 的分发、header、拖宽 Resizer。⌘⌥B 切换显隐,右缘拖宽 240–720;
+ * 的分发、header、拖宽 Resizer。⌘⌥B 切换显隐(App 的 useGlobalShortcuts
+ * 统一注册,home/archive 视图下也生效),右缘拖宽 240–720;
  * taskLayout='review' 时占满主区(Resizer 禁用)。
  */
 
@@ -62,18 +63,6 @@ export function RightPanel() {
   const width = useUiStore((s) => s.panelWidth);
   const setPanelWidth = useUiStore((s) => s.setPanelWidth);
   const commitPanelWidth = useUiStore((s) => s.commitPanelWidth);
-
-  // Cmd/Ctrl+Option+B 切换(文档级监听,textarea 之外也能触发)。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.altKey && (e.key === 'b' || e.key === 'B')) {
-        e.preventDefault();
-        toggleVisible();
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [toggleVisible]);
 
   // 窗口 focus 时刷新(pending 变更可能在 GUI 之外发生)。
   useEffect(() => {

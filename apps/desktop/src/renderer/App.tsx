@@ -17,6 +17,7 @@ import type { PermissionDecision } from '@core/events';
 import { initBridge } from './bridge/client.js';
 import { useDesktopStore } from './state/desktopStore.js';
 import { useUiStore } from './state/uiStore.js';
+import { useReviewStore } from './state/reviewStore.js';
 import { useLocale, t } from './i18n/index.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
@@ -82,7 +83,8 @@ function ConnectionBanner() {
 }
 
 /**
- * 全局快捷键:⌘B 切换侧栏、⌘N 新建任务、⌘K 搜索。
+ * 全局快捷键:⌘B 切换侧栏、⌘⌥B 切换右面板、⌘N 新建任务、⌘K 搜索。
+ * 单点注册(此前 ⌘⌥B 在 RightPanel 组件里,home/archive 视图下未挂载即死键)。
  *
  * 修饰键按平台取一个,不接受 meta||ctrl:macOS 的文本框里 ctrl+b/n/k 是系统
  * emacs 光标键(前一字符/下一行/删到行尾),两个都认的话在输入框里敲 ctrl+n
@@ -93,7 +95,16 @@ function useGlobalShortcuts(): void {
   useEffect(() => {
     const mac = platform() === 'darwin';
     const onKey = (e: KeyboardEvent) => {
-      if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) || e.altKey) return;
+      if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey)) return;
+      // alt 组合分支必须在无 alt 守卫之前:⌘⌥B 切右面板(e.code 而非 e.key
+      // ——mac 上 option 会把 key 变成 '∫')。
+      if (e.altKey) {
+        if (e.code === 'KeyB') {
+          e.preventDefault();
+          useReviewStore.getState().toggleVisible();
+        }
+        return;
+      }
       const key = e.key.toLowerCase();
       if (key === 'b') {
         e.preventDefault();
