@@ -20,6 +20,7 @@ import { useProjectsStore } from '../state/projectsStore.js';
 import { forkTask, newTask, openTask } from '../state/actions.js';
 import { revealPath, rpcFire } from '../bridge/invoke.js';
 import { taskTone, toneColorVar, toneLabelKey } from '../utils/task-tone.js';
+import { archivedTasks, liveTasks, projectTasks, taskCountsByRoot } from '../utils/tasks.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { t, useLocale } from '../i18n/index.js';
 import { MenuPopover, MenuCloseContext } from './Menu.js';
@@ -206,42 +207,21 @@ export function Sidebar() {
     if (focusedRoot) addProjectToList(focusedRoot);
   }, [focusedRoot, addProjectToList]);
 
-  /**
-   * 未归档且已有真实内容的任务。空会话不进列表(聚焦中的也不例外):
-   * 新建任务先开聊天视图,首条消息落地后行才出现(对齐 Codex/zcode)。
-   */
-  const liveTasks = useMemo(
-    () => (tasks ?? []).filter((task) => task.messageCount > 0 && !task.archivedAt),
-    [tasks],
-  );
+  // 口径唯一来源:utils/tasks.ts(空会话不进列表等产品语义)。
+  const live = useMemo(() => liveTasks(tasks), [tasks]);
 
   const taskCountOf = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const task of liveTasks) counts.set(task.root, (counts.get(task.root) ?? 0) + 1);
+    const counts = taskCountsByRoot(live);
     return (root: string) => counts.get(root) ?? 0;
-  }, [liveTasks]);
+  }, [live]);
 
   /** 当前项目的任务(置顶前置;搜索时在其中过滤)。 */
-  const projectTasks = useMemo(() => {
-    const list = liveTasks.filter((task) => task.root === currentRoot);
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? list.filter(
-          (task) => task.title.toLowerCase().includes(q) || task.id.toLowerCase().startsWith(q),
-        )
-      : list;
-    // 置顶前置,置顶内与未置顶内都保持 updatedAt 倒序(list 本身已按此排序)。
-    const pinnedSet = new Set(pinned);
-    return [
-      ...filtered.filter((task) => pinnedSet.has(task.id)),
-      ...filtered.filter((task) => !pinnedSet.has(task.id)),
-    ];
-  }, [liveTasks, currentRoot, query, pinned]);
-
-  const archivedCount = useMemo(
-    () => (tasks ?? []).filter((task) => task.archivedAt).length,
-    [tasks],
+  const currentProjectTasks = useMemo(
+    () => projectTasks(live, currentRoot, query, pinned),
+    [live, currentRoot, query, pinned],
   );
+
+  const archivedCount = useMemo(() => archivedTasks(tasks).length, [tasks]);
 
   const closeSearch = () => {
     closeSearchState();
@@ -409,10 +389,10 @@ export function Sidebar() {
       <div className="task-list">
         {tasks === undefined ? (
           <div className="sidebar-empty">{t('sidebar.unsupported')}</div>
-        ) : projectTasks.length === 0 ? (
+        ) : currentProjectTasks.length === 0 ? (
           <div className="sidebar-empty">{query ? t('sidebar.noMatch') : t('sidebar.noTasks')}</div>
         ) : (
-          projectTasks.map((task) => (
+          currentProjectTasks.map((task) => (
             <TaskRow
               key={task.id}
               task={task}

@@ -10,6 +10,7 @@ import { useUiStore } from '../state/uiStore.js';
 import { openTask } from '../state/actions.js';
 import { rpcFire } from '../bridge/invoke.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
+import { archivedTasks } from '../utils/tasks.js';
 import { t, useLocale } from '../i18n/index.js';
 
 export function ArchiveView() {
@@ -17,13 +18,8 @@ export function ArchiveView() {
   const tasks = useDesktopStore((s) => s.tasks);
   const navigate = useUiStore((s) => s.navigate);
 
-  const archived = useMemo(
-    () =>
-      (tasks ?? [])
-        .filter((task) => task.archivedAt)
-        .sort((a, b) => (b.archivedAt ?? '').localeCompare(a.archivedAt ?? '')),
-    [tasks],
-  );
+  // 口径唯一来源:utils/tasks.ts。
+  const archived = useMemo(() => archivedTasks(tasks), [tasks]);
 
   const unarchive = (id: string) => {
     rpcFire({ kind: 'archiveSession', id, archived: false }, { errorKey: 'notice.archiveFailed' });

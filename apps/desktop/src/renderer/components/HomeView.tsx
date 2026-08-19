@@ -12,6 +12,7 @@ import { openTask } from '../state/actions.js';
 import { currentGreetingKey } from '../utils/greeting.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { taskTone, toneColorVar, toneLabelKey, type TaskTone } from '../utils/task-tone.js';
+import { liveTasks } from '../utils/tasks.js';
 import { t, useLocale } from '../i18n/index.js';
 import { GitBranchIcon } from './icons.js';
 
@@ -22,15 +23,13 @@ export function HomeView() {
   const selectProject = useProjectsStore((s) => s.select);
   const navigate = useUiStore((s) => s.navigate);
 
-  const liveTasks = useMemo(
-    () => (tasks ?? []).filter((task) => !task.archivedAt && task.messageCount > 0),
-    [tasks],
-  );
+  // 口径唯一来源:utils/tasks.ts(与 Sidebar/ArchiveView 共用)。
+  const live = useMemo(() => liveTasks(tasks), [tasks]);
 
   const repos = useMemo(
     () =>
       projects.map((root) => {
-        const list = liveTasks.filter((task) => task.root === root);
+        const list = live.filter((task) => task.root === root);
         const running = list.filter((task) => task.isRunning).length;
         const review = list.filter((task) => taskTone(task) === 'review').length;
         const tone: TaskTone = running > 0 ? 'run' : review > 0 ? 'review' : 'draft';
@@ -42,13 +41,13 @@ export function HomeView() {
               : t('home.repoIdle');
         return { root, count: list.length, tone, state };
       }),
-    [projects, liveTasks],
+    [projects, live],
   );
 
-  const runningTasks = useMemo(() => liveTasks.filter((task) => task.isRunning), [liveTasks]);
+  const runningTasks = useMemo(() => live.filter((task) => task.isRunning), [live]);
   const reviewCount = useMemo(
-    () => liveTasks.filter((task) => taskTone(task) === 'review').length,
-    [liveTasks],
+    () => live.filter((task) => taskTone(task) === 'review').length,
+    [live],
   );
 
   const open = (taskId: string) => {
