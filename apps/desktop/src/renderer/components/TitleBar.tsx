@@ -10,7 +10,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import type { GitOpSummary } from '../../shared/ipc.js';
+import type { ReviewTargetsSummary } from '../../shared/ipc.js';
+import { rpcCall } from '../bridge/invoke.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useReviewStore } from '../state/reviewStore.js';
 import { useUiStore } from '../state/uiStore.js';
@@ -26,13 +27,6 @@ import {
   GitBranchIcon,
 } from './icons.js';
 
-interface ReviewTargetsSummary {
-  isRepo: boolean;
-  detached: boolean;
-  currentBranch?: string;
-  branches: Array<{ name: string; subject: string }>;
-}
-
 /** 分支菜单内容:打开(挂载)时才拉分支列表,选中即 switchBranch。 */
 function BranchMenu({ current }: { current: string | undefined }) {
   useLocale();
@@ -43,19 +37,16 @@ function BranchMenu({ current }: { current: string | undefined }) {
   const [switching, setSwitching] = useState(false);
 
   useEffect(() => {
-    void window.mojocode
-      .rpc({ kind: 'reviewTargets' })
-      .then((result) => setTargets(result as ReviewTargetsSummary))
+    void rpcCall({ kind: 'reviewTargets' })
+      .then(setTargets)
       .catch(() => setError(t('titlebar.branchLoadFailed')));
   }, []);
 
   const pick = (name: string) => {
     if (switching || name === current) return;
     setSwitching(true);
-    void window.mojocode
-      .rpc({ kind: 'switchBranch', name })
-      .then((raw) => {
-        const result = raw as GitOpSummary;
+    void rpcCall({ kind: 'switchBranch', name })
+      .then((result) => {
         if (result.ok) {
           close();
           void refresh(); // 顶栏 chip 与 Review 面板跟上新分支

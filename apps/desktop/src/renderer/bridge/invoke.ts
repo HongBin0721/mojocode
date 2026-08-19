@@ -31,7 +31,9 @@ export function rpcCall<R extends RpcRequest>(
   request: R,
   taskId?: string,
 ): Promise<RpcResult<R['kind']>> {
-  return bridgeApi().rpc(request, taskId);
+  // 不传 taskId 时保持单参调用:测试对 rpc mock 断言「原样转发的参数表」,
+  // 显式的第二个 undefined 会改变调用形状。
+  return taskId === undefined ? bridgeApi().rpc(request) : bridgeApi().rpc(request, taskId);
 }
 
 /** fire-and-forget RPC:失败统一进 notice(i18n 文案 + 端点原始 message)。 */
@@ -39,11 +41,9 @@ export function rpcFire<R extends RpcRequest>(
   request: R,
   opts?: { taskId?: string; errorKey?: MessageKey },
 ): void {
-  void bridgeApi()
-    .rpc(request, opts?.taskId)
-    .catch((error: unknown) => {
-      pushNotice('error', `${t(opts?.errorKey ?? 'notice.rpcFailed')}: ${describeError(error)}`);
-    });
+  void rpcCall(request, opts?.taskId).catch((error: unknown) => {
+    pushNotice('error', `${t(opts?.errorKey ?? 'notice.rpcFailed')}: ${describeError(error)}`);
+  });
 }
 
 /** 非 RPC 的桥方法 fire-and-forget 包装(Finder 显示 / 系统程序打开)。 */

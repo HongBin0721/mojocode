@@ -8,6 +8,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useProjectsStore } from '../state/projectsStore.js';
+import { bridgeApi } from '../utils/host.js';
 import { t, useLocale } from '../i18n/index.js';
 import { FolderPlusIcon, GitBranchIcon } from './icons.js';
 
@@ -36,12 +37,12 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
   };
 
   const choose = () => {
-    void window.mojocode
+    void bridgeApi()
       .pickDirectory()
       .then((root) => {
         if (root) finish(root);
       })
-      .catch((err: unknown) => console.error('pickDirectory 失败', err));
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   };
 
   const onDrop = (event: React.DragEvent) => {
@@ -58,7 +59,7 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
       setError(t('importDialog.notFolder'));
       return;
     }
-    finish(window.mojocode.pathForFile(file));
+    finish(bridgeApi().pathForFile(file));
   };
 
   return createPortal(

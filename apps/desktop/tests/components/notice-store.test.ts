@@ -52,7 +52,8 @@ describe('invoke 层', () => {
     expect(notice.level).toBe('error');
     expect(notice.message).toContain('发送消息失败');
     expect(notice.message).toContain('boom from server');
-    expect(rpc).toHaveBeenCalledWith({ kind: 'abort' }, undefined);
+    // 未提供 taskId 时保持单参调用(原样转发,不追加显式 undefined)。
+    expect(rpc).toHaveBeenCalledWith({ kind: 'abort' });
   });
 
   it('rpcCall 惰性取桥 API 并原样上抛(调用方自己消化)', async () => {

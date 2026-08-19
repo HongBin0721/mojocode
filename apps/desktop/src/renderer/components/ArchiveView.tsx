@@ -8,6 +8,7 @@ import React, { useMemo } from 'react';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useUiStore } from '../state/uiStore.js';
 import { openTask } from '../state/actions.js';
+import { rpcFire } from '../bridge/invoke.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { t, useLocale } from '../i18n/index.js';
 
@@ -25,9 +26,7 @@ export function ArchiveView() {
   );
 
   const unarchive = (id: string) => {
-    void window.mojocode
-      .rpc({ kind: 'archiveSession', id, archived: false })
-      .catch((error: unknown) => console.error('取消归档失败', error));
+    rpcFire({ kind: 'archiveSession', id, archived: false }, { errorKey: 'notice.archiveFailed' });
   };
 
   return (

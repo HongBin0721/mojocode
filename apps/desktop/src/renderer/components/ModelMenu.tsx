@@ -15,6 +15,7 @@
 
 import React, { useContext, useEffect, useState } from 'react';
 import type { ProviderModelsSummary } from '../../shared/ipc.js';
+import { rpcCall } from '../bridge/invoke.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useUiStore } from '../state/uiStore.js';
 import { t, useLocale } from '../i18n/index.js';
@@ -46,10 +47,9 @@ export function ModelMenuList() {
     // 死端点,不能预热也不能反复刷。
     if (!needsProbe) return;
     let cancelled = false;
-    void window.mojocode
-      .rpc({ kind: 'listProviderModels' })
+    void rpcCall({ kind: 'listProviderModels' })
       .then((result) => {
-        if (!cancelled) setProbed(result as ProviderModelsSummary[]);
+        if (!cancelled) setProbed(result);
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message);
@@ -60,8 +60,7 @@ export function ModelMenuList() {
   }, [needsProbe]);
 
   const pick = (providerId: string, model: string) => {
-    void window.mojocode
-      .rpc({ kind: 'switch', change: { provider: providerId, model } })
+    void rpcCall({ kind: 'switch', change: { provider: providerId, model } })
       .then(() => closeMenu())
       .catch((err: Error) => setError(err.message));
   };
