@@ -7,6 +7,7 @@
  */
 
 import { deserializeEvent } from '@core/protocol';
+import { bridgeApi } from '../utils/host.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useTimelineStore } from '../state/timelineStore.js';
 import { makeTimelineCtx } from '../state/timelineCtx.js';
@@ -17,7 +18,7 @@ import type { TimelineCtx } from '../state/timelineReducer.js';
 export function initBridge(): () => void {
   const desktop = useDesktopStore;
   const timeline = useTimelineStore;
-  const api = window.mojocode;
+  const api = bridgeApi();
 
   // reducer 的 ctx 按任务分份:每个任务的事件要对照**它自己**的快照。
   const ctxByTask = new Map<string, TimelineCtx>();
@@ -30,8 +31,10 @@ export function initBridge(): () => void {
     return ctx;
   };
 
-  // 聚焦任务的 root 变化(切换到另一个项目的任务)要把 Review 缓存清干净——
-  // fileDiffs 按相对路径存,新 root 下的同名文件会命中旧 diff。
+  // effect: 聚焦任务的 root 变化(切换到另一个项目的任务)要把 Review 缓存
+  // 清干净——fileDiffs 按相对路径存,新 root 下的同名文件会命中旧 diff。
+  // (「effect:」标记 = 寄生在传输层的业务编排,候选外提;现无测试守护,
+  // 保持原位。)
   let lastFocusedRoot: string | undefined;
   const maybeResetReview = (): void => {
     const state = desktop.getState();
@@ -56,12 +59,12 @@ export function initBridge(): () => void {
       const { applyEvent } = timeline.getState();
       for (const wire of data) {
         const event = deserializeEvent(wire);
-        // 决策已定(allow/deny):关掉审批卡。事件流的其余部分照常进 reducer。
+        // effect: 决策已定(allow/deny)关掉审批卡。事件流的其余部分照常进 reducer。
         if (event.type === 'permission-resolved') {
           desktop.getState().applyPermission(taskId, undefined);
           continue;
         }
-        // 终端面板:bash 的流式输出与命令行注入(reducer 对该类型是 no-op)。
+        // effect: 终端面板——bash 的流式输出与命令行注入(reducer 对该类型是 no-op)。
         if (event.type === 'tool-output-delta') {
           usePanelStore.getState().appendChunk(taskId, event.chunk);
           continue;
@@ -71,8 +74,8 @@ export function initBridge(): () => void {
           if (command) usePanelStore.getState().appendCommand(taskId, command);
         }
         applyEvent(taskId, event, ctxOf(taskId));
-        // 一轮结束(正常/中断):agent 可能刚改过文件,Review 面板趁机刷新
-        // (只在事件来自聚焦任务时——面板显示的是聚焦任务的 root)。
+        // effect: 一轮结束(正常/中断)时 agent 可能刚改过文件,Review 面板
+        // 趁机刷新(只在事件来自聚焦任务时——面板显示的是聚焦任务的 root)。
         if (
           (event.type === 'turn-end' || event.type === 'aborted') &&
           taskId === desktop.getState().focusedTaskId

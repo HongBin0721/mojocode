@@ -5,8 +5,11 @@
  */
 
 import { create } from 'zustand';
-import type { FileDiffSummary, GitOpSummary, WorkspaceStatusSummary } from '../../shared/ipc.js';
-import { bridgeApi, readLocal, writeLocal } from '../utils/host.js';
+import type { FileDiffSummary, WorkspaceStatusSummary } from '../../shared/ipc.js';
+import { readLocal, writeLocal } from '../utils/host.js';
+import { describeError, isUnknownMethodError, rpcCall } from '../bridge/invoke.js';
+import { t } from '../i18n/index.js';
+import { pushNotice } from './noticeStore.js';
 
 const VISIBLE_KEY = 'mojocode.reviewVisible';
 
@@ -91,7 +94,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     }
     inflight = (async () => {
       try {
-        const status = (await bridgeApi().rpc({ kind: 'workspaceStatus' })) as WorkspaceStatusSummary;
+        const status: WorkspaceStatusSummary = await rpcCall({ kind: 'workspaceStatus' });
         set({ status, unsupported: false });
         const state = get();
         // 不变量:又出现了新 pending 时,「已提交」横幅必须回落——不能盖住新变更。
@@ -108,11 +111,11 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
         if (path) get().selectFile(path);
       } catch (error) {
         // 旧 server:显式降级,面板给出提示而不是反复报错。
-        if (error instanceof Error && error.message.includes('unknown method')) {
+        if (isUnknownMethodError(error)) {
           set({ unsupported: true, status: undefined });
           return;
         }
-        console.error('workspaceStatus 失败', error);
+        pushNotice('error', `${t('notice.rpcFailed')}: ${describeError(error)}`);
       } finally {
         inflight = undefined;
         if (dirty) {
@@ -146,17 +149,15 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     set({ selectedPath: path, commentTarget: undefined });
     if (!fileDiffs[path] && !loadingPaths[path]) {
       set({ loadingPaths: { ...loadingPaths, [path]: true } });
-      void bridgeApi()
-        .rpc({ kind: 'fileDiff', path })
-        .then((result) => {
-          const diff = result as FileDiffSummary;
+      void rpcCall({ kind: 'fileDiff', path })
+        .then((diff: FileDiffSummary) => {
           set((state) => ({
             fileDiffs: { ...state.fileDiffs, [path]: diff },
             loadingPaths: { ...state.loadingPaths, [path]: false },
           }));
         })
         .catch((error: unknown) => {
-          console.error('fileDiff 失败', error);
+          pushNotice('error', `${t('notice.rpcFailed')}: ${describeError(error)}`);
           set((state) => ({ loadingPaths: { ...state.loadingPaths, [path]: false } }));
         });
     }
@@ -168,7 +169,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     if (get().approval !== 'idle') return;
     set({ approval: 'committing', approvalError: undefined });
     try {
-      const result = (await bridgeApi().rpc({ kind: 'commitAll', message })) as GitOpSummary;
+      const result = await rpcCall({ kind: 'commitAll', message });
       if (result.ok) {
         set({ approval: 'committed', lastCommit: { branch: get().status?.branch } });
         await get().refresh();
@@ -176,7 +177,7 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
         set({ approval: 'idle', approvalError: result.detail ?? result.reason ?? 'commit failed' });
       }
     } catch (error) {
-      set({ approval: 'idle', approvalError: error instanceof Error ? error.message : String(error) });
+      set({ approval: 'idle', approvalError: describeError(error) });
     }
   },
 
@@ -184,12 +185,12 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
     if (get().approval !== 'committed') return;
     set({ approval: 'undoing' });
     try {
-      const result = (await bridgeApi().rpc({ kind: 'undoCommit' })) as GitOpSummary;
+      const result = await rpcCall({ kind: 'undoCommit' });
       if (!result.ok) {
         set({ approvalError: result.detail ?? result.reason ?? 'undo failed' });
       }
     } catch (error) {
-      set({ approvalError: error instanceof Error ? error.message : String(error) });
+      set({ approvalError: describeError(error) });
     } finally {
       set({ approval: 'idle', lastCommit: undefined });
       await get().refresh();
@@ -199,12 +200,12 @@ export const useReviewStore = create<ReviewStore>((set, get) => ({
   discardAll: async () => {
     set({ approvalError: undefined });
     try {
-      const result = (await bridgeApi().rpc({ kind: 'discardAll' })) as GitOpSummary;
+      const result = await rpcCall({ kind: 'discardAll' });
       if (!result.ok && result.reason !== 'no-repo') {
         set({ approvalError: result.detail ?? result.reason ?? 'discard failed' });
       }
     } catch (error) {
-      set({ approvalError: error instanceof Error ? error.message : String(error) });
+      set({ approvalError: describeError(error) });
     } finally {
       set({ approval: 'idle', lastCommit: undefined });
       await get().refresh();

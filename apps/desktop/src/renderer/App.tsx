@@ -21,7 +21,9 @@ import { useLocale, t } from './i18n/index.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TitleBar } from './components/TitleBar.js';
 import { TaskHeader } from './components/TaskHeader.js';
-import { newTask } from './state/actions.js';
+import { newTask, restartTask } from './state/actions.js';
+import { rpcFire } from './bridge/invoke.js';
+import { platform } from './utils/host.js';
 import { Timeline } from './components/Timeline.js';
 import { TodoPanel } from './components/TodoPanel.js';
 import { StatusLine } from './components/StatusLine.js';
@@ -31,6 +33,7 @@ import { RightPanel } from './components/RightPanel.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { HomeView } from './components/HomeView.js';
 import { ArchiveView } from './components/ArchiveView.js';
+import { NoticeHost } from './components/NoticeHost.js';
 
 /** 审批卡挂在 Composer 上方;决策经 RPC 回 main 侧的 asker。 */
 function PermissionSection() {
@@ -44,7 +47,10 @@ function PermissionSection() {
   );
   if (!permission) return null;
   const onDecide = (decision: PermissionDecision) => {
-    void window.mojocode.rpc({ kind: 'permission', id: permission.id, decision }, taskId);
+    rpcFire(
+      { kind: 'permission', id: permission.id, decision },
+      { taskId, errorKey: 'notice.permissionFailed' },
+    );
   };
   return (
     <div className="permission-wrap conv-col">
@@ -66,12 +72,7 @@ function ConnectionBanner() {
         <button
           type="button"
           className="banner-action"
-          onClick={() => {
-            // 复活同一会话(main 侧先清残骸再 --resume 重拉)。
-            void window.mojocode.openTask(taskId).catch((error: unknown) => {
-              console.error('重启任务失败', error);
-            });
-          }}
+          onClick={() => restartTask(taskId)}
         >
           {t('connection.restartTask')}
         </button>
@@ -90,7 +91,7 @@ function ConnectionBanner() {
 function useGlobalShortcuts(): void {
   const toggleCollapsed = useUiStore((s) => s.toggleCollapsed);
   useEffect(() => {
-    const mac = window.mojocode.platform === 'darwin';
+    const mac = platform() === 'darwin';
     const onKey = (e: KeyboardEvent) => {
       if (!(mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) || e.altKey) return;
       const key = e.key.toLowerCase();
@@ -143,17 +144,30 @@ export function App() {
   const view = useUiStore((s) => s.view);
   // 全屏设置页整体替换 shell-body(自带返回侧栏);桥与快捷键保持挂载,
   // SSE/状态推送在设置页停留期间照常回流(模型设置就吃这份快照)。
-  if (view === 'settings') return <SettingsPage />;
+  // NoticeHost(RPC 失败 toast)在两种形态下都要在场,挂在分支之外。
   return (
-    <div className="shell">
-      <TitleBar />
-      <div className="shell-body">
-        <Sidebar />
-        <div className="app">
-          <ConnectionBanner />
-          {view === 'home' ? <HomeView /> : view === 'archive' ? <ArchiveView /> : <TaskView />}
+    <>
+      {view === 'settings' ? (
+        <SettingsPage />
+      ) : (
+        <div className="shell">
+          <TitleBar />
+          <div className="shell-body">
+            <Sidebar />
+            <div className="app">
+              <ConnectionBanner />
+              {view === 'home' ? (
+                <HomeView />
+              ) : view === 'archive' ? (
+                <ArchiveView />
+              ) : (
+                <TaskView />
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+      <NoticeHost />
+    </>
   );
 }

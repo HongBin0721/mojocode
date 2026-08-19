@@ -1,18 +1,33 @@
 /**
  * renderer 侧的共享动作:把「守卫 + IPC + store 同步」收拢成一份,组件只做
- * 接线。换会话三连已退役——新任务/打开历史一律走 TaskManager 的 task:* 通道。
+ * 接线。收录标准是「≥2 个调用点共享、且跨 store 编排」的任务生命周期动作;
+ * 单调用点的 RPC 走 bridge/invoke.ts 的 rpcCall/rpcFire。换会话三连已退役
+ * ——新任务/打开历史一律走 TaskManager 的 task:* 通道。
  */
 
+import { bridgeApi } from '../utils/host.js';
+import { t } from '../i18n/index.js';
+import { pushNotice } from './noticeStore.js';
+import { describeError } from '../bridge/invoke.js';
 import { useDesktopStore } from './desktopStore.js';
 import { useTimelineStore } from './timelineStore.js';
 
-/** 聚焦一个任务:store 镜像换源 + 通知 main(重推该任务的回放)。 */
-export function focusTask(taskId: string): void {
+/** 聚焦换源(两个 store 必须成对,漏一处就镜像漂移)。 */
+function setFocusedBoth(taskId: string): void {
   useDesktopStore.getState().setFocused(taskId);
   useTimelineStore.getState().setFocused(taskId);
-  void window.mojocode.focusTask(taskId).catch((error: unknown) => {
-    console.error('focusTask 失败', error);
-  });
+}
+
+function report(key: Parameters<typeof t>[0], error: unknown): void {
+  pushNotice('error', `${t(key)}: ${describeError(error)}`);
+}
+
+/** 聚焦一个任务:store 镜像换源 + 通知 main(重推该任务的回放)。 */
+export function focusTask(taskId: string): void {
+  setFocusedBoth(taskId);
+  void bridgeApi()
+    .focusTask(taskId)
+    .catch((error: unknown) => report('notice.focusFailed', error));
 }
 
 /** 打开任务(活跃直接聚焦,休眠以 --resume 复活)。 */
@@ -23,15 +38,10 @@ export function openTask(sessionId: string): void {
     focusTask(sessionId);
     return;
   }
-  void window.mojocode
+  void bridgeApi()
     .openTask(sessionId)
-    .then((taskId) => {
-      useDesktopStore.getState().setFocused(taskId);
-      useTimelineStore.getState().setFocused(taskId);
-    })
-    .catch((error: unknown) => {
-      console.error('openTask 失败', error);
-    });
+    .then(setFocusedBoth)
+    .catch((error: unknown) => report('notice.taskOpenFailed', error));
 }
 
 /** 新建任务(在指定 root;缺省当前聚焦任务的 root)。 */
@@ -41,15 +51,26 @@ export function newTask(root?: string): void {
   if (!targetRoot) return;
   // running 守卫(P3 单任务语义:新建会挤掉当前任务;P8 并行后移除)。
   if (state.snapshot?.agent.isRunning) return;
-  void window.mojocode
+  void bridgeApi()
     .createTask({ root: targetRoot })
-    .then((taskId) => {
-      useDesktopStore.getState().setFocused(taskId);
-      useTimelineStore.getState().setFocused(taskId);
-    })
-    .catch((error: unknown) => {
-      console.error('createTask 失败', error);
-    });
+    .then(setFocusedBoth)
+    .catch((error: unknown) => report('notice.taskCreateFailed', error));
+}
+
+/** fork 会话为新任务(右键菜单):以历史副本拉新 sidecar 并聚焦。 */
+export function forkTask(root: string, sessionId: string): void {
+  void bridgeApi()
+    .createTask({ root, resume: sessionId, fork: true })
+    .then(setFocusedBoth)
+    .catch((error: unknown) => report('notice.forkFailed', error));
+}
+
+/** 重启任务(断线横幅):main 侧先清残骸再 --resume 重拉同一会话。 */
+export function restartTask(taskId: string): void {
+  void bridgeApi()
+    .openTask(taskId)
+    .then(setFocusedBoth)
+    .catch((error: unknown) => report('notice.restartFailed', error));
 }
 
 /** 兼容旧名(⌘N / CollapsedOverlay / 空态按钮的调用点)。 */

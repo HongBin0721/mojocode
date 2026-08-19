@@ -282,4 +282,18 @@ export const zhCN: Record<keyof typeof import('./en.js')['en'], string> = {
   'composer.ctxTitle': '上下文窗口',
   'composer.ctxUsedPct': '{pct}% 已用（剩余 {left}%）',
   'composer.ctxTokens': '已用 {used} tokens，共 {total}',
+  // 上行 RPC 失败的 toast 文案(invoke 层统一出口)
+  'notice.rpcFailed': '操作失败',
+  'notice.runFailed': '发送消息失败',
+  'notice.archiveFailed': '归档任务失败',
+  'notice.deleteFailed': '删除任务失败',
+  'notice.renameFailed': '重命名任务失败',
+  'notice.forkFailed': 'fork 任务失败',
+  'notice.restartFailed': '重启任务失败',
+  'notice.taskOpenFailed': '打开任务失败',
+  'notice.taskCreateFailed': '新建任务失败',
+  'notice.focusFailed': '切换任务失败',
+  'notice.permissionFailed': '审批决策发送失败',
+  'notice.revealFailed': '无法在文件管理器中显示',
+  'notice.openFileFailed': '打开文件失败',
 } as const;

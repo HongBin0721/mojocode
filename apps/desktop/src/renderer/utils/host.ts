@@ -27,6 +27,11 @@ export function bridgeApi(): MojocodeDesktopApi {
   return api;
 }
 
+/** 主进程平台('darwin' 等);桥未注入(测试环境)回 'unknown',不抛。 */
+export function platform(): string {
+  return host().mojocode?.platform ?? 'unknown';
+}
+
 /** 读本机偏好;不可用(隐私模式/测试环境)或解析失败时回 null。 */
 export function readLocal(key: string): string | null {
   try {

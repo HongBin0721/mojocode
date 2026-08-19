@@ -287,4 +287,18 @@ export const en = {
   'composer.ctxTitle': 'Context window',
   'composer.ctxUsedPct': '{pct}% used ({left}% left)',
   'composer.ctxTokens': '{used} tokens used of {total}',
+  // 上行 RPC 失败的 toast 文案(invoke 层统一出口)
+  'notice.rpcFailed': 'Operation failed',
+  'notice.runFailed': 'Failed to send message',
+  'notice.archiveFailed': 'Failed to archive task',
+  'notice.deleteFailed': 'Failed to delete task',
+  'notice.renameFailed': 'Failed to rename task',
+  'notice.forkFailed': 'Failed to fork task',
+  'notice.restartFailed': 'Failed to restart task',
+  'notice.taskOpenFailed': 'Failed to open task',
+  'notice.taskCreateFailed': 'Failed to create task',
+  'notice.focusFailed': 'Failed to switch task',
+  'notice.permissionFailed': 'Failed to send approval decision',
+  'notice.revealFailed': 'Failed to reveal in file manager',
+  'notice.openFileFailed': 'Failed to open file',
 } as const;
