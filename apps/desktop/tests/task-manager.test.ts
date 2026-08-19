@@ -2,7 +2,7 @@
  * TaskManager 单测:注入假 spawn/connect/listSessions,不起真进程、不 mock
  * electron。覆盖:创建/聚焦/关停、taskId=storeId、RPC 路由与缺任务拒绝、
  * 容量淘汰(运行中豁免)、openTask 的休眠复活参数、tasks 通道推送、
- * disposeAll、switchWorkspaceCompat 守卫。
+ * disposeAll。
  */
 
 import { describe, expect, it, vi } from 'vitest';

@@ -1,5 +1,5 @@
 /**
- * 斜杠命令表与输入态解析的纯函数测试(组件交互在 slash-menu.test.tsx)。
+ * 斜杠命令表与输入态解析的纯函数测试。
  */
 
 import { describe, expect, it } from 'vitest';
