@@ -206,6 +206,8 @@ export function createBridge(deps: BridgeDeps): Bridge {
   // ---- 上行:RPC 白名单(显式方法表,不做字符串透传) ----
   // 换会话三连(newSession/resumeSession/forkSession)已退役:一个 sidecar
   // 终生绑定一个会话,新任务/打开历史/fork 走 TaskManager 的 task:* 通道。
+  // 各 case 的返回类型契约在 shared/ipc.ts 的 RpcResultMap——switch 做不了
+  // kind 关联收窄,这里保持 Promise<unknown>,改返回值必须同步那张映射表。
   const dispatchRpc = async (request: RpcRequest): Promise<unknown> => {
     switch (request.kind) {
       case 'run':

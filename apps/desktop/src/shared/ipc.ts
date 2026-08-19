@@ -170,6 +170,16 @@ export interface ModelTestSummary {
   durationMs: number;
 }
 
+/** 分支菜单数据源。形状复制自根仓库 src/agent/review.ts 的 ReviewTargets。 */
+export interface ReviewTargetsSummary {
+  isRepo: boolean;
+  /** detached HEAD 时为真(uncommitted / commit 仍可用)。 */
+  detached: boolean;
+  currentBranch?: string;
+  /** 除当前分支外的本地分支,按最近提交时间倒序。 */
+  branches: Array<{ name: string; subject: string }>;
+}
+
 export const IPC_CHANNELS = {
   subscribe: 'bridge:subscribe',
   rpc: 'bridge:rpc',
@@ -234,6 +244,49 @@ export type RpcRequest =
   /* 分支菜单数据源(核心 reviewTargets:当前分支 + 本地分支列表)。 */
   | { kind: 'reviewTargets' }
   | { kind: 'permission'; id: string; decision: PermissionDecision };
+
+export type RpcKind = RpcRequest['kind'];
+
+/**
+ * kind → 响应类型映射(与 main/bridge.ts dispatchRpc 各 case 的实际返回值
+ * 逐一核对,那边保持 Promise<unknown>——switch 语句做不了 kind 关联收窄,
+ * 这里才是契约锚点)。`unknown` = wire 上有值但 GUI 契约不消费(要用先建
+ * Summary)。索引访问本身就是完整性检查:RpcRequest 新增 kind 而这里漏写,
+ * RpcResult<K> 直接编译报错。
+ */
+export interface RpcResultMap {
+  run: void; // deferred:ack 后 resolve undefined
+  abort: void;
+  compact: void;
+  switch: unknown; // wire 上是 ResolvedProvider,GUI 不消费
+  saveProvider: void;
+  deleteProvider: void;
+  setPermissions: void;
+  setPlan: void;
+  setReasoningEffort: void;
+  listProviderModels: ProviderModelsSummary[];
+  testModel: ModelTestSummary;
+  modelCapabilities: ModelCapabilitiesSummary | undefined;
+  runSkill: void;
+  startReview: unknown; // deferred 整轮结果,GUI fire-and-forget
+  startSimplify: unknown;
+  workspaceStatus: WorkspaceStatusSummary;
+  fileDiff: FileDiffSummary;
+  archiveSession: SessionMetaSummary;
+  renameSession: SessionMetaSummary;
+  deleteSession: void;
+  listFiles: WorkspaceFilesSummary;
+  readFile: FileContentSummary;
+  switchBranch: GitOpSummary;
+  commitAll: GitOpSummary;
+  undoCommit: GitOpSummary;
+  discardAll: GitOpSummary;
+  reviewTargets: ReviewTargetsSummary;
+  /** false = 请求 id 已过期(bridge 侧 pendingPermission 不匹配)。 */
+  permission: boolean;
+}
+
+export type RpcResult<K extends RpcKind> = RpcResultMap[K];
 
 /** 下行推送通道的白名单(preload 据此收窄 renderer 可订阅的 channel)。 */
 export const PUSH_CHANNELS = [

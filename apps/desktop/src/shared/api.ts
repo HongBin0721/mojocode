@@ -9,6 +9,7 @@ import type {
   ConnectionState,
   PushChannel,
   RpcRequest,
+  RpcResult,
   SubscribeResult,
   TaskScoped,
   TaskSummary,
@@ -24,8 +25,10 @@ export interface MojocodeDesktopApi {
   /**
    * 调用白名单方法。缺省路由到聚焦任务;带 taskId 时定向(后台任务的审批
    * 决策等)。失败以 rejection 形式返回(message 过 IPC 保留)。
+   * 响应类型按请求 kind 从 RpcResultMap 推导(preload 的 ipcRenderer.invoke
+   * 返回 Promise<any>,对这个泛型签名天然可赋值,实现零改动)。
    */
-  rpc(request: RpcRequest, taskId?: string): Promise<unknown>;
+  rpc<R extends RpcRequest>(request: R, taskId?: string): Promise<RpcResult<R['kind']>>;
   /** 订阅下行通道,载荷类型按通道推导。返回退订函数。 */
   on<C extends PushChannel>(channel: C, listener: (payload: PushPayloads[C]) => void): () => void;
   /** 主进程平台('darwin' 等):侧栏红绿灯让位 / drag region 仅 mac 需要。 */
