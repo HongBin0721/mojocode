@@ -1,184 +1,33 @@
 /**
- * 侧栏(Codex 设计稿形态,252px 起可拖宽):
- *  1. 项目切换器(文件夹图标 + 项目名/路径 + ⇕),弹层列出项目(任务计数、
- *     当前项目打勾)+ 底部「导入项目文件夹」(原生目录选择器);
- *  2. 全宽「+ 新建任务」按钮(落在当前项目的 root);
- *  3. 主导航:首页 / 任务(badge = 当前项目任务数)/ 归档;
- *  4. 「任务」分组:当前项目的任务行(TONE 状态点 + 标题 + 状态·时间),
- *     ⌘K 搜索行按需展开;右键菜单(重命名/归档/分支/复制/删除);
- *  5. 底部设置入口。
+ * 侧栏(Codex 设计稿形态,252px 起可拖宽)——外壳:store 订阅、当前项目
+ * 决议与布局组装;子件在 sidebar/ 子目录(ProjectSwitcher / TaskList /
+ * TaskRow / SidebarResizer / RenameDialog / use-task-context-menu)。
  *
+ * 结构:1. 项目切换器;2. 全宽「+ 新建任务」;3. 主导航(首页/任务/归档);
+ * 4. 「任务」分组(⌘K 搜索 + 任务行 + 右键菜单);5. 底部设置入口。
  * 右缘可拖宽(264~50vw,双击复位),⌘B 折叠(App 里监听;折叠态的展开钮
  * 在 TitleBar)。窗口拖拽区归 TitleBar,侧栏不再承担。
  */
 
-import React, { memo, useEffect, useMemo, useState } from 'react';
-import type { TaskSummary } from '../../shared/ipc.js';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useUiStore, type View } from '../state/uiStore.js';
 import { useProjectsStore } from '../state/projectsStore.js';
-import { forkTask, newTask, openTask } from '../state/actions.js';
-import { revealPath, rpcFire } from '../bridge/invoke.js';
-import { taskTone, toneColorVar, toneLabelKey } from '../utils/task-tone.js';
+import { newTask } from '../state/actions.js';
 import { archivedTasks, liveTasks, projectTasks, taskCountsByRoot } from '../utils/tasks.js';
-import { formatRelativeTime, projectName } from '../utils/format.js';
 import { t, useLocale } from '../i18n/index.js';
-import { MenuPopover, MenuCloseContext } from './Menu.js';
-import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { ImportProjectDialog } from './ImportProjectDialog.js';
-import { Modal } from './overlays/Modal.js';
+import { ProjectSwitcher } from './sidebar/ProjectSwitcher.js';
+import { SidebarResizer } from './sidebar/SidebarResizer.js';
+import { TaskList } from './sidebar/TaskList.js';
+import { useTaskContextMenu } from './sidebar/use-task-context-menu.js';
 import {
   ArchiveIcon,
-  CopyIcon,
-  FolderOpenIcon,
-  GitBranchIcon,
-  HashIcon,
-  PencilIcon,
-  PushPinIcon,
-  TrashIcon,
-  CaretUpDownIcon,
   ChatTeardropDotsIcon,
-  CheckIcon,
-  FolderPlusIcon,
-  FolderSimpleIcon,
   GearIcon,
   HouseIcon,
   PlusIcon,
 } from './icons.js';
-
-/** 任务行:TONE 状态点 + 标题,第二行 状态 · 相对时间(设计稿双行形态)。 */
-const TaskRow = memo(function TaskRow({
-  task,
-  active,
-  pinned,
-  onContextMenu,
-}: {
-  task: TaskSummary;
-  active: boolean;
-  pinned: boolean;
-  onContextMenu: (task: TaskSummary, x: number, y: number) => void;
-}) {
-  useLocale();
-  const tone = taskTone(task);
-  return (
-    <button
-      type="button"
-      className={`task-row ${active ? 'task-row-active' : ''}`}
-      onClick={() => openTask(task.id)}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onContextMenu(task, e.clientX, e.clientY);
-      }}
-    >
-      <span className="task-row-head">
-        <span className="task-dot" style={{ background: toneColorVar(tone) }} />
-        <span className="task-row-title">{task.title || task.id.slice(0, 8)}</span>
-        {pinned ? (
-          <span className="task-pin">
-            <PushPinIcon size={11} />
-          </span>
-        ) : null}
-        {task.hasPendingPermission ? <span className="task-badge-permission" /> : null}
-      </span>
-      <span className="task-row-meta">
-        {t(toneLabelKey(tone))} · {formatRelativeTime(task.updatedAt)}
-      </span>
-    </button>
-  );
-});
-
-/** 项目切换器弹层内容:项目行(名称/路径/任务数/当前勾)+ 导入入口。 */
-function ProjectMenu({
-  currentRoot,
-  taskCountOf,
-  onImport,
-}: {
-  currentRoot: string | undefined;
-  taskCountOf: (root: string) => number;
-  onImport: () => void;
-}) {
-  useLocale();
-  const close = React.useContext(MenuCloseContext);
-  const projects = useProjectsStore((s) => s.projects);
-  const select = useProjectsStore((s) => s.select);
-
-  const roots = useMemo(
-    () => [...new Set([...(currentRoot ? [currentRoot] : []), ...projects])],
-    [currentRoot, projects],
-  );
-
-  const importFolder = () => {
-    close();
-    onImport(); // 设计稿形态:打开导入对话框(拖放 + 选择)
-  };
-
-  return (
-    <>
-      {roots.map((root) => (
-        <button
-          key={root}
-          type="button"
-          className="menu-item project-item"
-          onClick={() => {
-            select(root);
-            close();
-          }}
-        >
-          <FolderSimpleIcon size={15} />
-          <span className="project-item-body">
-            <span className="project-item-name">{projectName(root)}</span>
-            <span className="project-item-path">{root}</span>
-          </span>
-          <span className="project-item-count">
-            {t('sidebar.taskCount', { count: String(taskCountOf(root)) })}
-          </span>
-          {root === currentRoot ? <CheckIcon size={13} /> : null}
-        </button>
-      ))}
-      <button type="button" className="menu-item project-import" onClick={importFolder}>
-        <FolderPlusIcon size={15} />
-        {t('sidebar.importProject')}
-      </button>
-    </>
-  );
-}
-
-/** 右缘拖宽手柄:拖动钳制 264~50vw,双击复位,松手落盘。 */
-function SidebarResizer() {
-  const setWidth = useUiStore((s) => s.setWidth);
-  const commitWidth = useUiStore((s) => s.commitWidth);
-  const resetWidth = useUiStore((s) => s.resetWidth);
-  const [dragging, setDragging] = useState(false);
-
-  return (
-    <div
-      className={`sidebar-resizer ${dragging ? 'sidebar-resizer-active' : ''}`}
-      onDoubleClick={resetWidth}
-      onMouseDown={(e) => {
-        // 宽度 = 手柄 X - 侧栏左缘(手柄贴侧栏右缘,随宽度移动)。
-        const sidebarLeft = e.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
-        // 右面板占宽按下时量一次(拖侧栏时它不变):上限要给中间区留最小宽。
-        const reserved =
-          document.querySelector('.right-panel:not(.right-panel-full)')?.getBoundingClientRect()
-            .width ?? 0;
-        setDragging(true);
-        const move = (ev: MouseEvent) => {
-          setWidth(ev.clientX - sidebarLeft, window.innerWidth, reserved);
-        };
-        const up = () => {
-          setDragging(false);
-          commitWidth();
-          document.removeEventListener('mousemove', move);
-          document.removeEventListener('mouseup', up);
-          document.body.style.cursor = '';
-        };
-        document.body.style.cursor = 'col-resize';
-        document.addEventListener('mousemove', move);
-        document.addEventListener('mouseup', up);
-      }}
-    />
-  );
-}
 
 export function Sidebar() {
   useLocale();
@@ -195,11 +44,11 @@ export function Sidebar() {
   const searchOpen = useUiStore((s) => s.searchOpen);
   const closeSearchState = useUiStore((s) => s.closeSearch);
   const [query, setQuery] = useState('');
+  const [importing, setImporting] = useState(false);
 
   const selectedProject = useProjectsStore((s) => s.selected);
   const addProjectToList = useProjectsStore((s) => s.add);
   const pinned = useProjectsStore((s) => s.pinned);
-  const togglePin = useProjectsStore((s) => s.togglePin);
   /** 当前项目:手动选择优先,否则跟随聚焦任务的 root。 */
   const currentRoot = selectedProject ?? focusedRoot;
 
@@ -229,78 +78,7 @@ export function Sidebar() {
     setQuery('');
   };
 
-  const [contextMenu, setContextMenu] = useState<
-    { task: TaskSummary; x: number; y: number } | undefined
-  >();
-  const [renaming, setRenaming] = useState<string | undefined>();
-  const [importing, setImporting] = useState(false);
-
-  /** 右键菜单条目:按可用能力条件渲染(缺失即不显示,不做假按钮)。 */
-  const contextItems = (task: TaskSummary): ContextMenuItem[] => [
-    {
-      id: 'pin',
-      label: pinned.includes(task.id) ? t('ctxMenu.unpin') : t('ctxMenu.pin'),
-      icon: <PushPinIcon size={14} />,
-    },
-    { id: 'rename', label: t('ctxMenu.rename'), icon: <PencilIcon size={14} /> },
-    { id: 'archive', label: t('ctxMenu.archive'), icon: <ArchiveIcon size={14} /> },
-    {
-      id: 'reveal',
-      label: t('ctxMenu.reveal'),
-      icon: <FolderOpenIcon size={14} />,
-      separatorBefore: true,
-    },
-    { id: 'copyRoot', label: t('ctxMenu.copyRoot'), icon: <CopyIcon size={14} /> },
-    { id: 'copyId', label: t('ctxMenu.copyId'), icon: <HashIcon size={14} /> },
-    {
-      id: 'fork',
-      label: t('ctxMenu.fork'),
-      icon: <GitBranchIcon size={14} />,
-      separatorBefore: true,
-    },
-    {
-      id: 'delete',
-      label: t('ctxMenu.delete'),
-      icon: <TrashIcon size={14} />,
-      separatorBefore: true,
-      danger: true,
-    },
-  ];
-
-  const runContextAction = (task: TaskSummary, id: string): void => {
-    switch (id) {
-      case 'pin':
-        togglePin(task.id);
-        return;
-      case 'reveal':
-        revealPath(task.root);
-        return;
-      case 'rename':
-        setRenaming(task.id);
-        return;
-      case 'archive':
-        rpcFire(
-          { kind: 'archiveSession', id: task.id, archived: true },
-          { errorKey: 'notice.archiveFailed' },
-        );
-        return;
-      case 'fork':
-        forkTask(task.root, task.id);
-        return;
-      case 'copyRoot':
-        void navigator.clipboard?.writeText(task.root);
-        return;
-      case 'copyId':
-        void navigator.clipboard?.writeText(task.id);
-        return;
-      case 'delete':
-        // 活跃会话由 server 拒删(英文错误经 toast 可见)。
-        rpcFire({ kind: 'deleteSession', id: task.id }, { errorKey: 'notice.deleteFailed' });
-        return;
-      default:
-        return;
-    }
-  };
+  const contextMenu = useTaskContextMenu();
 
   const navRow = (
     target: Exclude<View, 'settings'>,
@@ -324,28 +102,11 @@ export function Sidebar() {
   return (
     <aside className="sidebar" style={{ width: `${width}px` }}>
       <div className="sidebar-head">
-        <MenuPopover
-          block
-          title={t('sidebar.switchProject')}
-          label={
-            <span className="project-trigger">
-              <FolderSimpleIcon size={15} />
-              <span className="project-trigger-body">
-                <span className="project-trigger-name">
-                  {currentRoot ? projectName(currentRoot) : t('sidebar.projects')}
-                </span>
-                {currentRoot ? <span className="project-trigger-path">{currentRoot}</span> : null}
-              </span>
-              <CaretUpDownIcon size={13} />
-            </span>
-          }
-        >
-          <ProjectMenu
-            currentRoot={currentRoot}
-            taskCountOf={taskCountOf}
-            onImport={() => setImporting(true)}
-          />
-        </MenuPopover>
+        <ProjectSwitcher
+          currentRoot={currentRoot}
+          taskCountOf={taskCountOf}
+          onImport={() => setImporting(true)}
+        />
         <button
           type="button"
           className="new-task-btn"
@@ -375,35 +136,17 @@ export function Sidebar() {
       <div className="sidebar-section-head">
         <span className="sidebar-section-title">{t('sidebar.tasksSection')}</span>
       </div>
-      {searchOpen ? (
-        <input
-          className="task-search"
-          value={query}
-          placeholder={t('sidebar.search')}
-          autoFocus
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') closeSearch();
-          }}
-        />
-      ) : null}
-      <div className="task-list">
-        {tasks === undefined ? (
-          <div className="sidebar-empty">{t('sidebar.unsupported')}</div>
-        ) : currentProjectTasks.length === 0 ? (
-          <div className="sidebar-empty">{query ? t('sidebar.noMatch') : t('sidebar.noTasks')}</div>
-        ) : (
-          currentProjectTasks.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              active={task.id === storeId}
-              pinned={pinned.includes(task.id)}
-              onContextMenu={(target, x, y) => setContextMenu({ task: target, x, y })}
-            />
-          ))
-        )}
-      </div>
+      <TaskList
+        tasks={tasks}
+        list={currentProjectTasks}
+        activeId={storeId}
+        pinned={pinned}
+        searchOpen={searchOpen}
+        query={query}
+        onQueryChange={setQuery}
+        onCloseSearch={closeSearch}
+        onContextMenu={contextMenu.open}
+      />
       <div className="sidebar-footer">
         <button
           type="button"
@@ -417,67 +160,8 @@ export function Sidebar() {
         </button>
       </div>
       <SidebarResizer />
-      {contextMenu ? (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          title={contextMenu.task.title || contextMenu.task.id.slice(0, 8)}
-          items={contextItems(contextMenu.task)}
-          onPick={(id) => runContextAction(contextMenu.task, id)}
-          onClose={() => setContextMenu(undefined)}
-        />
-      ) : null}
+      {contextMenu.element}
       {importing ? <ImportProjectDialog onClose={() => setImporting(false)} /> : null}
-      {renaming ? (
-        <RenameDialog
-          taskId={renaming}
-          initial={(tasks ?? []).find((task) => task.id === renaming)?.title ?? ''}
-          onClose={() => setRenaming(undefined)}
-        />
-      ) : null}
     </aside>
-  );
-}
-
-/** 重命名对话框(右键菜单「重命名」):提交走 renameSession RPC。 */
-function RenameDialog({
-  taskId,
-  initial,
-  onClose,
-}: {
-  taskId: string;
-  initial: string;
-  onClose: () => void;
-}) {
-  useLocale();
-  const [value, setValue] = useState(initial);
-  const submit = () => {
-    const title = value.trim();
-    if (!title) return;
-    rpcFire({ kind: 'renameSession', id: taskId, title }, { errorKey: 'notice.renameFailed' });
-    onClose();
-  };
-  return (
-    <Modal variant="overlay" cardClassName="overlay-card-sm" ariaLabel={t('ctxMenu.rename')} onClose={onClose}>
-      <div className="overlay-title">{t('ctxMenu.rename')}</div>
-      <input
-        className="rename-input"
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit();
-          // Escape 由 Modal 的捕获相栈顶仲裁统一处理
-        }}
-      />
-      <div className="overlay-actions">
-        <button type="button" onClick={onClose}>
-          {t('panel.discardCancel')}
-        </button>
-        <button type="button" className="btn-primary" disabled={!value.trim()} onClick={submit}>
-          {t('ctxMenu.renameSave')}
-        </button>
-      </div>
-    </Modal>
   );
 }
