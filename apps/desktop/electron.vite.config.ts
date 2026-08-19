@@ -6,11 +6,15 @@
  * 会连带拉进根仓库的运行时依赖(ai、execa、zod…),它们一律 external——
  * 从根 package.json 的 dependencies 现读,保持与根包自动同步;运行时由
  * Node 沿 apps/desktop/node_modules → 根 node_modules 向上解析。
+ * external 走 build.externalizeDeps 配置项(externalizeDepsPlugin 已
+ * deprecated),include 语义 = 在本包 dependencies 自动检测之上追加名单
+ * ——曾经写成不存在的 `external` 字段被静默忽略,根依赖全量内联进
+ * out/main;本文件已纳入 tsconfig include,同类拼写错会在 typecheck 报红。
  */
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -43,15 +47,15 @@ const mainAliases = {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ external: rootDependencies })],
     resolve: { alias: { ...mainAliases } },
     build: {
+      externalizeDeps: { include: rootDependencies },
       outDir: 'out/main',
       lib: { entry: resolve(repoRoot, 'apps/desktop/src/main/index.ts') },
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // externalizeDeps 默认开启(等价旧 externalizeDepsPlugin()),无需显式配置。
     resolve: { alias: { ...rendererAliases } },
     build: {
       outDir: 'out/preload',

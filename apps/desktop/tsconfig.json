@@ -34,5 +34,14 @@
       "@core/session-store": ["../../src/session/store.ts"]
     }
   },
-  "include": ["src/main", "src/preload", "src/shared", "tests/*.ts"]
+  // 两个根级配置文件必须纳入 typecheck:electron.vite.config.ts 曾因逃出
+  // 覆盖范围而带着一个静默失效的 external 拼写错活了很久。
+  "include": [
+    "src/main",
+    "src/preload",
+    "src/shared",
+    "tests/*.ts",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ]
 }
