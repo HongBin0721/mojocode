@@ -64,10 +64,12 @@ jobs:
             });
           "
 
-  # GUI(apps/desktop 独立包,不在根 workspaces):typecheck + 测试。
+  # GUI(apps/desktop 独立包,不在根 workspaces):typecheck + 测试 + build。
   # @core/* alias 直接编译仓库根 src/ 的 TS 源码,其 zod/ai 依赖向上解析到
-  # 根 node_modules,所以根依赖也要装;typecheck/测试都不启动 Electron,
+  # 根 node_modules,所以根依赖也要装;typecheck/测试/build 都不启动 Electron,
   # 用官方 postinstall 约定的环境变量跳过 ~100MB 的二进制下载。
+  # build 一步是 renderer 白名单与 externalize 策略的最后防线:曾有配置拼写
+  # 错只在真实构建时暴露(typecheck/test 全绿)。
   desktop:
     runs-on: ubuntu-latest
     steps:
@@ -87,4 +89,6 @@ jobs:
       - run: npm run typecheck
         working-directory: apps/desktop
       - run: npm test
+        working-directory: apps/desktop
+      - run: npm run build
         working-directory: apps/desktop
