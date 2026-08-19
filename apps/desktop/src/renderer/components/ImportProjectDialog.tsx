@@ -5,12 +5,12 @@
  * 选中即入项目列表并切换过去——不动磁盘、不拉 sidecar(新任务时才 spawn)。
  */
 
-import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useState } from 'react';
 import { useProjectsStore } from '../state/projectsStore.js';
 import { bridgeApi } from '../utils/host.js';
 import { t, useLocale } from '../i18n/index.js';
 import { FolderPlusIcon, GitBranchIcon } from './icons.js';
+import { Modal } from './overlays/Modal.js';
 
 export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
   useLocale();
@@ -18,17 +18,6 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
   const select = useProjectsStore((s) => s.select);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | undefined>();
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (document.querySelector('.select-menu')) return; // 内层浮层让位
-      event.stopPropagation();
-      onClose();
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
 
   const finish = (root: string) => {
     addProject(root);
@@ -62,39 +51,37 @@ export function ImportProjectDialog({ onClose }: { onClose: () => void }) {
     finish(bridgeApi().pathForFile(file));
   };
 
-  return createPortal(
-    <div className="overlay-backdrop" onClick={onClose}>
-      <div className="overlay-card overlay-card-import" onClick={(e) => e.stopPropagation()}>
-        <div className="overlay-title">{t('importDialog.title')}</div>
-        <div className="overlay-note">{t('importDialog.note')}</div>
-        <div
-          className={`import-drop ${dragging ? 'import-drop-active' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-        >
-          <FolderPlusIcon size={26} />
-          <div className="import-drop-main">{t('importDialog.drop')}</div>
-          <div className="import-drop-or">{t('importDialog.or')}</div>
-          <button type="button" className="import-choose" onClick={choose}>
-            {t('importDialog.choose')}
-          </button>
-        </div>
-        {error ? <div className="import-error">{error}</div> : null}
-        <div className="import-hint">
-          <GitBranchIcon size={13} />
-          {t('importDialog.hint')}
-        </div>
-        <div className="overlay-actions">
-          <button type="button" onClick={onClose}>
-            {t('importDialog.cancel')}
-          </button>
-        </div>
+  // portal/backdrop/Esc(浮层栈仲裁)统一由 Modal 承担。
+  return (
+    <Modal variant="overlay" cardClassName="overlay-card-import" ariaLabel={t('importDialog.title')} onClose={onClose}>
+      <div className="overlay-title">{t('importDialog.title')}</div>
+      <div className="overlay-note">{t('importDialog.note')}</div>
+      <div
+        className={`import-drop ${dragging ? 'import-drop-active' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+      >
+        <FolderPlusIcon size={26} />
+        <div className="import-drop-main">{t('importDialog.drop')}</div>
+        <div className="import-drop-or">{t('importDialog.or')}</div>
+        <button type="button" className="import-choose" onClick={choose}>
+          {t('importDialog.choose')}
+        </button>
       </div>
-    </div>,
-    document.body,
+      {error ? <div className="import-error">{error}</div> : null}
+      <div className="import-hint">
+        <GitBranchIcon size={13} />
+        {t('importDialog.hint')}
+      </div>
+      <div className="overlay-actions">
+        <button type="button" onClick={onClose}>
+          {t('importDialog.cancel')}
+        </button>
+      </div>
+    </Modal>
   );
 }

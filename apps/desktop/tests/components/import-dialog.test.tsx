@@ -8,10 +8,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ImportProjectDialog } from '../../src/renderer/components/ImportProjectDialog.js';
 import { useProjectsStore } from '../../src/renderer/state/projectsStore.js';
+import {
+  acquireOverlayLayer,
+  resetOverlayStackForTest,
+} from '../../src/renderer/components/overlays/overlay-stack.js';
 import { setLocale } from '../../src/renderer/i18n/index.js';
 
 beforeEach(() => {
   setLocale('zh-CN');
+  resetOverlayStackForTest();
   useProjectsStore.setState({ projects: [], selected: null });
   window.mojocode = {
     pickDirectory: vi.fn().mockResolvedValue('/picked'),
@@ -48,15 +53,14 @@ describe('ImportProjectDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('Esc 关闭(内层 select 浮层存在时让位)', () => {
+  it('Esc 关闭(上方还有浮层时让位——浮层栈仲裁)', () => {
     const onClose = vi.fn();
     render(<ImportProjectDialog onClose={onClose} />);
-    const inner = document.createElement('div');
-    inner.className = 'select-menu';
-    document.body.appendChild(inner);
+    // 模拟内层浮层(Select 等)开着:对话框不是栈顶,Esc 不归它
+    const inner = acquireOverlayLayer();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
-    inner.remove();
+    inner.release();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalled();
   });

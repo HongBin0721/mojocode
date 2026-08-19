@@ -26,6 +26,7 @@ import { t, useLocale } from '../i18n/index.js';
 import { MenuPopover, MenuCloseContext } from './Menu.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { ImportProjectDialog } from './ImportProjectDialog.js';
+import { Modal } from './overlays/Modal.js';
 import {
   ArchiveIcon,
   CopyIcon,
@@ -457,28 +458,26 @@ function RenameDialog({
     onClose();
   };
   return (
-    <div className="overlay-backdrop" onClick={onClose}>
-      <div className="overlay-card overlay-card-sm" onClick={(e) => e.stopPropagation()}>
-        <div className="overlay-title">{t('ctxMenu.rename')}</div>
-        <input
-          className="rename-input"
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submit();
-            if (e.key === 'Escape') onClose();
-          }}
-        />
-        <div className="overlay-actions">
-          <button type="button" onClick={onClose}>
-            {t('panel.discardCancel')}
-          </button>
-          <button type="button" className="btn-primary" disabled={!value.trim()} onClick={submit}>
-            {t('ctxMenu.renameSave')}
-          </button>
-        </div>
+    <Modal variant="overlay" cardClassName="overlay-card-sm" ariaLabel={t('ctxMenu.rename')} onClose={onClose}>
+      <div className="overlay-title">{t('ctxMenu.rename')}</div>
+      <input
+        className="rename-input"
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') submit();
+          // Escape 由 Modal 的捕获相栈顶仲裁统一处理
+        }}
+      />
+      <div className="overlay-actions">
+        <button type="button" onClick={onClose}>
+          {t('panel.discardCancel')}
+        </button>
+        <button type="button" className="btn-primary" disabled={!value.trim()} onClick={submit}>
+          {t('ctxMenu.renameSave')}
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -17,6 +17,7 @@ import { usePanelStore } from '../state/panelStore.js';
 import { useUiStore, type RightTab } from '../state/uiStore.js';
 import { t, useLocale } from '../i18n/index.js';
 import { DiffView, commentTargetOf, type ParsedDiffLine } from './DiffView.js';
+import { Modal } from './overlays/Modal.js';
 import { buildReviewComment } from '../utils/review-comment.js';
 import { langOf } from '../utils/tokenize.js';
 import { CHAT_MIN_WIDTH } from '../utils/sidebar.js';
@@ -94,37 +95,35 @@ function DiscardConfirm({ onClose }: { onClose: () => void }) {
   const status = useReviewStore((s) => s.status);
   const discardAll = useReviewStore((s) => s.discardAll);
   return (
-    <div className="overlay-backdrop" onClick={onClose}>
-      <div className="overlay-card" onClick={(e) => e.stopPropagation()}>
-        <div className="overlay-title">{t('panel.discardTitle')}</div>
-        <div className="overlay-note">{t('panel.discardNote')}</div>
-        <div className="overlay-list">
-          {(status?.entries ?? []).map((entry) => (
-            <div key={entry.path} className="overlay-list-row">
-              <span className={`review-change review-change-${entry.change}`}>
-                {CHANGE_LABEL[entry.change]}
-              </span>
-              <span className="overlay-list-path">{entry.path}</span>
-            </div>
-          ))}
-        </div>
-        <div className="overlay-actions">
-          <button type="button" onClick={onClose}>
-            {t('panel.discardCancel')}
-          </button>
-          <button
-            type="button"
-            className="btn-danger"
-            onClick={() => {
-              onClose();
-              void discardAll();
-            }}
-          >
-            {t('panel.discardConfirm')}
-          </button>
-        </div>
+    <Modal variant="overlay" ariaLabel={t('panel.discardTitle')} onClose={onClose}>
+      <div className="overlay-title">{t('panel.discardTitle')}</div>
+      <div className="overlay-note">{t('panel.discardNote')}</div>
+      <div className="overlay-list">
+        {(status?.entries ?? []).map((entry) => (
+          <div key={entry.path} className="overlay-list-row">
+            <span className={`review-change review-change-${entry.change}`}>
+              {CHANGE_LABEL[entry.change]}
+            </span>
+            <span className="overlay-list-path">{entry.path}</span>
+          </div>
+        ))}
       </div>
-    </div>
+      <div className="overlay-actions">
+        <button type="button" onClick={onClose}>
+          {t('panel.discardCancel')}
+        </button>
+        <button
+          type="button"
+          className="btn-danger"
+          onClick={() => {
+            onClose();
+            void discardAll();
+          }}
+        >
+          {t('panel.discardConfirm')}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
