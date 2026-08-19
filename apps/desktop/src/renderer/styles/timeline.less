@@ -37,7 +37,6 @@
 }
 .entry-body {
   min-width: 0;
-  white-space: pre-wrap;
   word-break: break-word;
   /* 流式文本的进入动画(ZCode:0.9s 自定义缓动的淡入) */
   .active-area & {
@@ -140,6 +139,12 @@
 
 /* ---- markdown ---- */
 
+/* react-markdown 在块级元素之间保留 \n 文本节点,祖先若是 pre-wrap 会把
+ * 每个 \n 渲染成一整行空行——markdown 容器必须自己钉死 normal。 */
+.markdown {
+  white-space: normal;
+  line-height: 1.55;
+}
 .markdown > :first-child {
   margin-top: 0;
 }
@@ -148,6 +153,8 @@
 }
 .markdown p {
   margin: 0.5em 0;
+  /* 段内软换行仍按换行显示(模型输出依赖);\n 只在块与块之间才是噪音 */
+  white-space: pre-wrap;
 }
 .markdown ul,
 .markdown ol {
