@@ -4,7 +4,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import { IPC_CHANNELS, type PushChannel, type RpcRequest } from '../shared/ipc.js';
+import { IPC_CHANNELS, pushChannelOf, type PushChannel, type RpcRequest } from '../shared/ipc.js';
 import type { MojocodeDesktopApi } from '../shared/api.js';
 
 const api: MojocodeDesktopApi = {
@@ -23,10 +23,9 @@ const api: MojocodeDesktopApi = {
   // 同步 API:webUtils 在 preload 侧直接可用,不必绕 invoke。
   pathForFile: (file: File) => webUtils.getPathForFile(file),
   on: (channel, listener) => {
-    // 逻辑名 → 物理通道:main 侧 send 的是 IPC_CHANNELS 的值('bridge:event'
-    // 等)。漏映射会订阅到永远没有流量的通道,下行推送全部静默丢失——
-    // 首屏靠 subscribe 返回值仍正常,此后事件/状态/权限一概不回显(踩过的坑)。
-    const physical = IPC_CHANNELS[channel as PushChannel];
+    // 逻辑名 → 物理通道的映射在 shared/ipc.ts 的 pushChannelOf(preload 顶层
+    // import electron 进不了 node 测试,映射逻辑放 shared 才测得到)。
+    const physical = pushChannelOf(channel as PushChannel);
     const wrapped = (_event: unknown, payload: unknown): void => {
       (listener as (payload: unknown) => void)(payload);
     };

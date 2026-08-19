@@ -236,7 +236,28 @@ export type RpcRequest =
   | { kind: 'permission'; id: string; decision: PermissionDecision };
 
 /** 下行推送通道的白名单(preload 据此收窄 renderer 可订阅的 channel)。 */
-export type PushChannel = 'state' | 'event' | 'replay' | 'connection' | 'permission' | 'tasks';
+export const PUSH_CHANNELS = [
+  'state',
+  'event',
+  'replay',
+  'connection',
+  'permission',
+  'tasks',
+] as const;
+
+export type PushChannel = (typeof PUSH_CHANNELS)[number];
+
+/**
+ * 逻辑名 → 物理通道。preload 的 on() 唯一取用点:曾因漏映射订阅到永无流量
+ * 的通道,下行推送全部静默丢失(首屏靠 subscribe 返回值正常,此后一概不
+ * 回显)。未知名直接 throw,比返回 undefined 后静默订空强。
+ */
+export function pushChannelOf(channel: PushChannel): string {
+  if (!(PUSH_CHANNELS as readonly string[]).includes(channel)) {
+    throw new Error(`未知下行通道:${channel as string}`);
+  }
+  return IPC_CHANNELS[channel];
+}
 
 /** 一个活跃任务的即时状态(subscribe 返回;replayItems 只有聚焦任务带)。 */
 export interface LiveTaskState {
