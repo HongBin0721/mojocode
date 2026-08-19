@@ -12,6 +12,9 @@ beforeEach(() => {
     returnView: 'task',
     taskLayout: 'chat',
     rightTab: 'diff',
+    width: 264,
+    collapsed: false,
+    panelWidth: 480,
   });
 });
 
@@ -44,5 +47,27 @@ describe('uiStore 视图状态机', () => {
     expect(useUiStore.getState().taskLayout).toBe('chat');
     useUiStore.getState().setRightTab('terminal');
     expect(useUiStore.getState().rightTab).toBe('terminal');
+  });
+});
+
+describe('uiStore 面板宽度', () => {
+  it('setPanelWidth 钳制 240~720,并给会话区留最小宽(侧栏实宽从 store 读)', () => {
+    const s = useUiStore.getState();
+    s.setPanelWidth(100, 2000);
+    expect(useUiStore.getState().panelWidth).toBe(240); // 下限
+    useUiStore.getState().setPanelWidth(900, 2000);
+    expect(useUiStore.getState().panelWidth).toBe(720); // 上限
+    // 视口 1100 - 侧栏 264 - CHAT_MIN_WIDTH 360 = 476:上限被会话区最小宽压低
+    useUiStore.getState().setPanelWidth(700, 1100);
+    expect(useUiStore.getState().panelWidth).toBe(476);
+    // 侧栏折叠时不占宽:同样视口上限放宽到 1100 - 0 - 360 = 740 → 封顶 720
+    useUiStore.setState({ collapsed: true });
+    useUiStore.getState().setPanelWidth(700, 1100);
+    expect(useUiStore.getState().panelWidth).toBe(700);
+  });
+
+  it('窗口极窄时上限压不过 240 下限(CSS 端兜底,store 不产出更小值)', () => {
+    useUiStore.getState().setPanelWidth(300, 500);
+    expect(useUiStore.getState().panelWidth).toBe(240);
   });
 });

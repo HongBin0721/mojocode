@@ -46,3 +46,36 @@ export function loadSidebarCollapsed(): boolean {
 export function saveSidebarCollapsed(collapsed: boolean): void {
   writeLocal(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
 }
+
+/* ---- 右侧面板宽度(与侧栏同一套「钳制纯函数 + localStorage 序列化」) ---- */
+
+export const PANEL_DEFAULT_WIDTH = 480;
+export const PANEL_MIN_WIDTH = 240;
+export const PANEL_MAX_WIDTH = 720;
+export const PANEL_WIDTH_KEY = 'mojocode.panel-width';
+
+/**
+ * 面板拖宽钳制:240~720,且给中间会话区留 CHAT_MIN_WIDTH(sidebarWidth 是
+ * 侧栏当前占宽,折叠时传 0)。窗口极窄时上限压不过 240 下限——CSS 端由
+ * 面板先收缩兜底(与拆分前 RightPanel 内联逻辑等价)。
+ */
+export function clampPanelWidth(width: number, viewportWidth: number, sidebarWidth: number): number {
+  const limit = Math.max(
+    PANEL_MIN_WIDTH,
+    Math.min(PANEL_MAX_WIDTH, viewportWidth - sidebarWidth - CHAT_MIN_WIDTH),
+  );
+  const clamped = Math.min(limit, Math.max(PANEL_MIN_WIDTH, Math.round(width)));
+  return Number.isFinite(clamped) ? clamped : PANEL_DEFAULT_WIDTH;
+}
+
+/** 读取持久化面板宽;非法/缺失回默认(不在读取时钳制——视口相关,渲染时钳)。 */
+export function loadPanelWidth(): number {
+  const raw = readLocal(PANEL_WIDTH_KEY);
+  if (raw === null) return PANEL_DEFAULT_WIDTH;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : PANEL_DEFAULT_WIDTH;
+}
+
+export function savePanelWidth(width: number): void {
+  writeLocal(PANEL_WIDTH_KEY, String(width));
+}

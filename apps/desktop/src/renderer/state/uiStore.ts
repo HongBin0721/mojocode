@@ -10,10 +10,14 @@
 
 import { create } from 'zustand';
 import {
+  PANEL_DEFAULT_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
+  clampPanelWidth,
   clampSidebarWidth,
+  loadPanelWidth,
   loadSidebarCollapsed,
   loadSidebarWidth,
+  savePanelWidth,
   saveSidebarCollapsed,
   saveSidebarWidth,
 } from '../utils/sidebar.js';
@@ -28,6 +32,13 @@ export type RightTab = 'diff' | 'terminal' | 'files';
 export interface UiStore {
   width: number;
   collapsed: boolean;
+  /**
+   * 右侧面板宽度。此前是 RightPanel 组件本地 state(切视图即丢),而侧栏
+   * 宽度在这里——同一类几何状态两套归属;入 store 后持久化对齐,且钳制
+   * 可以从 store 读侧栏实宽,杀掉两处跨组件 DOM 反查(RightPanel 量
+   * .sidebar / SidebarResizer 量 .right-panel)。
+   */
+  panelWidth: number;
   /** 侧栏搜索框的展开态(⌘K 与侧栏搜索行共用,不持久化)。 */
   searchOpen: boolean;
   view: View;
@@ -45,6 +56,10 @@ export interface UiStore {
   commitWidth(): void;
   /** 双击手柄:复位默认宽并落盘。 */
   resetWidth(): void;
+  /** 面板拖宽(已钳制:240~720 且给会话区留最小宽,侧栏实宽从本 store 读)。 */
+  setPanelWidth(width: number, viewportWidth: number): void;
+  /** 面板拖拽结束:持久化当前宽度。 */
+  commitPanelWidth(): void;
   toggleCollapsed(): void;
   openSearch(): void;
   closeSearch(): void;
@@ -61,6 +76,7 @@ export interface UiStore {
 export const useUiStore = create<UiStore>((set, get) => ({
   width: typeof window === 'undefined' ? SIDEBAR_DEFAULT_WIDTH : loadSidebarWidth(window.innerWidth),
   collapsed: loadSidebarCollapsed(),
+  panelWidth: typeof window === 'undefined' ? PANEL_DEFAULT_WIDTH : loadPanelWidth(),
   searchOpen: false,
   view: 'task',
   returnView: 'task',
@@ -75,6 +91,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ width: SIDEBAR_DEFAULT_WIDTH });
     saveSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
   },
+  setPanelWidth: (width, viewportWidth) => {
+    const state = get();
+    const sidebarWidth = state.collapsed ? 0 : state.width;
+    set({ panelWidth: clampPanelWidth(width, viewportWidth, sidebarWidth) });
+  },
+  commitPanelWidth: () => savePanelWidth(get().panelWidth),
   toggleCollapsed: () => {
     const collapsed = !get().collapsed;
     set({ collapsed });

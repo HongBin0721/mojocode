@@ -4,11 +4,10 @@
  * taskLayout='review' 时占满主区(Resizer 禁用)。
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useReviewStore } from '../state/reviewStore.js';
 import { useUiStore, type RightTab } from '../state/uiStore.js';
 import { t, useLocale } from '../i18n/index.js';
-import { CHAT_MIN_WIDTH } from '../utils/sidebar.js';
 import { DiffPane } from './panel/DiffPane.js';
 import { TerminalPane } from './panel/TerminalPane.js';
 import { FileTreePane } from './panel/FileTreePane.js';
@@ -17,8 +16,8 @@ import { FileTreePane } from './panel/FileTreePane.js';
 // 等旧调用方从本文件具名导入)。
 export { buildFileTree } from '../utils/file-tree.js';
 
-/** 拖宽分隔条:拖动改 flex-basis(240–720px)。 */
-function Resizer({ onDrag }: { onDrag: (deltaX: number) => void }) {
+/** 拖宽分隔条:拖动改 flex-basis(240–720px),松手落盘。 */
+function Resizer({ onDrag, onEnd }: { onDrag: (deltaX: number) => void; onEnd: () => void }) {
   const lastX = useRef(0);
   return (
     <div
@@ -30,6 +29,7 @@ function Resizer({ onDrag }: { onDrag: (deltaX: number) => void }) {
           lastX.current = ev.clientX;
         };
         const up = () => {
+          onEnd();
           document.removeEventListener('mousemove', move);
           document.removeEventListener('mouseup', up);
           document.body.style.cursor = '';
@@ -58,7 +58,10 @@ export function RightPanel() {
   const rightTab = useUiStore((s) => s.rightTab);
   const setRightTab = useUiStore((s) => s.setRightTab);
   const fullWidth = useUiStore((s) => s.taskLayout === 'review');
-  const [width, setWidth] = useState(480);
+  // 宽度在 uiStore(持久化,钳制逻辑从 store 读侧栏实宽,不再 DOM 反查)。
+  const width = useUiStore((s) => s.panelWidth);
+  const setPanelWidth = useUiStore((s) => s.setPanelWidth);
+  const commitPanelWidth = useUiStore((s) => s.commitPanelWidth);
 
   // Cmd/Ctrl+Option+B 切换(文档级监听,textarea 之外也能触发)。
   useEffect(() => {
@@ -102,19 +105,12 @@ export function RightPanel() {
     >
       {!fullWidth ? (
         <Resizer
+          // 一次拖动是多个 mousemove,闭包里的 width 是拖动开始时的快照——
+          // 必须现读 store,否则每步都从起点算,面板会跟不上鼠标。
           onDrag={(delta) =>
-            setWidth((w) => {
-              // 上限:240..720 之外还要给中间区留 CHAT_MIN_WIDTH(侧栏实宽现量,
-              // 含折叠态);窗口极窄时上限压不过 240 下限——CSS 端由面板先收缩兜底。
-              const sidebar =
-                document.querySelector('.sidebar')?.getBoundingClientRect().width ?? 0;
-              const limit = Math.max(
-                240,
-                Math.min(720, window.innerWidth - sidebar - CHAT_MIN_WIDTH),
-              );
-              return Math.min(limit, Math.max(240, w - delta));
-            })
+            setPanelWidth(useUiStore.getState().panelWidth - delta, window.innerWidth)
           }
+          onEnd={commitPanelWidth}
         />
       ) : null}
       <div className="panel-header">
