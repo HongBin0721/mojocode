@@ -14,6 +14,7 @@ import { presetById } from '@core/schema';
 import { useModelCapabilities } from '../utils/use-model-capabilities.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { newTask } from '../state/actions.js';
+import { rpcFire } from '../bridge/invoke.js';
 import { t, useLocale } from '../i18n/index.js';
 import {
   builtinCommands,
@@ -52,8 +53,7 @@ async function toAttachment(file: File, index: number): Promise<ImageAttachment>
   };
 }
 
-const rpc = (request: Parameters<typeof window.mojocode.rpc>[0]) =>
-  void window.mojocode.rpc(request).catch((error: unknown) => console.error('RPC 失败', error));
+// 上行统一走 bridge/invoke.ts 的 rpcFire(失败进用户可见 toast)。
 
 /**
  * 上下文环(设计稿):28px 悬停区里一个 15px conic-gradient 圆环(已用扇区
@@ -176,7 +176,7 @@ export function Composer() {
     setText('');
     setSuppressed(false);
     if (entry.source === 'skill') {
-      rpc({
+      rpcFire({
         kind: 'runSkill',
         name: entry.name,
         args: argText,
@@ -192,13 +192,13 @@ export function Composer() {
         newTask();
         return;
       case 'compact':
-        rpc({ kind: 'compact' });
+        rpcFire({ kind: 'compact' });
         return;
       case 'review':
-        rpc({ kind: 'startReview', scope: argText || 'uncommitted' });
+        rpcFire({ kind: 'startReview', scope: argText || 'uncommitted' });
         return;
       case 'simplify':
-        rpc({ kind: 'startSimplify', target: argText });
+        rpcFire({ kind: 'startSimplify', target: argText });
         return;
     }
   };
@@ -224,13 +224,14 @@ export function Composer() {
     setText('');
     setImages([]);
     setSuppressed(false);
-    void window.mojocode
-      .rpc({
+    rpcFire(
+      {
         kind: 'run',
         text: trimmed || '(image)',
         options: attachments.length ? { images: attachments } : undefined,
-      })
-      .catch((error: unknown) => console.error('run 失败', error));
+      },
+      { errorKey: 'notice.runFailed' },
+    );
   };
 
   /** 菜单选择:带 argumentHint 的技能无参时只补全,等用户补参。 */
@@ -249,7 +250,7 @@ export function Composer() {
     // Shift+Tab:权限档循环(Codex/ZCode 同款按键)。
     if (e.key === 'Tab' && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      if (snapshot) rpc(cyclePermissionsRpc(snapshot.config));
+      if (snapshot) rpcFire(cyclePermissionsRpc(snapshot.config));
       return;
     }
     if (menuVisible) {
@@ -289,7 +290,7 @@ export function Composer() {
   }, [text]);
 
   const primaryAction = () => {
-    if (running) rpc({ kind: 'abort' });
+    if (running) rpcFire({ kind: 'abort' });
     else submit();
   };
 
@@ -405,8 +406,8 @@ export function Composer() {
                 <PermissionMenuList
                   entries={permissionEntries}
                   onPick={(id) => {
-                    if (id === 'plan') rpc({ kind: 'setPlan', active: true });
-                    else rpc({ kind: 'setPermissions', permissions: presetById(id) });
+                    if (id === 'plan') rpcFire({ kind: 'setPlan', active: true });
+                    else rpcFire({ kind: 'setPermissions', permissions: presetById(id) });
                   }}
                 />
               </MenuPopover>
@@ -456,7 +457,7 @@ export function Composer() {
             >
               <ReasoningMenuList
                 entries={reasoningMenuEntries(effort, effortLevels)}
-                onPick={(level) => rpc(setReasoningRpc(level))}
+                onPick={(level) => rpcFire(setReasoningRpc(level))}
               />
             </MenuPopover>
           ) : null}

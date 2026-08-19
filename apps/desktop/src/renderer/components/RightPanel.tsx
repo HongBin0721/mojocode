@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkspaceFileEntrySummary, FileContentSummary } from '../../shared/ipc.js';
+import { openPath, rpcCall, rpcFire } from '../bridge/invoke.js';
 import { useReviewStore } from '../state/reviewStore.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { usePanelStore } from '../state/panelStore.js';
@@ -59,9 +60,7 @@ function LineCommentInput({ path }: { path: string }) {
     setValue('');
     setCommentTarget(undefined);
     // 统一走 run:运行中由 server 转 inject,空闲起新轮(loop.ts 的快速路径)。
-    void window.mojocode
-      .rpc({ kind: 'run', text, options: { display } })
-      .catch((error: unknown) => console.error('评论发送失败', error));
+    rpcFire({ kind: 'run', text, options: { display } }, { errorKey: 'notice.runFailed' });
   };
 
   return (
@@ -164,9 +163,7 @@ function DiffApprovalBar() {
   /** 在编辑器中打开:系统默认程序打开当前文件(绝对路径 = root + 相对路径)。 */
   const openInEditor = () => {
     if (!root || !selectedPath) return;
-    void window.mojocode
-      .openPath(`${root}/${selectedPath}`)
-      .catch((error: unknown) => console.error('打开文件失败', error));
+    openPath(`${root}/${selectedPath}`);
   };
 
   const committed = approval === 'committed';
@@ -429,9 +426,8 @@ function FileTreePane() {
   const [preview, setPreview] = useState<FileContentSummary | undefined>();
 
   useEffect(() => {
-    void window.mojocode
-      .rpc({ kind: 'listFiles' })
-      .then((result) => setFiles((result as { files: string[] }).files))
+    void rpcCall({ kind: 'listFiles' })
+      .then((result) => setFiles(result.files))
       .catch(() => setError(true));
   }, []);
 
@@ -443,9 +439,8 @@ function FileTreePane() {
   }, [changedFiles]);
 
   const openFile = (path: string) => {
-    void window.mojocode
-      .rpc({ kind: 'readFile', path })
-      .then((result) => setPreview(result as FileContentSummary))
+    void rpcCall({ kind: 'readFile', path })
+      .then(setPreview)
       .catch(() => setPreview({ ok: false, reason: 'not-found', path, size: 0, truncated: false }));
   };
 

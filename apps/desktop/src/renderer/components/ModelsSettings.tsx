@@ -20,7 +20,7 @@
 import React, { useEffect, useState } from 'react';
 import type { ModelReasoning, ProviderConfig, ProviderModelEntry, ReasoningEffort } from '@core/schema';
 import { REASONING_EFFORTS } from '@core/schema';
-import type { ModelTestSummary } from '../../shared/ipc.js';
+import { rpcCall } from '../bridge/invoke.js';
 import { useModelCapabilities } from '../utils/use-model-capabilities.js';
 import { PROVIDER_PRESETS, isBuiltinProvider } from '@core/providers';
 import { useDesktopStore } from '../state/desktopStore.js';
@@ -433,8 +433,7 @@ function AddProviderForm({ onDone }: { onDone: (id: string) => void }) {
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
       ...(models.length > 0 ? { models } : {}),
     };
-    void window.mojocode
-      .rpc({ kind: 'saveProvider', id, config: patch })
+    void rpcCall({ kind: 'saveProvider', id, config: patch })
       .then(() => onDone(id))
       .catch((err: Error) => setError(err.message));
   };
@@ -532,8 +531,7 @@ function ProviderDetail({ id, onRemoved }: { id: string; onRemoved: () => void }
 
   const save = (config: ProviderConfig, after?: () => void) => {
     setError(undefined);
-    void window.mojocode
-      .rpc({ kind: 'saveProvider', id, config })
+    void rpcCall({ kind: 'saveProvider', id, config })
       .then(after)
       .catch((err: Error) => setError(err.message));
   };
@@ -545,19 +543,17 @@ function ProviderDetail({ id, onRemoved }: { id: string; onRemoved: () => void }
   // 换成列表里碰巧排第一的那个。
   const enable = () => {
     setError(undefined);
-    void window.mojocode
-      .rpc({ kind: 'switch', change: { provider: id } })
-      .catch((err: Error) => setError(err.message));
+    void rpcCall({ kind: 'switch', change: { provider: id } }).catch((err: Error) =>
+      setError(err.message),
+    );
   };
 
   // 「测试模型」:server 侧向对话端点发一次最小补全;结果(含失败原因)按
   // 模型 id 记成行下胶囊。传输层错误(RPC 断连)同样落到红胶囊,不走 error 区。
   const runTest = (model: string) => {
     setTests((prev) => ({ ...prev, [model]: { state: 'testing' } }));
-    void window.mojocode
-      .rpc({ kind: 'testModel', id, model })
-      .then((raw) => {
-        const result = raw as ModelTestSummary;
+    void rpcCall({ kind: 'testModel', id, model })
+      .then((result) => {
         setTests((prev) => ({
           ...prev,
           [model]: result.ok
@@ -572,8 +568,7 @@ function ProviderDetail({ id, onRemoved }: { id: string; onRemoved: () => void }
 
   const removeProvider = () => {
     setError(undefined);
-    void window.mojocode
-      .rpc({ kind: 'deleteProvider', id })
+    void rpcCall({ kind: 'deleteProvider', id })
       .then(onRemoved)
       .catch((err: Error) => setError(err.message));
   };

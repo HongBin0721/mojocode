@@ -11,6 +11,7 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { readLocal, writeLocal } from '../utils/host.js';
 import { en } from './en.js';
 import { zhCN } from './zh-CN.js';
 
@@ -20,12 +21,9 @@ export type MessageKey = keyof typeof en;
 const STORAGE_KEY = 'mojocode.locale';
 
 function detectLocale(): Locale {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'en' || stored === 'zh-CN') return stored;
-  } catch {
-    // localStorage 在极端隐私设置或非浏览器环境(测试)下不可用——退回系统语言。
-  }
+  // readLocal 内置兜底(极端隐私设置/非浏览器环境回 null)——退回系统语言。
+  const stored = readLocal(STORAGE_KEY);
+  if (stored === 'en' || stored === 'zh-CN') return stored;
   // node 测试环境没有 navigator:回退英文(reducer 的 notice 文案断言在
   // 测试里显式 setLocale,不依赖这里的检测结果)。
   const language = typeof navigator !== 'undefined' ? navigator.language : 'en';
@@ -38,11 +36,7 @@ const listeners = new Set<() => void>();
 export function setLocale(locale: Locale): void {
   if (locale === current) return;
   current = locale;
-  try {
-    localStorage.setItem(STORAGE_KEY, locale);
-  } catch {
-    // 持久化失败不影响本次切换。
-  }
+  writeLocal(STORAGE_KEY, locale); // 持久化失败静默,不影响本次切换
   for (const listener of listeners) listener();
 }
 

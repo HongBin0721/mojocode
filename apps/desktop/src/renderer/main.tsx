@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { initCodeFontScale, initUiFontSize } from './utils/appearance.js';
+import { platform } from './utils/host.js';
 import './styles/index.less';
 
 // 恢复外观偏好(设置页·界面字号)——在首帧渲染前应用,避免字号跳动。
@@ -9,12 +10,9 @@ initUiFontSize();
 initCodeFontScale();
 
 // 平台类挂到 <html>:mac 的红绿灯让位等布局差异按这个类分流(底色全平台实色)。
-try {
-  if (window.mojocode?.platform === 'darwin') {
-    document.documentElement.classList.add('platform-darwin');
-  }
-} catch {
-  // 测试/异常环境下 window.mojocode 可能不存在,视觉退化为实体底。
+if (platform() === 'darwin') {
+  // 测试/异常环境下桥不存在时 platform() 回 'unknown',视觉退化为实体底。
+  document.documentElement.classList.add('platform-darwin');
 }
 
 const container = document.getElementById('root');

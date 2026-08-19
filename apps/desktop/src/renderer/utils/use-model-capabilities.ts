@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ModelCapabilitiesSummary } from '../../shared/ipc.js';
+import { rpcCall } from '../bridge/invoke.js';
 
 const cache = new Map<string, ModelCapabilitiesSummary | null>();
 
@@ -36,10 +37,8 @@ export function useModelCapabilities(
     }
     let alive = true;
     const query = () => {
-      void window.mojocode
-        .rpc({ kind: 'modelCapabilities', id: providerId ?? '', model: modelId })
-        .then((raw) => {
-          const result = raw as ModelCapabilitiesSummary | undefined;
+      void rpcCall({ kind: 'modelCapabilities', id: providerId ?? '', model: modelId })
+        .then((result) => {
           cache.set(key, result ?? null);
           if (alive) setCaps(result);
         })

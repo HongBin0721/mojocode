@@ -17,7 +17,8 @@ import type { TaskSummary } from '../../shared/ipc.js';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useUiStore, type View } from '../state/uiStore.js';
 import { useProjectsStore } from '../state/projectsStore.js';
-import { newTask, openTask } from '../state/actions.js';
+import { forkTask, newTask, openTask } from '../state/actions.js';
+import { revealPath, rpcFire } from '../bridge/invoke.js';
 import { taskTone, toneColorVar, toneLabelKey } from '../utils/task-tone.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { t, useLocale } from '../i18n/index.js';
@@ -286,28 +287,24 @@ export function Sidebar() {
   ];
 
   const runContextAction = (task: TaskSummary, id: string): void => {
-    const rpc = window.mojocode.rpc;
     switch (id) {
       case 'pin':
         togglePin(task.id);
         return;
       case 'reveal':
-        void window.mojocode.revealPath(task.root).catch((error: unknown) =>
-          console.error('Finder 显示失败', error),
-        );
+        revealPath(task.root);
         return;
       case 'rename':
         setRenaming(task.id);
         return;
       case 'archive':
-        void rpc({ kind: 'archiveSession', id: task.id, archived: true }).catch((error: unknown) =>
-          console.error('归档失败', error),
+        rpcFire(
+          { kind: 'archiveSession', id: task.id, archived: true },
+          { errorKey: 'notice.archiveFailed' },
         );
         return;
       case 'fork':
-        void window.mojocode
-          .createTask({ root: task.root, resume: task.id, fork: true })
-          .catch((error: unknown) => console.error('创建分支任务失败', error));
+        forkTask(task.root, task.id);
         return;
       case 'copyRoot':
         void navigator.clipboard?.writeText(task.root);
@@ -316,10 +313,8 @@ export function Sidebar() {
         void navigator.clipboard?.writeText(task.id);
         return;
       case 'delete':
-        // 活跃会话由 server 拒删(英文错误),这里只报到控制台。
-        void rpc({ kind: 'deleteSession', id: task.id }).catch((error: unknown) =>
-          console.error('删除会话失败', error),
-        );
+        // 活跃会话由 server 拒删(英文错误经 toast 可见)。
+        rpcFire({ kind: 'deleteSession', id: task.id }, { errorKey: 'notice.deleteFailed' });
         return;
       default:
         return;
@@ -478,9 +473,7 @@ function RenameDialog({
   const submit = () => {
     const title = value.trim();
     if (!title) return;
-    void window.mojocode
-      .rpc({ kind: 'renameSession', id: taskId, title })
-      .catch((error: unknown) => console.error('重命名失败', error));
+    rpcFire({ kind: 'renameSession', id: taskId, title }, { errorKey: 'notice.renameFailed' });
     onClose();
   };
   return (
