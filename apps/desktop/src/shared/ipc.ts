@@ -65,13 +65,6 @@ export interface TaskSummary extends SessionMetaSummary {
   lastActivityAt?: number;
 }
 
-/** 任务级变更索引条目。形状复制自根仓库 src/session/store.ts 的 ChangedFileEntry。 */
-export interface ChangedFileSummary {
-  path: string;
-  kind: 'created' | 'modified';
-  count: number;
-}
-
 /** 文件预览结果。形状复制自根仓库 src/app/workspace-read.ts 的 FileContent。 */
 export type FileReadFailure = 'not-found' | 'binary' | 'too-large' | 'denied' | 'is-directory';
 
@@ -203,7 +196,6 @@ export type ConnectionState = 'connecting' | 'connected' | 'lost';
 
 export type RpcRequest =
   | { kind: 'run'; text: string; options?: { display?: string; images?: ImageAttachment[] } }
-  | { kind: 'inject'; text: string; images?: ImageAttachment[] }
   | { kind: 'abort' }
   | { kind: 'compact' }
   /* 换会话三连(newSession/resumeSession/forkSession)已退役:一个 sidecar
@@ -217,7 +209,6 @@ export type RpcRequest =
   | { kind: 'setPermissions'; permissions: Permissions }
   | { kind: 'setPlan'; active: boolean }
   | { kind: 'setReasoningEffort'; level: ReasoningEffort }
-  | { kind: 'listSessions' }
   | { kind: 'listProviderModels' }
   /* 设置页·模型行的「测试模型」:server 侧发一次最小补全验证连通性。 */
   | { kind: 'testModel'; id: string; model: string }

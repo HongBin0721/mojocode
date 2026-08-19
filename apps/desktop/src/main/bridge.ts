@@ -210,8 +210,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
     switch (request.kind) {
       case 'run':
         return session.agent.run(request.text, request.options);
-      case 'inject':
-        return session.agent.inject(request.text, request.images);
       case 'abort':
         return session.agent.abort();
       case 'compact':
@@ -228,8 +226,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return session.setPlan(request.active);
       case 'setReasoningEffort':
         return session.setReasoningEffort(request.level);
-      case 'listSessions':
-        return session.listSessions(true);
       case 'listProviderModels':
         return session.listProviderModels();
       case 'testModel':
@@ -287,7 +283,7 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return true;
       }
       default:
-        // 契约里已声明、server/client 尚未实现的方法(如 M4 的 listSessions)。
+        // wire 载荷不受信(renderer 可能被劫持),防御联合之外的未知 kind。
         throw new Error(`未实现的 RPC:${(request as { kind: string }).kind}`);
     }
   };

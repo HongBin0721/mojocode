@@ -31,7 +31,6 @@ const makeSnapshot = (seed: number): StateSnapshot =>
 
 interface AgentSpies {
   run: ReturnType<typeof vi.fn>;
-  inject: ReturnType<typeof vi.fn>;
   abort: ReturnType<typeof vi.fn>;
 }
 
@@ -70,7 +69,6 @@ function makeHarness(snapshotSeed = 1): Harness {
 
   const agents: AgentSpies = {
     run: vi.fn().mockResolvedValue(undefined),
-    inject: vi.fn().mockResolvedValue(true),
     abort: vi.fn(),
   };
   const commands = {
@@ -107,8 +105,6 @@ function makeHarness(snapshotSeed = 1): Harness {
       },
     },
     agent: { ...agents, compact: vi.fn().mockResolvedValue(undefined) },
-    // 模拟旧 server:listSessions 尚不存在(RPC 层不吞,调用方降级)。
-    listSessions: vi.fn().mockRejectedValue(new Error('unknown method: listSessions')),
     archiveSession: vi.fn().mockResolvedValue({ id: 's1', archivedAt: '2026-01-01T00:00:00Z' }),
     ...commands,
     switch: vi.fn().mockResolvedValue(undefined),
@@ -274,13 +270,11 @@ describe('createBridge', () => {
     expect(connections).toContain('lost');
   });
 
-  it('rpc 白名单:run/inject/abort 透传到 session.agent', async () => {
+  it('rpc 白名单:run/abort 透传到 session.agent', async () => {
     const h = makeHarness();
     await invokeRpc(h, { kind: 'run', text: 'hi', options: { display: 'hi' } });
-    await invokeRpc(h, { kind: 'inject', text: 'mid' });
     await invokeRpc(h, { kind: 'abort' });
     expect(h.agents.run).toHaveBeenCalledWith('hi', { display: 'hi' });
-    expect(h.agents.inject).toHaveBeenCalledWith('mid', undefined);
     expect(h.agents.abort).toHaveBeenCalled();
   });
 
@@ -339,11 +333,6 @@ describe('createBridge', () => {
     const h = makeHarness();
     await invokeRpc(h, { kind: 'runSkill', name: 'lint', args: '' });
     expect(h.commands.runSkill).toHaveBeenCalledWith('lint', '', undefined);
-  });
-
-  it('listSessions 透传;旧 server 的报错原样拒绝(RPC 层不吞)', async () => {
-    const h = makeHarness();
-    await expect(invokeRpc(h, { kind: 'listSessions' })).rejects.toThrow('unknown method');
   });
 
   it('后台抑制:setForwarding(false) 后事件不过 IPC,但 state 照推', async () => {
