@@ -82,8 +82,8 @@
   flex: none;
   padding: 2px 9px;
   border-radius: 999px;
-  background: rgba(34, 197, 94, 0.16);
-  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+  color: var(--color-success-bright);
   font-size: 11.5px;
   font-weight: 600;
 }
@@ -143,12 +143,12 @@
   color: var(--color-foreground-subtle);
 }
 .model-test-ok {
-  background: rgba(34, 197, 94, 0.14);
-  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success-bright);
 }
 .model-test-fail {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--color-destructive);
+  background: color-mix(in srgb, var(--color-destructive) 12%, transparent);
+  color: var(--color-destructive-soft);
 }
 
 /* ---- 模型设置:纵向字段(详情 / 添加表单 / 弹窗共用,对齐 ZCode) ---- */
@@ -235,7 +235,7 @@
   inset: 0;
   z-index: 60;
   .center-row();
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--overlay-backdrop);
 }
 .modal-card {
   width: 420px;

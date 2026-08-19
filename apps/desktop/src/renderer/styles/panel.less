@@ -9,11 +9,20 @@
   font-size: 12px;
   margin-bottom: 6px;
   color: var(--color-foreground-subtle);
+}
+
+/* +N −N 统计(DiffView 顶部 / 文件条):纯彩色文字,不吃行级底色(git 状态色系) */
+.diff-stat,
+.review-stat {
   .diff-add {
-    color: var(--color-success);
+    background: none;
+    box-shadow: none;
+    color: var(--color-git-added);
   }
   .diff-del {
-    color: var(--color-destructive);
+    background: none;
+    box-shadow: none;
+    color: var(--color-git-deleted);
   }
 }
 
@@ -30,18 +39,27 @@
   line-height: 1.55;
 }
 
-/* diff 配色:ZCode green-500/red-500 系——低透明度底 + 400 系文字 */
+/* diff 行配色:nocturne 四件套 token 全量落地(底/左边条/正文/行号;
+ * 左边条用 inset box-shadow,border 会挤动 padding 布局) */
 .diff-add {
-  background: rgba(34, 197, 94, 0.12);
-  color: #4ade80;
+  background: var(--diff-add-bg);
+  color: var(--diff-add-fg);
+  box-shadow: inset 2px 0 0 var(--diff-add-border);
+  .diff-lineno {
+    color: var(--diff-add-accent);
+  }
 }
 .diff-del {
-  background: rgba(239, 68, 68, 0.12);
-  color: #f87171;
+  background: var(--diff-del-bg);
+  color: var(--diff-del-fg);
+  box-shadow: inset 2px 0 0 var(--diff-del-border);
+  .diff-lineno {
+    color: var(--diff-del-accent);
+  }
 }
 .diff-hunk {
   color: var(--color-foreground-subtlest);
-  background: var(--color-surface);
+  background: var(--color-tag); /* tokens 注释指定的 hunk 行底 */
 }
 .diff-meta {
   color: var(--color-foreground-subtlest);

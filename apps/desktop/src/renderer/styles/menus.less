@@ -24,6 +24,12 @@
   text-align: left;
 }
 
+/* block 模式(侧栏项目切换器)的弹层跟随触发器宽:侧栏 overflow:hidden
+ * 会在右缘硬裁定宽弹层,跟随宽度天然不越界,长路径靠行内 ellipsis。 */
+.menu-root-block .menu-popover {
+  width: 100%;
+}
+
 .menu-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -32,6 +38,7 @@
   .menu-card();
   max-height: 380px;
   overflow-y: auto;
+  overflow-x: hidden; /* 行内长文本靠 ellipsis 截断,菜单不出横向滚动条 */
 }
 
 /* 输入区里的菜单朝上弹 */
@@ -58,6 +65,9 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
+  /* button 即便 display:flex 也只收缩到内容宽——必须显式铺满,
+   * 行内长文本(项目路径)才会走 ellipsis 而不是把弹层撑出横向滚动。 */
+  width: 100%;
   .action-reset();
   border-radius: var(--radius-lg);
   padding: 7px 8px;
@@ -245,23 +255,23 @@ button:disabled {
   .disabled();
 }
 
-/* 主按钮:ZCode primary(neutral-50 底 + neutral-950 字) */
+/* 主按钮:nocturne 灰底白字(同 tokens --color-primary 组,与 composer 发送钮一致) */
 .btn-primary {
-  border-color: #fafafa;
-  background: #fafafa;
-  color: #0a0a0a;
+  border-color: var(--color-primary-border);
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
   font-weight: 500;
   &:not(:disabled):hover {
-    background: #e5e5e5;
-    border-color: #e5e5e5;
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-border-hover);
   }
 }
 
-/* 品牌按钮:sky-500 底白字(评审/方案确认的强调态) */
+/* 品牌按钮:brand(状态黄)底 + 一级文字(评审/方案确认的强调态;DS 禁纯白) */
 .btn-brand {
   border: none;
   background: var(--color-brand);
-  color: #ffffff;
+  color: var(--color-foreground);
   font-weight: 500;
   &:not(:disabled):hover {
     background: var(--color-brand-hover);
@@ -269,12 +279,12 @@ button:disabled {
 }
 
 .btn-danger {
-  border-color: rgba(239, 68, 68, 0.55);
+  border-color: color-mix(in srgb, var(--color-destructive) 55%, transparent);
   background: transparent;
   color: var(--color-destructive);
   &:not(:disabled):hover {
-    background: rgba(239, 68, 68, 0.12);
-    border-color: rgba(239, 68, 68, 0.55);
+    background: color-mix(in srgb, var(--color-destructive) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-destructive) 55%, transparent);
   }
 }
 

@@ -19,9 +19,12 @@
   min-width: 0;
 }
 
-/* 横排:flex + 垂直居中 + 间距(gap 必传,避免魔法默认值) */
+/* 横排:flex + 垂直居中 + 间距(gap 必传,避免魔法默认值)。
+ * 显式声明 row:调用处可能落在 flex-direction:column 的基类上(.menu-item),
+ * 缺了这条「横排」会被级联成竖排。 */
 .flex-row(@gap) {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: @gap;
 }

@@ -350,7 +350,6 @@ export function Sidebar() {
       <div className="sidebar-head">
         <MenuPopover
           block
-          width={290}
           title={t('sidebar.switchProject')}
           label={
             <span className="project-trigger">

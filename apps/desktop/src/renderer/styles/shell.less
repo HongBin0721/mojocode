@@ -139,7 +139,9 @@
   .ellipsis();
 }
 
-.project-item {
+/* 复合选择器:menus.less 排在本文件之后,.menu-item 的 column 同优先级
+ * 会压过单类 .project-item 的 row——必须升一级赢下级联。 */
+.menu-item.project-item {
   .flex-row(9px);
 }
 .project-item-body {
@@ -161,7 +163,7 @@
   font-size: var(--fs-10);
   color: var(--color-foreground-subtle);
 }
-.project-import {
+.menu-item.project-import {
   .flex-row(9px);
   margin-top: 4px;
   border-top: 1px solid var(--color-border-strong);
@@ -332,7 +334,7 @@
   height: 24px;
   border-radius: var(--radius-md);
   background: var(--color-brand);
-  color: #fff;
+  color: var(--color-foreground);
   font-size: 13px;
   font-weight: 700;
   user-select: none;
@@ -684,8 +686,8 @@
 .connection-banner {
   flex: none;
   padding: 6px 12px;
-  background: rgba(239, 68, 68, 0.12);
-  border-bottom: 1px solid rgba(239, 68, 68, 0.4);
+  background: color-mix(in srgb, var(--color-destructive) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-destructive) 40%, transparent);
   color: var(--color-destructive);
   text-align: center;
   font-size: 13px;
