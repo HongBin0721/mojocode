@@ -18,6 +18,7 @@ import { useUiStore, type RightTab } from '../state/uiStore.js';
 import { t, useLocale } from '../i18n/index.js';
 import { DiffView, commentTargetOf, type ParsedDiffLine } from './DiffView.js';
 import { Modal } from './overlays/Modal.js';
+import { useOverlayLayer } from './overlays/overlay-stack.js';
 import { buildReviewComment } from '../utils/review-comment.js';
 import { langOf } from '../utils/tokenize.js';
 import { CHAT_MIN_WIDTH } from '../utils/sidebar.js';
@@ -149,6 +150,32 @@ function DiffApprovalBar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [copied, setCopied] = useState(false);
+  const menuRootRef = useRef<HTMLDivElement>(null);
+  // 裸菜单此前无外点关闭、无 Esc(行为缺陷):补上,DOM/类名零变化。
+  // Esc 走浮层栈仲裁,与 Modal/Select/ContextMenu 同一协议。
+  const menuLayer = useOverlayLayer(menuOpen);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (menuRootRef.current?.contains(target)) return;
+      setMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (!menuLayer.isTop()) return;
+      event.stopPropagation();
+      setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey, true);
+    };
+    // menuLayer.isTop 是活引用,不进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuOpen]);
 
   /** 复制为补丁:当前选中文件的 unified diff 进剪贴板。 */
   const copyPatch = () => {
@@ -208,7 +235,7 @@ function DiffApprovalBar() {
       )}
       {approvalError ? <span className="approval-error">{approvalError}</span> : null}
       <span className="toolbar-spacer" />
-      <div className="approval-menu-root">
+      <div className="approval-menu-root" ref={menuRootRef}>
         <button type="button" className="review-icon" onClick={() => setMenuOpen(!menuOpen)}>
           <DotsThreeIcon size={16} />
         </button>
