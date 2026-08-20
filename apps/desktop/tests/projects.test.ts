@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { addProject, loadProjects, removeProject } from '../src/renderer/utils/projects.js';
+import { addProject, loadProjects, moveProject, removeProject } from '../src/renderer/utils/projects.js';
 
 describe('projects 列表', () => {
   it('解析:null/坏 JSON/非数组一律回空', () => {
@@ -27,5 +27,14 @@ describe('projects 列表', () => {
     expect(removeProject(['/a', '/b'], '/a')).toEqual(['/b']);
     const list = ['/a'];
     expect(removeProject(list, '/x')).toBe(list);
+  });
+
+  it('排序:from 项移到 to;原地/越界原引用返回', () => {
+    expect(moveProject(['/a', '/b', '/c'], 0, 2)).toEqual(['/b', '/c', '/a']);
+    expect(moveProject(['/a', '/b', '/c'], 2, 0)).toEqual(['/c', '/a', '/b']);
+    const list = ['/a', '/b'];
+    expect(moveProject(list, 1, 1)).toBe(list);
+    expect(moveProject(list, -1, 0)).toBe(list);
+    expect(moveProject(list, 0, 5)).toBe(list);
   });
 });

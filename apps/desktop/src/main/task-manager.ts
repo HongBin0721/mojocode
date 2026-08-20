@@ -11,6 +11,7 @@
 
 import { SessionStore } from '@core/session-store';
 import { createBridge, type Bridge, type BridgeTarget } from './bridge.js';
+import type { ViewedTasksStore } from './gui-prefs.js';
 import { buildReplayItems } from './replay.js';
 import type { ServerRuntime } from './resolve-runtime.js';
 import {
@@ -86,6 +87,11 @@ export interface TaskManagerDeps {
   connect?: ConnectFn;
   /** 全局会话列表(默认 SessionStore.list();测试注入假表)。 */
   listSessions?: () => Promise<Array<TaskSummaryMeta>>;
+  /**
+   * 「已看状态」持久化(gui.json;缺省仅内存——测试与 attach 场景)。
+   * 语义归 TaskManager:聚焦行持续记为已看,后台推进的行 unseen=true。
+   */
+  viewed?: ViewedTasksStore;
 }
 
 /** listSessions 依赖的最小 meta 形状(= SessionMeta 的 wire 子集)。 */
@@ -126,37 +132,66 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
   let focusedTaskId: string | undefined;
   let disposed = false;
 
-  const taskSummaries = async (): Promise<TaskSummary[] | undefined> => {
+  // 已看表(会话 id → 用户最后看过的消息数,与会话 1:1):启动读盘,变更即
+  // 落盘(GuiPrefs 内部去抖 + 原子写)。唯一写入方是本管理器——renderer 不
+  // 持有任何 viewed 状态,行的 unseen 随 tasks 通道全量下发。
+  const viewedCounts: Record<string, number> = deps.viewed?.load() ?? {};
+  const markSeen = (id: string, count: number): void => {
+    if (viewedCounts[id] === count) return;
+    viewedCounts[id] = count;
+    deps.viewed?.save(viewedCounts);
+  };
+
+  /** preloaded:调用方刚 listSessions() 过时传入,省一次全目录磁盘列举。 */
+  const taskSummaries = async (
+    preloaded?: TaskSummaryMeta[],
+  ): Promise<TaskSummary[] | undefined> => {
     let metas: TaskSummaryMeta[];
     try {
-      metas = await listSessions();
+      metas = preloaded ?? (await listSessions());
     } catch {
       return undefined;
     }
+    // 已看表随会话删除而清理(否则表只增不减)。O(1) 闸门:已看表只收录
+    // 存在过的会话,条目数超过会话数才可能有幽灵,才值得扫一遍。
+    if (Object.keys(viewedCounts).length > metas.length) {
+      const known = new Set(metas.map((meta) => meta.id));
+      for (const id of Object.keys(viewedCounts)) {
+        if (!known.has(id)) delete viewedCounts[id];
+      }
+      deps.viewed?.save(viewedCounts);
+    }
     return metas.map((meta) => {
       const managed = tasks.get(meta.id);
+      // 活跃任务的行数据不等磁盘 meta(持久化 + list() 有滞后):messageCount
+      // 用镜像 historyLength 与首问乐观标记兜底,title 在 meta 生成标题前用
+      // 乐观标题占位,isRunning 读含乐观标志的 getter(与 Composer 同语义,
+      // run RPC 发出即为真,不等第一个 state 帧)。
+      const messageCount = Math.max(
+        meta.messageCount,
+        managed?.desktop.session.snapshot.agent.historyLength ?? 0,
+        managed?.optimistic ? 1 : 0,
+      );
+      const isRunning = managed?.desktop.session.agent.isRunning ?? false;
+      // 聚焦中的行用户正看着:状态每推进一步都记为已看——切走后已看数停在
+      // 离开时的值,后台再跑完一轮消息数就对不上,unseen 重新亮起。
+      if (meta.id === focusedTaskId) markSeen(meta.id, messageCount);
       return {
         ...meta,
-        // 活跃任务的行数据不等磁盘 meta(持久化 + list() 有滞后):messageCount
-        // 用镜像 historyLength 与首问乐观标记兜底,title 在 meta 生成标题前用
-        // 乐观标题占位,isRunning 读含乐观标志的 getter(与 Composer 同语义,
-        // run RPC 发出即为真,不等第一个 state 帧)。
-        messageCount: Math.max(
-          meta.messageCount,
-          managed?.desktop.session.snapshot.agent.historyLength ?? 0,
-          managed?.optimistic ? 1 : 0,
-        ),
-        title: meta.title || managed?.optimistic?.title || meta.title,
+        messageCount,
+        title: meta.title || managed?.optimistic?.title || '',
         status: managed?.status ?? 'dormant',
-        isRunning: managed?.desktop.session.agent.isRunning ?? false,
+        isRunning,
         hasPendingPermission: managed?.bridge.pendingPermissionRequest() !== undefined,
         ...(managed ? { lastActivityAt: managed.lastActivityAt } : {}),
+        // 运行中恒 false(行上是旋转图标);空会话没有可看的内容。
+        unseen: !isRunning && messageCount > 0 && viewedCounts[meta.id] !== messageCount,
       };
     });
   };
 
-  const pushTasks = async (): Promise<void> => {
-    const summaries = await taskSummaries();
+  const pushTasks = async (preloaded?: TaskSummaryMeta[]): Promise<void> => {
+    const summaries = await taskSummaries(preloaded);
     if (!disposed) target.send(IPC_CHANNELS.tasks, summaries);
   };
 
@@ -279,6 +314,7 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     await task.bridge.pushReplay();
     task.bridge.replayBuffered();
     task.bridge.setForwarding(true);
+    void pushTasks(); // 聚焦即记为已看,行上的未读点立刻熄灭
   };
 
   const openTask = async (sessionId: string): Promise<string> => {
@@ -289,6 +325,11 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const metas = await listSessions();
     const meta = metas.find((m) => m.id === sessionId);
     if (!meta) throw new Error(`找不到会话 ${sessionId}`);
+    // 点开即算看过:sidecar 复活要几秒,未读点不该等 spawn 完成才熄灭。
+    // 复用刚列举的 metas(免二次磁盘枚举),且 await 住——否则这条推送与
+    // createTask 尾部的推送并发,晚到的旧快照会盖掉带新任务行的那条。
+    markSeen(sessionId, meta.messageCount);
+    await pushTasks(metas);
     return createTask({ root: meta.root, resume: sessionId });
   };
 

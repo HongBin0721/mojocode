@@ -6,7 +6,7 @@
  */
 
 import { create } from 'zustand';
-import { addProject, loadProjects, removeProject } from '../utils/projects.js';
+import { addProject, loadProjects, moveProject, removeProject } from '../utils/projects.js';
 import { readLocal, writeLocal } from '../utils/host.js';
 
 const STORAGE_KEY = 'mojocode.projects';
@@ -21,6 +21,11 @@ export interface ProjectsStore {
   pinned: string[];
   add(root: string): void;
   remove(root: string): void;
+  /**
+   * 拖拽排序:projects 数组本身就是展示顺序。按 root 定位而非下标——调用方
+   * (ProjectTree)展示的列表可能含兜底并入项,下标空间与 store 不保证一致。
+   */
+  move(fromRoot: string, toRoot: string): void;
   select(root: string): void;
   togglePin(taskId: string): void;
 }
@@ -41,6 +46,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   selected: readLocal(SELECTED_KEY) || null,
   pinned: loadProjects(readLocal(PINNED_KEY)),
   add: (root) => apply(set, get().projects, addProject(get().projects, root)),
+  move: (fromRoot, toRoot) => {
+    const list = get().projects;
+    // 未入列的兜底项(indexOf = -1)由 moveProject 的越界守卫原样返回。
+    apply(set, list, moveProject(list, list.indexOf(fromRoot), list.indexOf(toRoot)));
+  },
   remove: (root) => {
     apply(set, get().projects, removeProject(get().projects, root));
     if (get().selected === root) {

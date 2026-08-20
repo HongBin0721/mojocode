@@ -26,6 +26,7 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
   status: 'dormant',
   isRunning: false,
   hasPendingPermission: false,
+  unseen: false,
   ...over,
 });
 

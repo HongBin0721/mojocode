@@ -1,17 +1,19 @@
 /**
- * 任务行右键菜单(自 Sidebar.tsx 拆出成 hook):菜单/重命名开关态 +
- * 条目表 + 8 分支动作分发,渲染物经 element 返回给宿主插进 JSX。
- * 条目按可用能力条件渲染(缺失即不显示,不做假按钮)。
+ * 任务行右键菜单(自 Sidebar.tsx 拆出成 hook):菜单/重命名/删除确认开关态
+ * + 条目表 + 8 分支动作分发,渲染物经 element 返回给宿主插进 JSX。
+ * 条目按可用能力条件渲染(缺失即不显示,不做假按钮)。删除走确认弹窗
+ * (设计稿):会话记录与未提交改动不可恢复,不做静默直删。
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import type { TaskSummary } from '../../../shared/ipc.js';
 import { forkTask } from '../../state/actions.js';
 import { revealPath, rpcFire } from '../../bridge/invoke.js';
 import { useDesktopStore } from '../../state/desktopStore.js';
 import { useProjectsStore } from '../../state/projectsStore.js';
-import { t } from '../../i18n/index.js';
+import { t, useLocale } from '../../i18n/index.js';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu.js';
+import { ConfirmDialog } from '../overlays/ConfirmDialog.js';
 import { RenameDialog } from './RenameDialog.js';
 import {
   ArchiveIcon,
@@ -24,6 +26,24 @@ import {
   TrashIcon,
 } from '../icons.js';
 
+/** 删除确认弹窗(设计稿):标题 + 不可恢复提示 + 取消/危险删除。 */
+function DeleteConfirm({ task, onClose }: { task: TaskSummary; onClose: () => void }) {
+  useLocale();
+  return (
+    <ConfirmDialog
+      title={t('ctxMenu.delete')}
+      note={t('ctxMenu.deleteNote', { title: task.title || task.id.slice(0, 8) })}
+      cancelLabel={t('ctxMenu.deleteCancel')}
+      confirmLabel={t('ctxMenu.deleteConfirm')}
+      onClose={onClose}
+      onConfirm={() =>
+        // 活跃会话由 server 拒删(英文错误经 toast 可见)。
+        rpcFire({ kind: 'deleteSession', id: task.id }, { errorKey: 'notice.deleteFailed' })
+      }
+    />
+  );
+}
+
 export function useTaskContextMenu(): {
   open: (task: TaskSummary, x: number, y: number) => void;
   element: React.ReactNode;
@@ -35,6 +55,7 @@ export function useTaskContextMenu(): {
     { task: TaskSummary; x: number; y: number } | undefined
   >();
   const [renaming, setRenaming] = useState<string | undefined>();
+  const [deleting, setDeleting] = useState<TaskSummary | undefined>();
 
   const contextItems = (task: TaskSummary): ContextMenuItem[] => [
     {
@@ -94,8 +115,7 @@ export function useTaskContextMenu(): {
         void navigator.clipboard?.writeText(task.id);
         return;
       case 'delete':
-        // 活跃会话由 server 拒删(英文错误经 toast 可见)。
-        rpcFire({ kind: 'deleteSession', id: task.id }, { errorKey: 'notice.deleteFailed' });
+        setDeleting(task); // 先确认(设计稿):记录与未提交改动不可恢复
         return;
       default:
         return;
@@ -121,8 +141,15 @@ export function useTaskContextMenu(): {
           onClose={() => setRenaming(undefined)}
         />
       ) : null}
+      {deleting ? <DeleteConfirm task={deleting} onClose={() => setDeleting(undefined)} /> : null}
     </>
   );
 
-  return { open: (task, x, y) => setContextMenu({ task, x, y }), element };
+  // 稳定引用:open 一路传到 memo(TaskRow) 的 onContextMenu,每次渲染换新
+  // 函数会让整棵任务行的 memo 恒不命中。
+  const open = useCallback(
+    (task: TaskSummary, x: number, y: number) => setContextMenu({ task, x, y }),
+    [],
+  );
+  return { open, element };
 }

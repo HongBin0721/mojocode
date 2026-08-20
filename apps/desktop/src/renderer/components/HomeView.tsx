@@ -8,7 +8,7 @@ import React, { useMemo } from 'react';
 import { useDesktopStore } from '../state/desktopStore.js';
 import { useProjectsStore } from '../state/projectsStore.js';
 import { useUiStore } from '../state/uiStore.js';
-import { openTask } from '../state/actions.js';
+import { openProject, openTask } from '../state/actions.js';
 import { currentGreetingKey } from '../utils/greeting.js';
 import { formatRelativeTime, projectName } from '../utils/format.js';
 import { taskTone, toneColorVar, toneLabelKey, type TaskTone } from '../utils/task-tone.js';
@@ -20,7 +20,6 @@ export function HomeView() {
   useLocale();
   const tasks = useDesktopStore((s) => s.tasks);
   const projects = useProjectsStore((s) => s.projects);
-  const selectProject = useProjectsStore((s) => s.select);
   const navigate = useUiStore((s) => s.navigate);
 
   // 口径唯一来源:utils/tasks.ts(与 Sidebar/ArchiveView 共用)。
@@ -75,10 +74,7 @@ export function HomeView() {
               key={repo.root}
               type="button"
               className="repo-card"
-              onClick={() => {
-                selectProject(repo.root);
-                navigate('task');
-              }}
+              onClick={() => openProject(repo.root)}
             >
               <span className="repo-card-head">
                 <GitBranchIcon size={14} />

@@ -10,7 +10,7 @@ import { openPath } from '../../bridge/invoke.js';
 import { useReviewStore } from '../../state/reviewStore.js';
 import { useDesktopStore } from '../../state/desktopStore.js';
 import { t, useLocale } from '../../i18n/index.js';
-import { Modal } from '../overlays/Modal.js';
+import { ConfirmDialog } from '../overlays/ConfirmDialog.js';
 import { useOverlayLayer } from '../overlays/overlay-stack.js';
 import {
   ArrowSquareOutIcon,
@@ -35,9 +35,14 @@ function DiscardConfirm({ onClose }: { onClose: () => void }) {
   const status = useReviewStore((s) => s.status);
   const discardAll = useReviewStore((s) => s.discardAll);
   return (
-    <Modal variant="overlay" ariaLabel={t('panel.discardTitle')} onClose={onClose}>
-      <div className="overlay-title">{t('panel.discardTitle')}</div>
-      <div className="overlay-note">{t('panel.discardNote')}</div>
+    <ConfirmDialog
+      title={t('panel.discardTitle')}
+      note={t('panel.discardNote')}
+      cancelLabel={t('panel.discardCancel')}
+      confirmLabel={t('panel.discardConfirm')}
+      onClose={onClose}
+      onConfirm={() => void discardAll()}
+    >
       <div className="overlay-list">
         {(status?.entries ?? []).map((entry) => (
           <div key={entry.path} className="overlay-list-row">
@@ -48,22 +53,7 @@ function DiscardConfirm({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </div>
-      <div className="overlay-actions">
-        <button type="button" onClick={onClose}>
-          {t('panel.discardCancel')}
-        </button>
-        <button
-          type="button"
-          className="btn-danger"
-          onClick={() => {
-            onClose();
-            void discardAll();
-          }}
-        >
-          {t('panel.discardConfirm')}
-        </button>
-      </div>
-    </Modal>
+    </ConfirmDialog>
   );
 }
 

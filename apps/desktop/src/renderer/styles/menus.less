@@ -16,20 +16,6 @@
   }
 }
 
-/* block 修饰:触发器铺满容器宽(侧栏底部的整宽设置行) */
-.menu-root-block,
-.menu-trigger-block {
-  display: block;
-  width: 100%;
-  text-align: left;
-}
-
-/* block 模式(侧栏项目切换器)的弹层跟随触发器宽:侧栏 overflow:hidden
- * 会在右缘硬裁定宽弹层,跟随宽度天然不越界,长路径靠行内 ellipsis。 */
-.menu-root-block .menu-popover {
-  width: 100%;
-}
-
 .menu-popover {
   position: absolute;
   top: calc(100% + 6px);

@@ -41,6 +41,13 @@ export interface UiStore {
   panelWidth: number;
   /** 侧栏搜索框的展开态(⌘K 与侧栏搜索行共用,不持久化)。 */
   searchOpen: boolean;
+  /**
+   * 项目树的视图状态(root → 值;缺省 = 展开 / 只露前 5 条)。放 store 而非
+   * 组件内存:⌘B 折叠侧栏、进设置页都会卸载 ProjectTree,手动折起的项目
+   * 不该因此自己弹开。会话级,不持久化。
+   */
+  projectExpanded: Record<string, boolean>;
+  projectShowAll: Record<string, boolean>;
   view: View;
   /** settings 是覆盖态:记录来处,closeSettings 回去。 */
   returnView: Exclude<View, 'settings'>;
@@ -63,6 +70,8 @@ export interface UiStore {
   toggleCollapsed(): void;
   openSearch(): void;
   closeSearch(): void;
+  setProjectExpanded(root: string, open: boolean): void;
+  setProjectShowAll(root: string, on: boolean): void;
   /** 主导航(首页/任务/归档)。进 task 时布局回到 chat。 */
   navigate(view: Exclude<View, 'settings'>): void;
   openSettings(section?: SettingsSection): void;
@@ -78,6 +87,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   collapsed: loadSidebarCollapsed(),
   panelWidth: typeof window === 'undefined' ? PANEL_DEFAULT_WIDTH : loadPanelWidth(),
   searchOpen: false,
+  projectExpanded: {},
+  projectShowAll: {},
   view: 'task',
   returnView: 'task',
   taskLayout: 'chat',
@@ -104,6 +115,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   },
   openSearch: () => set({ searchOpen: true }),
   closeSearch: () => set({ searchOpen: false }),
+  setProjectExpanded: (root, open) =>
+    set((state) => ({ projectExpanded: { ...state.projectExpanded, [root]: open } })),
+  setProjectShowAll: (root, on) =>
+    set((state) => ({ projectShowAll: { ...state.projectShowAll, [root]: on } })),
 
   navigate: (view) => set({ view, ...(view === 'task' ? { taskLayout: 'chat' } : {}) }),
   openSettings: (section) =>

@@ -14,13 +14,6 @@ export function liveTasks(tasks: TaskSummary[] | undefined): TaskSummary[] {
   return (tasks ?? []).filter((task) => !task.archivedAt && task.messageCount > 0);
 }
 
-/** 按 root 计数(项目切换器 badge / 首页项目卡共用)。 */
-export function taskCountsByRoot(live: TaskSummary[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const task of live) counts.set(task.root, (counts.get(task.root) ?? 0) + 1);
-  return counts;
-}
-
 /**
  * 当前项目的任务:root 过滤 + 标题包含/ID 前缀搜索 + 置顶前置。置顶内与
  * 未置顶内都保持入参顺序(tasks 通道已按 updatedAt 倒序推送)。

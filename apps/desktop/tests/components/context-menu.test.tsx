@@ -35,6 +35,7 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
   status: 'connected',
   isRunning: false,
   hasPendingPermission: false,
+  unseen: false,
   ...over,
 });
 
@@ -51,7 +52,13 @@ beforeEach(() => {
     pickDirectory: vi.fn().mockResolvedValue(undefined),
   } as unknown as typeof window.mojocode;
   Object.assign(navigator, { clipboard: { writeText: vi.fn() } });
-  useUiStore.setState({ view: 'task', collapsed: false, searchOpen: false });
+  useUiStore.setState({
+    view: 'task',
+    collapsed: false,
+    searchOpen: false,
+    projectExpanded: {},
+    projectShowAll: {},
+  });
   useProjectsStore.setState({ projects: ['/w'], selected: null });
   useDesktopStore.setState({
     tasks: [task({})],
@@ -116,6 +123,20 @@ describe('侧栏任务行右键菜单', () => {
     fireEvent.contextMenu(screen.getByText('修复登录'));
     fireEvent.click(screen.getByText('复制会话 ID'));
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('s-1');
+  });
+
+  it('删除会话走确认弹窗:取消不删,确认才发 deleteSession', () => {
+    render(<Sidebar />);
+    fireEvent.contextMenu(screen.getByText('修复登录'));
+    fireEvent.click(screen.getByText('删除会话'));
+    // 弹窗出现;取消不发 RPC。
+    fireEvent.click(screen.getByText('取消'));
+    expect(rpcMock).not.toHaveBeenCalledWith({ kind: 'deleteSession', id: 's-1' });
+
+    fireEvent.contextMenu(screen.getByText('修复登录'));
+    fireEvent.click(screen.getByText('删除会话'));
+    fireEvent.click(screen.getByText('删除'));
+    expect(rpcMock).toHaveBeenCalledWith({ kind: 'deleteSession', id: 's-1' });
   });
 
   it('重命名弹出对话框,回车提交 renameSession', () => {

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { resolveRuntime } from './resolve-runtime.js';
 import { createTaskManager, type TaskManager } from './task-manager.js';
-import { createGuiPrefs } from './gui-prefs.js';
+import { createGuiPrefs, createViewedTasksStore } from './gui-prefs.js';
 import { IPC_CHANNELS, type RpcRequest } from '../shared/ipc.js';
 
 /**
@@ -129,6 +129,7 @@ const bootstrap = async (): Promise<void> => {
   const next = createTaskManager({
     runtime: resolveRuntime(),
     attach,
+    viewed: createViewedTasksStore(guiPrefs),
     target: {
       // 只推给活着的窗口;重载窗口(新 webContents)后靠 renderer 重新 subscribe 拿快照。
       send: (channel, ...args) => {

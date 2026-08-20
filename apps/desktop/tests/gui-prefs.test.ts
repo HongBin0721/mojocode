@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createGuiPrefs, loadGuiPrefs } from '../src/main/gui-prefs.js';
+import { createGuiPrefs, createViewedTasksStore, loadGuiPrefs } from '../src/main/gui-prefs.js';
 
 const dirs: string[] = [];
 const tempDir = (): string => {
@@ -81,5 +81,22 @@ describe('createGuiPrefs', () => {
     const file = tempFile();
     createGuiPrefs(file).flush();
     expect(() => readFileSync(file)).toThrow();
+  });
+});
+
+describe('createViewedTasksStore', () => {
+  it('save → load 往返;坏 JSON/非对象/非数值条目一律丢弃', () => {
+    const file = tempFile();
+    const prefs = createGuiPrefs(file);
+    const store = createViewedTasksStore(prefs);
+    expect(store.load()).toEqual({}); // 键不存在
+
+    store.save({ 's-1': 3, 's-2': 0 });
+    expect(store.load()).toEqual({ 's-1': 3, 's-2': 0 });
+
+    prefs.set('viewedTasks', 'oops'); // 坏 JSON
+    expect(store.load()).toEqual({});
+    prefs.set('viewedTasks', '{"a":"x","b":2}'); // 非数值条目丢弃
+    expect(store.load()).toEqual({ b: 2 });
   });
 });

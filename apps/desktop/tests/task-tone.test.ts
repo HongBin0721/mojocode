@@ -18,6 +18,7 @@ const base: TaskSummary = {
   status: 'connected',
   isRunning: false,
   hasPendingPermission: false,
+  unseen: false,
 };
 
 describe('taskTone', () => {

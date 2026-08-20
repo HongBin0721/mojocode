@@ -120,7 +120,6 @@ export function TitleBar() {
             type="button"
             className="titlebar-btn"
             onClick={() => newTask()}
-            disabled={running}
             title={t('sidebar.newTask')}
           >
             +

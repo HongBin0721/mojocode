@@ -10,7 +10,9 @@ import { t } from '../i18n/index.js';
 import { pushNotice } from './noticeStore.js';
 import { describeError } from '../bridge/invoke.js';
 import { useDesktopStore } from './desktopStore.js';
+import { useProjectsStore } from './projectsStore.js';
 import { useTimelineStore } from './timelineStore.js';
+import { useUiStore } from './uiStore.js';
 
 /** 聚焦换源(两个 store 必须成对,漏一处就镜像漂移)。 */
 function setFocusedBoth(taskId: string): void {
@@ -20,6 +22,12 @@ function setFocusedBoth(taskId: string): void {
 
 function report(key: Parameters<typeof t>[0], error: unknown): void {
   pushNotice('error', `${t(key)}: ${describeError(error)}`);
+}
+
+/** 打开项目:侧栏过滤视角切到该 root,并落到任务工作区视图。 */
+export function openProject(root: string): void {
+  useProjectsStore.getState().select(root);
+  useUiStore.getState().navigate('task');
 }
 
 /** 聚焦一个任务:store 镜像换源 + 通知 main(重推该任务的回放)。 */
@@ -44,13 +52,15 @@ export function openTask(sessionId: string): void {
     .catch((error: unknown) => report('notice.taskOpenFailed', error));
 }
 
-/** 新建任务(在指定 root;缺省当前聚焦任务的 root)。 */
+/**
+ * 新建任务(在指定 root;缺省当前聚焦任务的 root)。多 sidecar 语义:聚焦
+ * 任务运行中也可新建——它转入后台缓冲继续跑,容量满且全在运行时 server 拒
+ * 绝并以 toast 呈现(旧的 running 守卫是单任务时代的残留,已随并行移除)。
+ */
 export function newTask(root?: string): void {
   const state = useDesktopStore.getState();
   const targetRoot = root ?? state.snapshot?.root;
   if (!targetRoot) return;
-  // running 守卫(P3 单任务语义:新建会挤掉当前任务;P8 并行后移除)。
-  if (state.snapshot?.agent.isRunning) return;
   void bridgeApi()
     .createTask({ root: targetRoot })
     .then(setFocusedBoth)

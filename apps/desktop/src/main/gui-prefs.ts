@@ -23,16 +23,25 @@ export function guiPrefsFile(): string {
   return join(homeDir(), '.mojocode', 'gui.json');
 }
 
+/** 容错解析 JSON 对象为同值类型 Record:坏 JSON/非对象回 {},不合格条目丢弃。 */
+function parseRecord<T>(text: string, isValue: (value: unknown) => value is T): Record<string, T> {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    const out: Record<string, T> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (isValue(value)) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** 读盘:不存在/坏 JSON/非对象一律回 {},非字符串值丢弃——偏好坏了不能挡启动。 */
 export function loadGuiPrefs(file: string): Record<string, string> {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-    const out: Record<string, string> = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === 'string') out[key] = value;
-    }
-    return out;
+    return parseRecord(readFileSync(file, 'utf8'), (v): v is string => typeof v === 'string');
   } catch {
     return {};
   }
@@ -43,6 +52,30 @@ export interface GuiPrefs {
   set(key: string, value: string): void;
   /** 退出路径兜底:把去抖窗口内的待写立即落盘。 */
   flush(): void;
+}
+
+/**
+ * 任务「已看状态」的持久化(会话 id → 用户最后看过的消息数,1:1)。
+ * 归属是 main 的 TaskManager(任务列表与聚焦态的唯一拥有者);本 store 只
+ * 负责 gui.json 一个键上的 JSON 编解码,读写走 GuiPrefs(去抖 + 原子写)。
+ */
+export interface ViewedTasksStore {
+  load(): Record<string, number>;
+  save(map: Record<string, number>): void;
+}
+
+const VIEWED_TASKS_KEY = 'viewedTasks';
+
+export function createViewedTasksStore(prefs: GuiPrefs): ViewedTasksStore {
+  return {
+    /** 坏 JSON/非对象/非数值条目一律丢弃——偏好坏了不能挡任务列表。 */
+    load: () =>
+      parseRecord(
+        prefs.snapshot()[VIEWED_TASKS_KEY] ?? '',
+        (v): v is number => typeof v === 'number' && Number.isFinite(v),
+      ),
+    save: (map) => prefs.set(VIEWED_TASKS_KEY, JSON.stringify(map)),
+  };
 }
 
 /**

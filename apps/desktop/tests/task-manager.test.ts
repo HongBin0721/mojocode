@@ -97,7 +97,10 @@ function fakeSession(world: FakeWorld, id: string): RemoteSession {
   } as unknown as RemoteSession;
 }
 
-function makeManager(world: FakeWorld, opts?: { maxActive?: number }) {
+function makeManager(
+  world: FakeWorld,
+  opts?: { maxActive?: number; viewed?: import('../src/main/gui-prefs.js').ViewedTasksStore },
+) {
   const sends: Array<{ channel: string; args: unknown[] }> = [];
   const spawnServer: SpawnFn = async (_runtime, serveArgs) => {
     world.spawnedArgs.push(serveArgs);
@@ -112,6 +115,7 @@ function makeManager(world: FakeWorld, opts?: { maxActive?: number }) {
     runtime,
     target: { send: (channel, ...args) => sends.push({ channel, args }) },
     maxActive: opts?.maxActive,
+    viewed: opts?.viewed,
     spawnServer,
     connect,
     listSessions: async () => world.metas,
@@ -288,5 +292,59 @@ describe('createTaskManager', () => {
     expect(new Set(world.disposed)).toEqual(new Set(['s-1', 's-2']));
     world.nextIds = ['s-3'];
     await expect(manager.createTask({ root: '/w' })).rejects.toThrow('已关闭');
+  });
+});
+
+describe('已看状态(unseen,与会话 1:1,gui.json 持久化)', () => {
+  const fakeViewed = (initial: Record<string, number> = {}) => {
+    const saves: Array<Record<string, number>> = [];
+    return {
+      saves,
+      store: {
+        load: () => initial,
+        save: (map: Record<string, number>) => saves.push({ ...map }),
+      },
+    };
+  };
+  const lastRows = (sends: Array<{ channel: string; args: unknown[] }>) =>
+    sends.filter((e) => e.channel === IPC_CHANNELS.tasks).at(-1)!.args[0] as TaskSummary[];
+
+  it('聚焦任务持续记为已看;从未看过的会话 unseen=true;openTask 点开即熄灭并落盘', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-1', 's-2'];
+    world.metas = [meta('s-1'), { ...meta('s-2'), messageCount: 3 }];
+    const viewed = fakeViewed();
+    const { manager, sends } = makeManager(world, { viewed: viewed.store });
+
+    await manager.createTask({ root: '/w' }); // 聚焦 s-1
+    let rows = lastRows(sends);
+    expect(rows.find((r) => r.id === 's-1')!.unseen).toBe(false); // 聚焦即已看
+    expect(rows.find((r) => r.id === 's-2')!.unseen).toBe(true); // 从未看过
+
+    await manager.openTask('s-2'); // 休眠复活:点开即算看过
+    rows = lastRows(sends);
+    expect(rows.find((r) => r.id === 's-2')!.unseen).toBe(false);
+    expect(viewed.saves.at(-1)).toMatchObject({ 's-2': 3 });
+  });
+
+  it('已看表读盘生效;后台消息推进 → unseen 重新点亮;运行中恒 false;删除的会话被清理', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-1'];
+    world.metas = [meta('s-1'), { ...meta('s-2'), messageCount: 3 }];
+    const viewed = fakeViewed({ 's-2': 3, ghost: 9 });
+    const { manager, sends } = makeManager(world, { viewed: viewed.store });
+
+    await manager.createTask({ root: '/w' });
+    expect(lastRows(sends).find((r) => r.id === 's-2')!.unseen).toBe(false); // 持久化的已看数命中
+
+    // s-2 在别处跑完一轮:meta 消息数越过已看数 → unseen 点亮。
+    world.metas = [meta('s-1'), { ...meta('s-2'), messageCount: 5 }];
+    const result = await manager.subscribe();
+    expect(result.tasks!.find((r) => r.id === 's-2')!.unseen).toBe(true);
+
+    // 幽灵条目(会话已删)被惰性清理:清理有 O(1) 闸门(条目数 > 会话数才扫),
+    // 不保证首次构建就清,但最终落盘的表一定不含幽灵。
+    expect(viewed.saves.length).toBeGreaterThan(0);
+    expect(viewed.saves.at(-1)).not.toHaveProperty('ghost');
   });
 });

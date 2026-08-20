@@ -63,6 +63,12 @@ export interface TaskSummary extends SessionMetaSummary {
   /** 有待决审批(后台任务行的角标数据源)。 */
   hasPendingPermission: boolean;
   lastActivityAt?: number;
+  /**
+   * 当前状态还没被用户看过(侧栏状态点的数据源)。main 的 TaskManager 计算:
+   * 会话的消息数 ≠ 用户最后看过的消息数(聚焦中的行持续记为已看;运行中恒
+   * false——行上是旋转图标,不用点)。已看表随 gui.json 持久化,与会话 1:1。
+   */
+  unseen: boolean;
 }
 
 /** 文件预览结果。形状复制自根仓库 src/app/workspace-read.ts 的 FileContent。 */

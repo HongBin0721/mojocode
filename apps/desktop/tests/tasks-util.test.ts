@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TaskSummary } from '../src/shared/ipc.js';
-import { archivedTasks, liveTasks, projectTasks, taskCountsByRoot } from '../src/renderer/utils/tasks.js';
+import { archivedTasks, liveTasks, projectTasks } from '../src/renderer/utils/tasks.js';
 
 function task(patch: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
@@ -19,6 +19,7 @@ function task(patch: Partial<TaskSummary> & { id: string }): TaskSummary {
     status: 'connected',
     isRunning: false,
     hasPendingPermission: false,
+    unseen: false,
     ...patch,
   };
 }
@@ -32,19 +33,6 @@ describe('liveTasks', () => {
     ];
     expect(liveTasks(tasks).map((t) => t.id)).toEqual(['a']);
     expect(liveTasks(undefined)).toEqual([]);
-  });
-});
-
-describe('taskCountsByRoot', () => {
-  it('按 root 计数', () => {
-    const counts = taskCountsByRoot([
-      task({ id: 'a' }),
-      task({ id: 'b' }),
-      task({ id: 'c', root: '/ws/b' }),
-    ]);
-    expect(counts.get('/ws/a')).toBe(2);
-    expect(counts.get('/ws/b')).toBe(1);
-    expect(counts.get('/ws/x')).toBeUndefined();
   });
 });
 

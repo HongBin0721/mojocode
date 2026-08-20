@@ -24,3 +24,13 @@ export function addProject(list: string[], root: string): string[] {
 export function removeProject(list: string[], root: string): string[] {
   return list.includes(root) ? list.filter((item) => item !== root) : list;
 }
+
+/** 拖拽排序:把 from 位置的项移到 to;越界或原地返回原数组引用。 */
+export function moveProject(list: string[], from: number, to: number): string[] {
+  if (from === to) return list;
+  if (from < 0 || from >= list.length || to < 0 || to >= list.length) return list;
+  const next = [...list];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved as string);
+  return next;
+}
