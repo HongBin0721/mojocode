@@ -371,6 +371,8 @@ export const en = {
   'notice.serverLost': 'Lost connection to the mojocode server — restart the TUI to continue.',
   'notice.serverLostApp':
     'Lost connection to the mojocode server — restart the app or reopen the project to continue.',
+  'notice.taskReviving':
+    'Reviving the session process… the history above is read-only until the connection is ready.',
   'notice.serverExited':
     'The mojocode server process exited unexpectedly ({code}) — restart the TUI to continue.',
   'notice.serverExitedApp':

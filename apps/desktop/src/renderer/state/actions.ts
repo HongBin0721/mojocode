@@ -40,16 +40,40 @@ export function focusTask(taskId: string): void {
 
 /** 打开任务(活跃直接聚焦,休眠以 --resume 复活)。 */
 export function openTask(sessionId: string): void {
-  // 乐观聚焦:活跃任务立即换源;休眠任务等 createTask 返回后再聚焦正式 id。
-  const { runtimes } = useDesktopStore.getState();
-  if (runtimes[sessionId]) {
+  const store = useDesktopStore.getState();
+  const { focusedTaskId } = store;
+  // 快路径只认**行状态**为 connected 的任务:runtimes 的桶不随 sidecar 关停
+  // 清理(容量淘汰/空闲回收都只在 main 侧摘任务),照着残桶走 focusTask,
+  // main 那边 `if (!task) return` 静默无事——既不复活也不推回放,而残桶的
+  // connection 还是 'connected',Composer 就此解禁,消息被 main 按它自己的
+  // focusedTaskId 投进**上一个**会话。
+  const live = store.tasks?.find((task) => task.id === sessionId);
+  if (store.runtimes[sessionId] && live?.status === 'connected') {
     focusTask(sessionId);
     return;
   }
+  // 乐观聚焦(resume 的 taskId 恒等于 sessionId):main 会在 spawn 前直读磁盘
+  // 推一份预览回放,内容即刻可见,不陪 sidecar 冷启动干等。同时把镜像压回
+  // 'connecting'——复活期间 main 的焦点还在旧任务上,残桶若仍显示 connected,
+  // Composer/工具栏就会把操作发给旧会话。
+  store.applyConnection(sessionId, 'connecting');
+  setFocusedBoth(sessionId);
   void bridgeApi()
     .openTask(sessionId)
-    .then(setFocusedBoth)
-    .catch((error: unknown) => report('notice.taskOpenFailed', error));
+    .then((taskId) => {
+      // 相等是常态,这里只是不变量的兜底(setFocused 无同 id 早退,
+      // 白重设会让聚焦组件多渲一轮)。
+      if (taskId !== sessionId) setFocusedBoth(taskId);
+    })
+    .catch((error: unknown) => {
+      // 只在用户还停在这个任务上时才退回:复活要几秒,期间用户可能已经点去
+      // 别处,那时把焦点拽回旧任务就是抢用户的操作。
+      const current = useDesktopStore.getState().focusedTaskId;
+      if (current === sessionId && focusedTaskId && focusedTaskId !== sessionId) {
+        setFocusedBoth(focusedTaskId);
+      }
+      report('notice.taskOpenFailed', error);
+    });
 }
 
 /**

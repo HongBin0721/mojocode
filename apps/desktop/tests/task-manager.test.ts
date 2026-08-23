@@ -2,7 +2,7 @@
  * TaskManager 单测:注入假 spawn/connect/listSessions,不起真进程、不 mock
  * electron。覆盖:创建/聚焦/关停、taskId=storeId、RPC 路由与缺任务拒绝、
  * 容量淘汰(运行中豁免)、openTask 的休眠复活参数、tasks 通道推送、
- * disposeAll。
+ * 回放推送(createTask 即推 + 磁盘预览先行 + 迟到预览丢弃)、disposeAll。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -99,7 +99,11 @@ function fakeSession(world: FakeWorld, id: string): RemoteSession {
 
 function makeManager(
   world: FakeWorld,
-  opts?: { maxActive?: number; viewed?: import('../src/main/gui-prefs.js').ViewedTasksStore },
+  opts?: {
+    maxActive?: number;
+    viewed?: import('../src/main/gui-prefs.js').ViewedTasksStore;
+    loadDiskReplay?: (sessionId: string) => Promise<import('@core/types').TimelineItem[]>;
+  },
 ) {
   const sends: Array<{ channel: string; args: unknown[] }> = [];
   const spawnServer: SpawnFn = async (_runtime, serveArgs) => {
@@ -116,6 +120,7 @@ function makeManager(
     target: { send: (channel, ...args) => sends.push({ channel, args }) },
     maxActive: opts?.maxActive,
     viewed: opts?.viewed,
+    loadDiskReplay: opts?.loadDiskReplay ?? (async () => []),
     spawnServer,
     connect,
     listSessions: async () => world.metas,
@@ -346,5 +351,62 @@ describe('已看状态(unseen,与会话 1:1,gui.json 持久化)', () => {
     // 不保证首次构建就清,但最终落盘的表一定不含幽灵。
     expect(viewed.saves.length).toBeGreaterThan(0);
     expect(viewed.saves.at(-1)).not.toHaveProperty('ghost');
+  });
+});
+
+describe('回放推送(打开会话即见内容)', () => {
+  const replayEnvelopes = (sends: Array<{ channel: string; args: unknown[] }>) =>
+    sends
+      .filter((entry) => entry.channel === IPC_CHANNELS.replay)
+      .map((entry) => entry.args[0] as { taskId: string; data: unknown[] });
+
+  it('createTask 建成即推回放:不推的话休眠复活后时间线空到下一次聚焦', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-1'];
+    world.metas = [meta('s-1')];
+    const { manager, sends } = makeManager(world);
+
+    await manager.createTask({ root: '/w' });
+    const replays = replayEnvelopes(sends);
+    expect(replays).toHaveLength(1);
+    expect(replays[0]!.taskId).toBe('s-1');
+    // 空会话的回放至少带 banner 条目(新任务的欢迎横幅同样靠这条到达)。
+    expect(replays[0]!.data.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('openTask 休眠复活:磁盘预览先到(不等 sidecar),正式回放随 createTask 跟进', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-2'];
+    world.metas = [meta('s-2')];
+    const preview = [{ key: 'disk-0', kind: 'notice', level: 'info', message: '预览' }];
+    const { manager, sends } = makeManager(world, {
+      loadDiskReplay: async () => preview as never,
+    });
+
+    await manager.openTask('s-2');
+    const replays = replayEnvelopes(sends);
+    expect(replays).toHaveLength(2);
+    // 预览在正式回放之前到达,且信封 taskId = sessionId(renderer 已乐观聚焦)。
+    expect(replays[0]).toMatchObject({ taskId: 's-2', data: preview });
+    expect(replays[1]!.taskId).toBe('s-2');
+  });
+
+  it('预览晚于正式回放到达时被丢弃(tasks.has 闸门),不倒退覆盖', async () => {
+    const world = makeWorld();
+    world.nextIds = ['s-2'];
+    world.metas = [meta('s-2')];
+    let releasePreview!: () => void;
+    const { manager, sends } = makeManager(world, {
+      loadDiskReplay: () =>
+        new Promise((resolve) => {
+          releasePreview = () => resolve([{ key: 'late', kind: 'notice' }] as never);
+        }),
+    });
+
+    await manager.openTask('s-2'); // createTask 已完成,正式回放已推
+    const before = replayEnvelopes(sends).length;
+    releasePreview();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(replayEnvelopes(sends)).toHaveLength(before); // 迟到的预览没有发出
   });
 });

@@ -10,9 +10,10 @@
  */
 
 import { SessionStore } from '@core/session-store';
+import type { TimelineItem } from '@core/types';
 import { createBridge, type Bridge, type BridgeTarget } from './bridge.js';
 import type { ViewedTasksStore } from './gui-prefs.js';
-import { buildReplayItems } from './replay.js';
+import { buildDiskReplayItems, buildReplayItems } from './replay.js';
 import type { ServerRuntime } from './resolve-runtime.js';
 import {
   startDesktopSession,
@@ -27,6 +28,7 @@ import type {
   LiveTaskState,
   RpcRequest,
   SubscribeResult,
+  TaskScoped,
   TaskStatus,
   TaskSummary,
 } from '../shared/ipc.js';
@@ -92,6 +94,8 @@ export interface TaskManagerDeps {
    * 语义归 TaskManager:聚焦行持续记为已看,后台推进的行 unseen=true。
    */
   viewed?: ViewedTasksStore;
+  /** 休眠会话的磁盘预览回放(默认直读 JSONL;测试注入假数据)。 */
+  loadDiskReplay?: (sessionId: string) => Promise<TimelineItem[]>;
 }
 
 /** listSessions 依赖的最小 meta 形状(= SessionMeta 的 wire 子集)。 */
@@ -129,6 +133,7 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     deps.listSessions ?? (() => SessionStore.list() as Promise<TaskSummaryMeta[]>);
 
   const tasks = new Map<string, ManagedTask>();
+  const loadDiskReplay = deps.loadDiskReplay ?? buildDiskReplayItems;
   let focusedTaskId: string | undefined;
   let disposed = false;
 
@@ -201,6 +206,23 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     await task.desktop.dispose();
   };
 
+  /**
+   * 「成为聚焦任务」的唯一实现:旧任务转后台 → 换焦点 → 串行推送
+   * replay(持久化历史)→ 当前轮缓冲(补齐进行中的流)→ 开转发。
+   * 顺序是硬约束:renderer 按到达序 apply,replay 会重置时间线桶。
+   * createTask / focusTask / 竞态双击复用分支都走这里——回放推送缺一处,
+   * 对应入口就会「时间线空白到点第二次」(实打实踩过的 bug)。
+   */
+  const takeFocus = async (task: ManagedTask): Promise<void> => {
+    const previous = focusedTaskId ? tasks.get(focusedTaskId) : undefined;
+    if (previous && previous.taskId !== task.taskId) previous.bridge.setForwarding(false);
+    focusedTaskId = task.taskId;
+    task.lastActivityAt = Date.now();
+    await task.bridge.pushReplay();
+    task.bridge.replayBuffered();
+    task.bridge.setForwarding(true);
+  };
+
   /** 容量把关:满员时淘汰「非聚焦、非运行、最久未动」的任务;全在忙则拒绝。 */
   const ensureCapacity = async (): Promise<void> => {
     if (tasks.size < maxActive) return;
@@ -244,7 +266,8 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const existing = tasks.get(taskId);
     if (existing) {
       await desktop.dispose();
-      focusedTaskId = taskId;
+      await takeFocus(existing);
+      void pushTasks();
       return taskId;
     }
 
@@ -281,11 +304,10 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
       void pushTasks();
     });
     tasks.set(taskId, task);
-    // 新任务即聚焦:旧的聚焦任务转后台(抑制事件转发)。
-    const previous = focusedTaskId ? tasks.get(focusedTaskId) : undefined;
-    if (previous && previous.taskId !== taskId) previous.bridge.setForwarding(false);
-    focusedTaskId = taskId;
     task.bridge.setConnection('connected');
+    // 新任务即聚焦(takeFocus 含回放推送——renderer 的时间线桶还是空的,
+    // 不推的话休眠会话复活后一直白屏,「要点第二次才显示内容」的根因)。
+    await takeFocus(task);
     await pushTasks();
     return taskId;
   };
@@ -299,21 +321,10 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     await pushTasks();
   };
 
-  /**
-   * 聚焦切换:先把旧任务转后台,再对新任务串行推送
-   * replay(持久化历史)→ 当前轮缓冲(补齐进行中的流)→ 开转发。
-   * 顺序是硬约束:renderer 按到达序 apply,replay 会重置时间线桶。
-   */
   const focusTask = async (taskId: string): Promise<void> => {
     const task = tasks.get(taskId);
     if (!task) return; // 休眠任务的聚焦走 openTask(要先复活)
-    const previous = focusedTaskId ? tasks.get(focusedTaskId) : undefined;
-    if (previous && previous.taskId !== taskId) previous.bridge.setForwarding(false);
-    focusedTaskId = taskId;
-    task.lastActivityAt = Date.now();
-    await task.bridge.pushReplay();
-    task.bridge.replayBuffered();
-    task.bridge.setForwarding(true);
+    await takeFocus(task);
     void pushTasks(); // 聚焦即记为已看,行上的未读点立刻熄灭
   };
 
@@ -325,11 +336,27 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const metas = await listSessions();
     const meta = metas.find((m) => m.id === sessionId);
     if (!meta) throw new Error(`找不到会话 ${sessionId}`);
+    // 磁盘预览的读取即刻发起(与下面的 pushTasks/spawn 重叠):renderer 已
+    // 乐观聚焦(resume 的 taskId 恒等于 sessionId),JSONL 直读的历史先推
+    // 过去,内容即刻可见,不陪 sidecar 冷启动干等。空会话(messageCount 0)
+    // 连读都省——磁盘上也没有可预览的内容。
+    const preview =
+      meta.messageCount > 0 ? loadDiskReplay(sessionId).catch(() => undefined) : undefined;
     // 点开即算看过:sidecar 复活要几秒,未读点不该等 spawn 完成才熄灭。
     // 复用刚列举的 metas(免二次磁盘枚举),且 await 住——否则这条推送与
     // createTask 尾部的推送并发,晚到的旧快照会盖掉带新任务行的那条。
     markSeen(sessionId, meta.messageCount);
     await pushTasks(metas);
+    if (preview) {
+      // tasks.has 闸门防止预览晚于 createTask 的正式回放到达而把它盖掉;
+      // 预览失败静默(上面的 catch)——它只是体验优化,不能挡复活。
+      void preview.then((items) => {
+        if (items && !disposed && !tasks.has(sessionId)) {
+          const envelope: TaskScoped<TimelineItem[]> = { taskId: sessionId, data: items };
+          target.send(IPC_CHANNELS.replay, envelope);
+        }
+      });
+    }
     return createTask({ root: meta.root, resume: sessionId });
   };
 

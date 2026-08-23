@@ -11,8 +11,57 @@
 import { t } from '@core/i18n';
 import { replayTimeline } from '@core/replay';
 import { permissionsLabel } from '@core/schema';
+import { SessionStore } from '@core/session-store';
 import type { TimelineItem } from '@core/types';
 import type { RemoteSession } from '@core/remote';
+
+/**
+ * 展示历史 → 带 `replay-` 前缀 key 的时间线条目(磁盘预览与正式回放共用)。
+ * total 给预览的截尾用:分隔行照报完整消息数,条目只还原传入的尾部。
+ */
+function replayedItems(
+  messages: Parameters<typeof replayTimeline>[0],
+  sessionId: string,
+  total = messages.length,
+): TimelineItem[] {
+  return [
+    {
+      key: 'replay-divider',
+      kind: 'divider',
+      label: t('divider.resumed', { id: sessionId.slice(0, 8), n: total }),
+    },
+    ...replayTimeline(messages).map((item, index) => ({ ...item, key: `replay-${index}` }) as TimelineItem),
+  ];
+}
+
+/**
+ * 预览只需要填满视口:长会话整段 replayTimeline + IPC 结构化克隆是 O(会话
+ * 大小) 的主进程开销,而正式回放马上就来整桶替换,截尾把这份被丢弃的工作
+ * 压成常数。
+ */
+const PREVIEW_MAX_MESSAGES = 40;
+
+/**
+ * 磁盘直读的预览回放:openTask 复活休眠会话要经历整个 sidecar 冷启动
+ * (spawn + bootstrap + --resume),用户点开后不该盯几秒白屏——先把 JSONL
+ * 里的展示历史还原成时间线推过去,sidecar 连上后 createTask 的正式回放会
+ * 整桶替换(banner 依赖 resolved provider 快照,预览里没有,由正式回放补)。
+ */
+export async function buildDiskReplayItems(sessionId: string): Promise<TimelineItem[]> {
+  const store = await SessionStore.open(sessionId);
+  const messages = store.displayMessages;
+  const items: TimelineItem[] =
+    messages.length > 0
+      ? replayedItems(messages.slice(-PREVIEW_MAX_MESSAGES), sessionId, messages.length)
+      : [];
+  items.push({
+    key: 'replay-reviving',
+    kind: 'notice',
+    level: 'info',
+    message: t('notice.taskReviving'),
+  });
+  return items;
+}
 
 export function buildReplayItems(session: RemoteSession): TimelineItem[] {
   const snap = session.snapshot;
@@ -35,16 +84,7 @@ export function buildReplayItems(session: RemoteSession): TimelineItem[] {
   const messages = session.store.displayMessages;
   if (messages.length === 0) return [banner];
 
-  const replayed = replayTimeline(messages);
-  const items: TimelineItem[] = [
-    banner,
-    {
-      key: 'replay-divider',
-      kind: 'divider',
-      label: t('divider.resumed', { id: snap.storeId.slice(0, 8), n: messages.length }),
-    },
-    ...replayed.map((item, index) => ({ ...item, key: `replay-${index}` }) as TimelineItem),
-  ];
+  const items: TimelineItem[] = [banner, ...replayedItems(messages, snap.storeId)];
   // 恢复的目标在 bootstrap 期就 restore 过,那条 goal-start 没人听见——补一次
   // 提示(与 TUI 挂载时的补条一致)。
   if (snap.goal.restored) {
