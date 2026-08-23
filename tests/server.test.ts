@@ -165,6 +165,7 @@ function fakeSession() {
     refreshEnvironment: vi.fn(async () => {}),
     skills: [{ name: 'demo', description: 'demo skill' }],
     skillsChanged: vi.fn(() => () => {}),
+    mcpStatusChanged: vi.fn(() => () => {}),
     refreshSkills: spies.refreshSkills,
     runSkill: spies.runSkill,
     reviewTargets: spies.reviewTargets,

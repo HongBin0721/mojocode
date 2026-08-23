@@ -246,6 +246,9 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
   const offTodos = session.todos.subscribe(() => pushState());
   // 技能与 todos 同理:非总线驱动的快照字段,变化各自订阅推送。
   const offSkills = session.skillsChanged(() => pushState());
+  // MCP 非阻塞连接:状态逐个落地时没有伴随的 bus 事件,不主动推的话客户端
+  // 的 mcpStatuses 要等下一个 agent 事件才更新。
+  const offMcp = session.mcpStatusChanged(() => pushState());
 
   /**
    * 立即返回结果的方法。抛错原样上抛,由调用处包成 WireError。
@@ -578,6 +581,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       offBus();
       offTodos();
       offSkills();
+      offMcp();
       for (const client of sseClients) client.end();
       sseClients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));

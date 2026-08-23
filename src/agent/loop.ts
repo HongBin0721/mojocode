@@ -26,6 +26,12 @@ export interface AgentOptions {
   systemPrompt: string;
   tools: ToolSet;
   bus: EventBus;
+  /**
+   * 每轮开流前的门:bootstrap 用它等非阻塞的 MCP 连接收尾,保证首轮的工具集
+   * 与旧的阻塞式启动一致。reject 会被 run() 吞掉(门失败不该炸掉整轮);
+   * 轮中注入(inject)不经过它。
+   */
+  beforeTurn?: () => Promise<void>;
   /** 每轮结束后以完整历史调用,用于会话持久化。 */
   onHistoryChange?: (messages: ModelMessage[]) => void;
 }
@@ -343,6 +349,9 @@ export class Agent {
     this.controller = new AbortController();
 
     try {
+      // MCP 非阻塞启动的补偿门(通常早已 resolve):controller 已就位,等待
+      // 期间提交的消息照常走 inject 排队。吞错在此兜底,门失败不炸整轮。
+      await this.options.beforeTurn?.().catch(() => {});
       // `/compact` 进行中时等它收尾:它完成时会整体替换 this.messages,
       // 先 push 的用户消息会被无声覆盖掉。压缩失败也必须继续走完这一轮——
       // 用户的消息已经回显在时间线上,吞掉它比压不掉严重得多;错误由

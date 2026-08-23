@@ -52,6 +52,7 @@ function fakeServerSession() {
     },
     skills: [],
     skillsChanged: () => () => {},
+    mcpStatusChanged: () => () => {},
     changedFiles: [],
     dispose: vi.fn(async () => {}),
   };

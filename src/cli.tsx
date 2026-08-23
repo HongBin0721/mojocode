@@ -500,11 +500,8 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
     resume,
     fork: globals.forkSession === true,
     skipMcp: globals.mcp === false,
-    onMcpStatus: (status) => {
-      if (!status.connected) {
-        process.stderr.write(`${t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' })}\n`);
-      }
-    },
+    // 连接失败不再写 stderr:MCP 连接非阻塞后状态在 TUI 挂载之后才落地,
+    // 裸写会糊进全屏画面。bootstrap 已把失败作为 notice 发上总线。
   });
   for (const warning of loaded.warnings) {
     process.stderr.write(`! ${warning}\n`);
@@ -688,11 +685,8 @@ async function runMain(flags: MainFlags): Promise<void> {
     resume,
     fork: flags.forkSession === true,
     skipMcp: flags.mcp === false,
-    onMcpStatus: (status) => {
-      if (!status.connected && !headless) {
-        process.stderr.write(`${t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' })}\n`);
-      }
-    },
+    // 同上:失败经 bus notice 呈现(headless 渲染器也认 notice 事件),
+    // 裸 stderr 在进程内 TUI 下会写进 alt-screen。
   });
 
   // 加载期提示(旧版 permissionMode 的一次性转换等)。`--json` 下不打:

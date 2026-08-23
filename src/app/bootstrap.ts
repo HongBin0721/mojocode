@@ -100,6 +100,8 @@ export interface Session {
   /** LSP 诊断管理器;lsp.enabled: false 时为 undefined。/doctor 读它的运行状态。 */
   lsp?: LspManager;
   mcpStatuses: McpStatus[];
+  /** MCP 状态订阅:非阻塞连接逐个落地时触发(serve 借此把新快照推给客户端)。 */
+  mcpStatusChanged: (listener: () => void) => () => void;
   store: SessionStore;
   /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
   newSession: () => Promise<SessionStore>;
@@ -248,7 +250,6 @@ export interface BootstrapOptions {
   fork?: boolean;
   /** 跳过 MCP 连接——`-p` 模式在速度更重要时使用。 */
   skipMcp?: boolean;
-  onMcpStatus?: (status: McpStatus) => void;
 }
 
 export async function bootstrap(options: BootstrapOptions): Promise<Session> {
@@ -433,14 +434,43 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     await gate.confirmSessionRules(meta.name, meta.allowedTools);
   };
 
+  // MCP 非阻塞:连接不再挡 bootstrap——每个 server 最坏 15s 超时曾直接叠在
+  // 启动路径上,GUI/TUI 拉起 sidecar 的握手都得陪着等。statuses 数组按引用
+  // 进 Session 快照,逐 server 落地时原地 push 并通知订阅方(serve 借
+  // mcpStatusChanged 推 state 帧);连接全部结束后由下方 mcpReady 的收尾把
+  // MCP 工具原地并进 tools。首轮不抢跑:Agent 的 beforeTurn 门等 mcpReady,
+  // 等待只是从「启动时」挪到「真要开轮时」,轮次语义与旧的阻塞式一致。
+  const mcp: { connections: McpConnection[]; statuses: McpStatus[] } = {
+    connections: [],
+    statuses: [],
+  };
+  const mcpListeners = new Set<() => void>();
+  const notifyMcpChanged = (): void => {
+    for (const listener of mcpListeners) listener();
+  };
+  let mcpDisposed = false;
+  const mcpConnect = options.skipMcp
+    ? Promise.resolve({ connections: [] as McpConnection[] })
+    : connectMcpServers(config.mcpServers, (status) => {
+        mcp.statuses.push(status);
+        // 失败即刻上总线:连接非阻塞之后,状态是在**握手之后**才落地的,
+        // 调用方写 stderr 已经晚了(受管 sidecar 里进不可见的尾部缓冲,
+        // 进程内 TUI 里直接糊进全屏画面)。bus 是三个前端都收得到的通道。
+        if (!status.connected) {
+          bus.emit({
+            type: 'notice',
+            level: 'warn',
+            message: t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' }),
+          });
+        }
+        notifyMcpChanged();
+      });
+
   // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
   // 技能初扫并入同一批:tools 组装(下方)读 skillManager.current() 决定
   // 要不要注册 skill 工具。扫描失败按"没有技能"处理,不拦启动。
-  let [env, mcp] = await Promise.all([
+  let [env] = await Promise.all([
     gatherEnvironment(root),
-    options.skipMcp
-      ? Promise.resolve({ connections: [] as McpConnection[], statuses: [] as McpStatus[] })
-      : connectMcpServers(config.mcpServers, options.onMcpStatus),
     skillManager.list().catch(() => undefined),
   ]);
 
@@ -553,11 +583,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   const tools = {
     ...createBuiltinTools(toolContext, todos),
-    ...bridgeMcpTools(mcp.connections, gate),
     task: createTaskTool(taskDeps),
     // 一个 model-invocable 技能都没有时干脆不注册:空列表的工具纯占前缀。
     ...(hasModelSkills() ? { skill: skillToolFor(false) } : {}),
   };
+  /**
+   * MCP 连接收尾(非阻塞启动的另一半):工具原地并进 tools——与 syncSkillTool
+   * 同一招,tools 与运行中的 Agent 共享引用,改键下一次开流生效。dispose 竞态
+   * 下(连接落地时会话已关)直接关掉连接,绝不留 stdio 孤儿进程。永不 reject:
+   * beforeTurn 门 await 它,拒绝会把之后每一轮都炸掉。
+   */
+  const mcpReady = mcpConnect
+    .then(({ connections }) => {
+      if (mcpDisposed) {
+        for (const connection of connections) void connection.close(); // close 内部已吞错
+        return;
+      }
+      mcp.connections.push(...connections);
+      // 不另发通知:状态早已逐 server 通知过,工具注册不进 wire 快照。
+      Object.assign(tools as ToolSet, bridgeMcpTools(connections, gate));
+    })
+    .catch(() => {});
   // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
   const webSearchAvailable = 'web_search' in tools;
   let viewImageAvailable = 'view_image' in tools;
@@ -626,6 +672,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     ),
     tools,
     bus,
+    // MCP 非阻塞启动的补偿门:真要开轮了才等连接收尾(通常早已 resolve)。
+    beforeTurn: () => mcpReady,
     onHistoryChange: (messages: ModelMessage[]) => {
       void store.save(messages).catch((err: Error) => {
         bus.emit({ type: 'notice', level: 'warn', message: t('notice.sessionSaveFailed', { message: err.message }) });
@@ -890,6 +938,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     goal,
     lsp,
     mcpStatuses: mcp.statuses,
+    mcpStatusChanged: (listener: () => void) => {
+      mcpListeners.add(listener);
+      return () => {
+        mcpListeners.delete(listener);
+      };
+    },
     get store() {
       return store;
     },
@@ -1046,8 +1100,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return { ...caps, efforts: effectiveEfforts(target, caps?.efforts) };
     },
     listModels: () => listModels(provider),
-    doctor: ({ offline }) =>
-      runDoctor({
+    doctor: async ({ offline }) => {
+      // 等连接落定再体检:mcp.statuses 是逐个填的,半满的数组会被 doctor
+      // 当成权威(没落地的 server 一律报 fail · "?"),还会把退出码带成 1。
+      await mcpReady;
+      return runDoctor({
         root,
         config,
         mcpStatuses: mcp.statuses,
@@ -1055,7 +1112,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         // 探测(探完即杀)。
         lspStatuses: lsp?.statuses(),
         offline,
-      }),
+      });
+    },
     refreshEnvironment: async () => {
       env = await gatherEnvironment(root);
       agent.updateSystemPrompt(
@@ -1087,6 +1145,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     startSimplify,
     dispose: async () => {
       goal.dispose();
+      // 置位在前 + 等连接落定:关会话时连接可能还在路上(每 server 最坏 15s),
+      // 不等的话 mcp.connections 还是空的,那批 stdio 子进程就成了孤儿——
+      // mcpReady 的 disposed 分支负责关掉它们,但它得先跑完。
+      mcpDisposed = true;
+      await mcpReady; // 永不 reject
       await Promise.all([...mcp.connections.map((c) => c.close()), lsp?.dispose()]);
     },
   };

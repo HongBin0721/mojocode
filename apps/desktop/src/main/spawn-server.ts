@@ -16,7 +16,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
-/** bootstrap 可能要连多个 MCP server,握手上限给足(与 server-launch 对齐)。 */
+/** MCP 连接已非阻塞(bootstrap 不等它),上限只为慢盘/冷启动兜底(与 server-launch 对齐)。 */
 const HANDSHAKE_TIMEOUT_MS = 120_000;
 /** 握手后保留的 stderr 尾部行数(异常退出时的排障线索)。 */
 const STDERR_TAIL_LINES = 50;

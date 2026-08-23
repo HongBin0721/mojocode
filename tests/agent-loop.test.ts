@@ -49,6 +49,7 @@ function installDefaultStream() {
 function makeAgent(
   providerOverrides: Record<string, unknown> = {},
   configOverrides: Record<string, unknown> = {},
+  agentOverrides: Record<string, unknown> = {},
 ) {
   const bus = new EventBus();
   const events: string[] = [];
@@ -75,6 +76,7 @@ function makeAgent(
     systemPrompt: 'sys',
     tools: {},
     bus,
+    ...agentOverrides,
   });
   return { agent, bus, events };
 }
@@ -988,5 +990,43 @@ describe('contextUsage 显示回落', () => {
     const { agent } = makeAgent();
     await agent.run('你好');
     expect(agent.contextUsage.used).toBe(2000);
+  });
+});
+
+describe('beforeTurn 门(MCP 非阻塞启动的补偿)', () => {
+  it('开流等到 beforeTurn 落定,首轮工具集不抢跑', async () => {
+    installDefaultStream();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { agent } = makeAgent({}, {}, { beforeTurn: () => gate });
+
+    const running = agent.run('你好');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockStreamText).not.toHaveBeenCalled();
+
+    release();
+    await running;
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it('等待 beforeTurn 期间 isRunning 已为真,再次 run 走注入而不是并发开轮', async () => {
+    installDefaultStream();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { agent, events } = makeAgent({}, {}, { beforeTurn: () => gate });
+
+    const running = agent.run('第一条');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = agent.run('第二条');
+    release();
+    await Promise.all([running, second]);
+    // 第二条转为注入并入同一轮(末步后注入的引导以续跑流喂给模型),
+    // 绝不是并发的第二轮。
+    expect(events.filter((type) => type === 'turn-start')).toHaveLength(1);
+    expect(sent.flat().some((content) => content === wrapGuidance('第二条'))).toBe(true);
   });
 });
