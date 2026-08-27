@@ -307,8 +307,13 @@ export class Agent {
   }
 
   /** 图片降级的用户提示,在消息确定生效后发:deferred>0 报降级方式,有失败报 warn。 */
-  private emitImageNotices(prepared: { deferred: number; viewImageTool: boolean }, total: number): void {
-    if (total === 0) return;
+  private emitImageNotices(
+    prepared: { images?: ImageAttachment[]; deferred: number; viewImageTool: boolean },
+    total: number,
+  ): void {
+    // 直发路径:图片原样随消息带走(prepared.images 仍在),deferred 恒为 0,
+    // 不能落进下面的 deferred<total 分支——那是"降级丢图"的警告,直发没丢。
+    if (total === 0 || prepared.images !== undefined) return;
     if (prepared.deferred > 0) {
       this.options.bus.emit({
         type: 'notice',

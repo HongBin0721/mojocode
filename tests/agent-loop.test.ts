@@ -180,6 +180,18 @@ describe('图片附件', () => {
     });
   });
 
+  it('直发路径不发任何图片 notice(曾误报「保存失败」:deferred=0 落进 <total 分支)', async () => {
+    installDefaultStream();
+    const { agent, bus } = makeAgent();
+    const notices: string[] = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push(e.message);
+    });
+    await agent.run('看这张图', { images: [IMG] });
+
+    expect(notices).toEqual([]);
+  });
+
   it('不带图片时保持裸字符串 content(零扰动)', async () => {
     installDefaultStream();
     const { agent } = makeAgent();
