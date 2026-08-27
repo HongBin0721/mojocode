@@ -1,5 +1,16 @@
+/**
+ * 用户消息随附的图片(base64)。GUI 渲染缩略图/大图预览;TUI 画不了图,
+ * 继续读 text 里的 `[image: 文件名]` 占位标签——两者并存,标签不因图存在
+ * 而从 text 里去掉。
+ */
+export interface TimelineImage {
+  mediaType: string;
+  data: string;
+  filename?: string;
+}
+
 export type TimelineItem =
-  | { key: string; kind: 'user'; text: string }
+  | { key: string; kind: 'user'; text: string; images?: TimelineImage[] }
   | {
       key: string;
       kind: 'assistant';

@@ -29,6 +29,8 @@ export const zhCN: Record<keyof typeof import('./en.js')['en'], string> = {
   'composer.abort': '中断',
   'composer.dropHint': '松开以添加图片附件',
   'composer.attach': '添加图片附件',
+  'image.viewFull': '查看大图',
+  'image.preview': '图片预览',
   'mode.read-only': '只读',
   'mode.ask': '询问',
   'mode.auto': '自动编辑',

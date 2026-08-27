@@ -39,9 +39,11 @@ export function rpcCall<R extends RpcRequest>(
 /** fire-and-forget RPC:失败统一进 notice(i18n 文案 + 端点原始 message)。 */
 export function rpcFire<R extends RpcRequest>(
   request: R,
-  opts?: { taskId?: string; errorKey?: MessageKey },
+  opts?: { taskId?: string; errorKey?: MessageKey; onError?: (error: unknown) => void },
 ): void {
   void rpcCall(request, opts?.taskId).catch((error: unknown) => {
+    // 先跑回调再弹提示:pushNotice 万一抛了,本地状态(如提交暂存的图)也已回收。
+    opts?.onError?.(error);
     pushNotice('error', `${t(opts?.errorKey ?? 'notice.rpcFailed')}: ${describeError(error)}`);
   });
 }

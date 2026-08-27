@@ -33,6 +33,8 @@ export const en = {
   'composer.abort': 'Stop',
   'composer.dropHint': 'Drop to add image attachments',
   'composer.attach': 'Add image attachments',
+  'image.viewFull': 'View full-size image',
+  'image.preview': 'Image preview',
   'mode.read-only': 'Read-only',
   'mode.ask': 'Ask',
   'mode.auto': 'Auto',

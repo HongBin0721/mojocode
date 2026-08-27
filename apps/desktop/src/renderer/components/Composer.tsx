@@ -10,13 +10,17 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useDesktopStore } from '../state/desktopStore.js';
+import { useTimelineStore } from '../state/timelineStore.js';
 import { rpcFire } from '../bridge/invoke.js';
 import { t, useLocale } from '../i18n/index.js';
 import { cyclePermissionsRpc } from '../commands/permissions.js';
 import { SlashMenu } from './SlashMenu.js';
 import { useSlashCommands } from './composer/use-slash-commands.js';
 import { useAttachments } from './composer/use-attachments.js';
+import { imageDataUri } from '../utils/image.js';
 import { ComposerToolbar } from './composer/ComposerToolbar.js';
+import { ImagePreview } from './overlays/ImagePreview.js';
+import type { ImageAttachment } from '@core/attachments';
 
 export function Composer() {
   useLocale();
@@ -35,6 +39,8 @@ export function Composer() {
   }, [composerPrefill?.nonce]);
 
   const attachments = useAttachments();
+  // 点开的大图预览;chip 删除/提交清空不追着关(preview 持有自己的引用)。
+  const [preview, setPreview] = useState<ImageAttachment | null>(null);
   const slash = useSlashCommands({ text, setText });
 
   const running = snapshot?.agent.isRunning ?? false;
@@ -50,13 +56,26 @@ export function Composer() {
     setText('');
     attachments.clear();
     slash.resetSuppressed();
+    const sentText = trimmed || '(image)';
+    // 图随消息展示:turn-start 不带字节,提交方在发 RPC 前把原图暂存给
+    // 时间线(按聚焦任务),turn-start 落地时按文本核对后缝到用户条目上。
+    // 发送失败要显式回收——没有 turn-start 会来消费它。
+    const taskId = useTimelineStore.getState().focusedTaskId;
+    if (images.length && taskId) {
+      useTimelineStore.getState().stashPendingImages(taskId, sentText, images);
+    }
     rpcFire(
       {
         kind: 'run',
-        text: trimmed || '(image)',
+        text: sentText,
         options: images.length ? { images } : undefined,
       },
-      { errorKey: 'notice.runFailed' },
+      {
+        errorKey: 'notice.runFailed',
+        onError: () => {
+          if (taskId) useTimelineStore.getState().dropPendingImages(taskId);
+        },
+      },
     );
   };
 
@@ -128,7 +147,14 @@ export function Composer() {
           <div className="composer-attachments">
             {attachments.images.map((image, index) => (
               <span key={index} className="attachment-chip">
-                <img className="attachment-thumb" src={`data:${image.mediaType};base64,${image.data}`} alt="" />
+                <button
+                  type="button"
+                  className="attachment-thumb-button"
+                  aria-label={t('image.viewFull')}
+                  onClick={() => setPreview(image)}
+                >
+                  <img className="attachment-thumb" src={imageDataUri(image)} alt="" />
+                </button>
                 <span className="attachment-name">{image.filename ?? image.mediaType}</span>
                 <button type="button" className="chip-remove" onClick={() => attachments.removeAt(index)}>
                   ×
@@ -160,6 +186,7 @@ export function Composer() {
           </div>
         ) : null}
       </div>
+      {preview ? <ImagePreview image={preview} onClose={() => setPreview(null)} /> : null}
     </div>
   );
 }

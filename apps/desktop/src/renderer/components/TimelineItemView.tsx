@@ -3,9 +3,11 @@
  * 消息平铺 markdown,工具折叠卡,diff/plan/todo 各有专门渲染。
  */
 
-import React, { memo } from 'react';
-import type { TimelineItem } from '@core/types';
+import React, { memo, useState } from 'react';
+import type { TimelineImage, TimelineItem } from '@core/types';
 import { extractPlan, extractTodos } from '@core/timeline-data';
+import { imageDataUri } from '../utils/image.js';
+import { ImagePreview } from './overlays/ImagePreview.js';
 import { Markdown } from './Markdown.js';
 import { ReasoningBlock } from './ReasoningBlock.js';
 import { ToolCard } from './ToolCard.js';
@@ -61,18 +63,60 @@ function BannerItem({ item }: { item: Extract<TimelineItem, { kind: 'banner' }> 
   );
 }
 
+/**
+ * 用户消息的随附图:缩略图行 + 大图预览。单独成组件是为了把 useLocale 的
+ * 订阅关在这里——挂到 UserEntry 上,长会话里每一条用户消息(绝大多数没有
+ * 图、没有任何随语言变的字符)都会进 i18n 的 listener 集合,正是本文件
+ * BannerItem 处注释禁止的那件事。
+ */
+function UserImages({ images }: { images: TimelineImage[] }) {
+  useLocale();
+  const [preview, setPreview] = useState<TimelineImage | null>(null);
+  return (
+    <>
+      <div className="entry-images">
+        {images.map((image, index) => (
+          <button
+            key={index}
+            type="button"
+            className="entry-image-button"
+            aria-label={t('image.viewFull')}
+            onClick={() => setPreview(image)}
+          >
+            <img className="entry-image-thumb" src={imageDataUri(image)} alt={image.filename ?? ''} />
+          </button>
+        ))}
+      </div>
+      {preview ? <ImagePreview image={preview} onClose={() => setPreview(null)} /> : null}
+    </>
+  );
+}
+
+/**
+ * 用户条目:随附图缩略图(在气泡上方)+ 文本气泡。text 一律是"用户当时输入
+ * 的原文"——带了字节的图不会再在正文里留 `[image: …]` 标签(replay 侧决定),
+ * 所以这里不做任何字符串剥离。
+ */
+function UserEntry({ item }: { item: Extract<TimelineItem, { kind: 'user' }> }) {
+  const images = item.images;
+  return (
+    <div className="entry entry-user">
+      {images?.length ? <UserImages images={images} /> : null}
+      {item.text ? (
+        <div className="entry-bubble">
+          {item.text.split('\n').map((line, index) => (
+            <div key={index}>{line || ' '}</div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export const TimelineItemView = memo(function TimelineItemView({ item }: { item: TimelineItem }) {
   switch (item.kind) {
     case 'user':
-      return (
-        <div className="entry entry-user">
-          <div className="entry-bubble">
-            {item.text.split('\n').map((line, index) => (
-              <div key={index}>{line || ' '}</div>
-            ))}
-          </div>
-        </div>
-      );
+      return <UserEntry item={item} />;
     case 'assistant':
       return (
         <div className={`entry entry-assistant ${item.continuation ? 'entry-continuation' : ''}`}>

@@ -19,10 +19,24 @@ import type { RemoteSession } from '@core/remote';
  * 展示历史 → 带 `replay-` 前缀 key 的时间线条目(磁盘预览与正式回放共用)。
  * total 给预览的截尾用:分隔行照报完整消息数,条目只还原传入的尾部。
  */
+/**
+ * 回放里随条目带出的图片字节预算(base64 字符数)。常量住在这里而不是核心:
+ * 它衡量的是**这条 IPC 结构化克隆**能有多大——每次切焦点推一次整份回放,
+ * 与「历史怎么还原成条目」无关。约 3MB 原图,够看清最近几条。
+ */
+const REPLAY_IMAGE_BUDGET = 4_000_000;
+
+/**
+ * 预览的预算单列且小得多:它必然被正式回放整桶替换掉,而它存在的理由就是
+ * 让点击**立刻**有反应——在这条路上拷几兆 base64 恰好是最慢的一环。
+ */
+const PREVIEW_IMAGE_BUDGET = 400_000;
+
 function replayedItems(
   messages: Parameters<typeof replayTimeline>[0],
   sessionId: string,
   total = messages.length,
+  imageBudget = REPLAY_IMAGE_BUDGET,
 ): TimelineItem[] {
   return [
     {
@@ -30,7 +44,11 @@ function replayedItems(
       kind: 'divider',
       label: t('divider.resumed', { id: sessionId.slice(0, 8), n: total }),
     },
-    ...replayTimeline(messages).map((item, index) => ({ ...item, key: `replay-${index}` }) as TimelineItem),
+    // GUI 画得了图:显式给预算(核心不给预算就一张不带——终端只渲染标签)。
+    // 预算内的最近几条带图,更早的退回纯标签,这份结构化克隆因此有上界。
+    ...replayTimeline(messages, { imageBudget }).map(
+      (item, index) => ({ ...item, key: `replay-${index}` }) as TimelineItem,
+    ),
   ];
 }
 
@@ -52,7 +70,12 @@ export async function buildDiskReplayItems(sessionId: string): Promise<TimelineI
   const messages = store.displayMessages;
   const items: TimelineItem[] =
     messages.length > 0
-      ? replayedItems(messages.slice(-PREVIEW_MAX_MESSAGES), sessionId, messages.length)
+      ? replayedItems(
+          messages.slice(-PREVIEW_MAX_MESSAGES),
+          sessionId,
+          messages.length,
+          PREVIEW_IMAGE_BUDGET,
+        )
       : [];
   items.push({
     key: 'replay-reviving',

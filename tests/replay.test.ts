@@ -219,6 +219,8 @@ describe('@ 附件信封的回放', () => {
 
 describe('带图片的用户消息', () => {
   const filePart = { type: 'file', mediaType: 'image/png', data: 'AAAA', filename: 'shot.png' };
+  /** 条目上随附的图片形态(TimelineImage):file part 去掉 type,GUI 据此渲染缩略图。 */
+  const imagePart = { mediaType: 'image/png', data: 'AAAA', filename: 'shot.png' };
 
   it('纯图片消息不再从回放里消失,显示为标签', () => {
     const items = replayTimeline([{ role: 'user', content: [filePart] }] as ModelMessage[]);
@@ -251,6 +253,43 @@ describe('带图片的用户消息', () => {
       { role: 'user', content: [{ type: 'file', mediaType: 'image/png', data: 'AAAA' }] },
     ] as ModelMessage[]);
     expect(items).toEqual([{ kind: 'user', text: '[image: image/png]' }]);
+  });
+
+  // 字节是显式选择:终端只渲染标签,带上 base64 纯属白扛内存 + IPC 拷贝。
+  // 带了字节的图不再留标签——前端画得出来,再留一行就是重复占行。
+  it('不给预算就不带字节(只留标签);给了预算则带字节、不留标签', () => {
+    const messages = [{ role: 'user', content: [filePart] }] as ModelMessage[];
+    expect(replayTimeline(messages)).toEqual([{ kind: 'user', text: '[image: shot.png]' }]);
+    expect(replayTimeline(messages, { imageBudget: 1_000 })).toEqual([
+      { kind: 'user', text: '', images: [imagePart] },
+    ]);
+  });
+
+  it('data 不是可用字符串时只留标签,不产出空数据条目(GUI 会画成裂图)', () => {
+    const broken = [
+      { role: 'user', content: [{ type: 'file', mediaType: 'image/png', data: { 0: 1 } }] },
+      { role: 'user', content: [{ type: 'file', mediaType: 'image/png', data: '' }] },
+    ] as unknown as ModelMessage[];
+    const items = replayTimeline(broken, { imageBudget: 1_000 });
+    expect(items).toEqual([
+      { kind: 'user', text: '[image: image/png]' },
+      { kind: 'user', text: '[image: image/png]' },
+    ]);
+  });
+
+  it('超预算时保留最新的图,更早的退回纯标签', () => {
+    const big = (name: string) =>
+      ({
+        role: 'user',
+        content: [{ type: 'file', mediaType: 'image/png', data: 'x'.repeat(60), filename: name }],
+      }) as unknown as ModelMessage;
+    const items = replayTimeline([big('old.png'), big('mid.png'), big('new.png')], {
+      imageBudget: 100, // 只装得下最新的一张(每张 60)
+    });
+    expect(items.map((i) => 'images' in i)).toEqual([false, false, true]);
+    // 被裁掉字节的条目,标签补回正文——痕迹不丢。
+    expect(items[0]).toEqual({ kind: 'user', text: '[image: old.png]' });
+    expect(items[1]).toEqual({ kind: 'user', text: '[image: mid.png]' });
   });
 });
 

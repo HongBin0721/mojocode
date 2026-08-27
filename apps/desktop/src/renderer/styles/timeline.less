@@ -13,8 +13,11 @@
 
 /* 用户消息:右对齐气泡(max-w-xl,右上角 2px 尾巴) */
 .entry-user {
+  /* 纵向右对齐堆叠:随附图缩略图在气泡上方,两者都靠右;无图时单气泡布局不变 */
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
   margin-bottom: 16px;
 }
 .entry-bubble {
@@ -26,6 +29,29 @@
   border-top-right-radius: 2px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 用户消息随附图:气泡上方的缩略图行(右对齐随 entry-user 列),点开大图预览 */
+.entry-images {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.entry-image-button {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.entry-image-thumb {
+  max-width: 180px;
+  max-height: 120px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  object-fit: cover;
+  display: block;
 }
 
 /* 助手消息:平铺 markdown,无气泡无角色标记(ZCode 同款) */
