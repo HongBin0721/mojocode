@@ -49,6 +49,12 @@ export interface ProviderPreset {
   sdk?: 'deepseek';
 }
 
+/**
+ * GLM 系官方拼写:主体大写,-Flash 后缀保留词形(GLM-5.3-Flash)。
+ * contextWindows 的键按此拼写登记,查表走的就是这里的归一结果。
+ */
+const normalizeGlmModelId = (id: string): string => id.toUpperCase().replace(/-FLASH$/, '-Flash');
+
 export const PROVIDER_PRESETS = {
   kimi: {
     label: 'Kimi (Moonshot 国内)',
@@ -124,11 +130,14 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZHIPU_API_KEY', 'ZHIPUAI_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
-    normalizeModelId: (id) => id.toUpperCase(),
-    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    normalizeModelId: normalizeGlmModelId,
+    // glm-5.3-flash 是 v 系之外少见的多模态条目(models.dev 标注 image 输入,
+    // 主线 GLM-5.3 纯文本),要单独登记才能走图片直发。三个 GLM 预设同表。
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v', 'glm-5.3-flash'],
     visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
+      'GLM-5.3-Flash': 1_000_000,
       'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
@@ -140,11 +149,12 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZHIPU_API_KEY', 'GLM_API_KEY'],
     keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     defaultModel: 'GLM-5.3',
-    normalizeModelId: (id) => id.toUpperCase(),
-    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    normalizeModelId: normalizeGlmModelId,
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v', 'glm-5.3-flash'],
     visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
+      'GLM-5.3-Flash': 1_000_000,
       'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
@@ -156,11 +166,12 @@ export const PROVIDER_PRESETS = {
     apiKeyEnv: ['ZAI_API_KEY', 'ZHIPU_API_KEY'],
     keyUrl: 'https://z.ai/manage-apikey/apikey-list',
     defaultModel: 'GLM-5.3',
-    normalizeModelId: (id) => id.toUpperCase(),
-    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v'],
+    normalizeModelId: normalizeGlmModelId,
+    visionModels: ['glm-4.5v', 'glm-4.6v', 'glm-5v', 'glm-5.3-flash'],
     visionModel: 'glm-4.6v',
     contextWindows: {
       'GLM-5.3': 1_000_000,
+      'GLM-5.3-Flash': 1_000_000,
       'GLM-5.2': 1_000_000,
     },
     defaultContextWindow: 128_000,
