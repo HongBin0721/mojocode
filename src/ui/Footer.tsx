@@ -6,7 +6,7 @@ import {
   glyphs,
   formatTokens,
   meterBar,
-  modeChipColors,
+  modeColor,
   truncateWidth,
   truncateWidthStart,
   shortenHome,
@@ -21,7 +21,7 @@ interface Props {
   cumulativeTokens: number;
   todos: TodoItem[];
   model: string;
-  /** 当前权限模式,启用 mode 段时以徽章显示在最前。 */
+  /** 当前权限模式,启用 mode 段时以着色文本显示在最前。 */
   mode: string;
   /**
    * 点击 mode 段(App 用它弹出档位选项框)。不传则该段只是文字。
@@ -41,12 +41,6 @@ interface Props {
 
 const SEP = ' · ';
 const SEP_WIDTH = 3;
-/**
- * 徽章后面的分隔符。徽章自带反色底,边界已经画出来了,再写一个 ` · `
- * 会读成"两个分隔符叠在一起"。
- */
-const CHIP_SEP = ' ';
-const CHIP_SEP_WIDTH = 1;
 /** 左右两组之间至少留的列数;顶到一起就看不出这是两组了。 */
 const GROUP_GAP = 2;
 /** 上下文计量条的格数。 */
@@ -75,19 +69,11 @@ interface Part {
   render: (text: string) => SolidJSX.Element;
 }
 
-/** 前一段之后该用什么分隔符:徽章后跟一个空格,其余是 ` · `。 */
-const sepAfter = (prev: Part): string => (prev.id === 'mode' ? CHIP_SEP : SEP);
-const sepWidthAfter = (prev: Part): number =>
-  prev.id === 'mode' ? CHIP_SEP_WIDTH : SEP_WIDTH;
-
 const sideOf = (parts: Part[], side: Part['side']): Part[] =>
   parts.filter((part) => part.side === side);
 
 const groupWidth = (parts: Part[]): number =>
-  parts.reduce(
-    (sum, part, i) => sum + stringWidth(part.plain) + (i > 0 ? sepWidthAfter(parts[i - 1]!) : 0),
-    0,
-  );
+  parts.reduce((sum, part, i) => sum + stringWidth(part.plain) + (i > 0 ? SEP_WIDTH : 0), 0);
 
 const rowWidth = (parts: Part[]): number => {
   const left = sideOf(parts, 'left');
@@ -155,7 +141,7 @@ function Group(props: { parts: Part[] }): JSX.Element {
     <>
       {props.parts.map((part, i) => (
         <>
-          {i > 0 ? <Text color={theme.dim}>{sepAfter(props.parts[i - 1]!)}</Text> : null}
+          {i > 0 ? <Text color={theme.dim}>{SEP}</Text> : null}
           {part.render(part.plain)}
         </>
       ))}
@@ -204,16 +190,14 @@ export function Footer(props: Props): JSX.Element {
 
     const parts: Part[] = [];
     if (show.has('mode')) {
-      const chip = modeChipColors(props.mode);
       parts.push({
         id: 'mode',
         side: 'left',
-        // 左右各留一格内边距,反色块才像个徽章而不是被涂黑的单词。
-        plain: ` ${props.mode} `,
+        plain: props.mode,
         // 点击命中的是这一段自己的 <text>(行是 flex row,每段各占自己的宽度),
         // 所以点在 model/cwd 上不会误切档位。
         render: (text) => (
-          <Text color={chip.fg} backgroundColor={chip.bg} bold onClick={props.onModeClick}>
+          <Text color={modeColor(props.mode)} bold onClick={props.onModeClick}>
             {text}
           </Text>
         ),

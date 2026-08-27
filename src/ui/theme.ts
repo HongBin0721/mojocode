@@ -110,22 +110,6 @@ export function modeColor(label: string): string {
 }
 
 /**
- * 底栏权限档位徽章的配色(反色小块)。前景与背景都写死,理由同 diff 高亮:
- * 不依赖终端默认色,深浅色主题下对比度都够。取色按"这一档能对你的文件做
- * 什么"分级——红底是"不问就改",常规档故意压成中性石板灰,存在但不抢眼。
- *
- * 与 modeColor 分开:那边是纯文字着色(Header 用),灰字在正文里够用;
- * 徽章是实心块,灰底配灰字就糊了。
- */
-export function modeChipColors(label: string): { bg: string; fg: string } {
-  if (label === 'full-access' || label.startsWith('danger-full-access'))
-    return { bg: '#b91c1c', fg: '#fee2e2' };
-  if (label === 'plan') return { bg: '#0e7490', fg: '#cffafe' };
-  if (label.startsWith('read-only')) return { bg: '#3f3f46', fg: '#e4e4e7' };
-  return { bg: '#334155', fg: '#e2e8f0' };
-}
-
-/**
  * 计量条:填 `cells` 格的实心/空心方块。用几何符号而不是 emoji 方块,
  * 理由同 glyphs——单宽,不会把靠右对齐的一行算错列。
  *

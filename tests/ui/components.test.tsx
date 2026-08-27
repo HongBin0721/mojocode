@@ -100,7 +100,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     await ui.destroy();
   });
 
-  it('Footer:用量段靠右对齐,档位是带内边距的徽章', async () => {
+  it('Footer:用量段靠右对齐,档位是无底色的着色文本', async () => {
     const columns = 70;
     const ui = await renderUi(
       () => <Footer
@@ -122,8 +122,8 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     expect(line.length).toBe(columns - 1);
     expect(line).toMatch(/▰▰▱▱▱▱▱▱ 23%$/);
     expect(line).toMatch(/ {2,}▰/);
-    // 徽章左右各留一格内边距,后面只跟一个空格——不再叠一个 ` · `。
-    expect(line).toMatch(/^ plan {2}kimi-k3/);
+    // 档位是纯文本段,与后一段之间用常规 ` · ` 分隔,行首无徽章内边距。
+    expect(line).toMatch(/^plan · kimi-k3/);
     await ui.destroy();
   });
 
