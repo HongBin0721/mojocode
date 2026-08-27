@@ -55,11 +55,33 @@ describe('摘要请求剥离图片', () => {
     const first = sent[0]!;
     expect(first.content).toEqual([
       { type: 'text', text: '看这张图' },
-      { type: 'text', text: '[image omitted]' },
+      // 占位带 filename:@图的相对路径让模型(摘要或后续轮)仍可按需读回。
+      { type: 'text', text: '[image omitted: shot.png]' },
     ]);
     // 保留的尾部消息未被剥离。
     const kept = result.messages[result.messages.length - 1]!;
     expect(kept.content).toEqual([filePart]);
+  });
+
+  // 没有 filename 的 file part(粘贴图:buildUserContent 只给能按路径读回的
+  // 图写 filename)只报 [image omitted],不编一个模型读不到的名字出来。
+  it('无 filename 的图只报裸占位', async () => {
+    const messages = toolLoop(20);
+    messages[0] = {
+      role: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        { type: 'file', mediaType: 'image/png', data: 'AAAA' },
+      ],
+    } as ModelMessage;
+
+    await compactMessages(messages, {} as never);
+
+    const sent = mockStreamText.mock.calls[0]![0].messages as ModelMessage[];
+    expect(sent[0]!.content).toEqual([
+      { type: 'text', text: '看这张图' },
+      { type: 'text', text: '[image omitted]' },
+    ]);
   });
 });
 

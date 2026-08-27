@@ -206,6 +206,8 @@ export const zhCN: Record<keyof typeof en, string> = {
   'notice.imagesDeferredNoTool':
     '当前模型无法直接查看图片，且未配置视觉模型——图片已存为文件但模型读不到。',
   'notice.imageSaveFailed': '部分图片保存失败，未能随消息附上。',
+  'notice.historyImagesOmitted':
+    '历史消息中的图片当前模型无法查看，已在发送时替换为占位文本（切回视觉模型即恢复）。',
   'notice.providerNoVision': 'deepseek SDK 会静默丢弃图片——模型看不到它们。',
   'notice.busyCommand': '任务运行中不能使用 /{name}（可先 esc 中断）。',
   'notice.cannedBusy': '评审/清理命令正在准备中，稍候片刻再发消息。',

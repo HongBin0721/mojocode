@@ -15,7 +15,7 @@ import type { Config } from '../config/schema.js';
 import { providerModelIsVision } from '../config/providers.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { mergeProviderOptions, providerOptionsKey, reasoningMapping } from '../model/reasoning.js';
-import { compactMessages, estimateTokens, shouldCompact } from './compact.js';
+import { compactMessages, estimateTokens, shouldCompact, stripImageParts } from './compact.js';
 import { PermissionDeniedError } from '../permissions/gate.js';
 import { t } from '../i18n/index.js';
 
@@ -83,7 +83,12 @@ export function buildUserContent(text: string, images?: ImageAttachment[]): User
       type: 'file' as const,
       mediaType: image.mediaType,
       data: image.data,
-      ...(image.filename ? { filename: image.filename } : {}),
+      // filename 只给**能按此路径读回**的图(@ 引用,absolutePath 是它的凭据):
+      // 持久化之后 absolutePath 就没了,下游(stripImageParts 的占位文本)只能
+      // 看 filename,给粘贴/拖入图带上 `clipboard-1.png`、`screenshot.png` 这类
+      // 名字会诱导模型去 view_image 一个不存在的路径。判据放在产生方,而不是
+      // 让下游按命名约定猜——约定每多一个附件来源就会被破坏一次。
+      ...(image.filename && image.absolutePath ? { filename: image.filename } : {}),
     })),
   ];
 }
@@ -128,6 +133,8 @@ export class Agent {
    * 若不加闩锁,一轮长工具循环能把同一条提示刷满整个时间线(上限即 maxSteps)。
    */
   private contextNoticeSent = false;
+  /** 「历史内联图已对当前模型省略」的一次性提示,每个 Agent 实例只发一遍。 */
+  private historyImagesNoticeSent = false;
   /**
    * 本轮是否已发过 aborted。中断会走两条路各报一次:fullStream 的 abort
    * 事件,以及首步未完成时 result 的收尾 Promise 以 AbortError 拒绝、被
@@ -483,10 +490,25 @@ export class Agent {
         : reasoningMapping(provider, provider.reasoningEffort).providerOptions,
     );
 
+    // 纯文本模型:历史里视觉模型时期直发的内联图会被端点整单拒收(GLM 实测
+    // 400「messages.content.type 取值范围 ['text']」,且每次重试同样结果)。
+    // 发送副本里把 file part 换成占位文本;持久历史不动,切回视觉模型图片
+    // 原样恢复。stripImageParts 对无图消息返回原引用,借此探测是否真剥了图。
+    let outbound = this.messages;
+    if (!providerModelIsVision(provider, config)) {
+      outbound = this.messages.map(stripImageParts);
+      // 探测放在这个分支里:视觉路径上 outbound === this.messages,逐条比对
+      // 恒为假,白扫一遍历史。stripImageParts 对无图消息返回同一引用。
+      if (!this.historyImagesNoticeSent && outbound.some((m, i) => m !== this.messages[i])) {
+        this.historyImagesNoticeSent = true;
+        bus.emit({ type: 'notice', level: 'info', message: t('notice.historyImagesOmitted') });
+      }
+    }
+
     const result = streamText({
       model,
       system: systemPrompt,
-      messages: this.messages,
+      messages: outbound,
       tools,
       // maxSteps 未设 = 无步数上限(Claude Code 同款:交互场景的刹车是 esc,
       // 上下文失控由 prepareStep 的轮内压缩兜底)。注意"无上限"必须显式传

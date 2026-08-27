@@ -215,6 +215,8 @@ export const en = {
     'The current model cannot view images directly and no vision model is configured — attached images are saved as files but cannot be read.',
   'notice.imageSaveFailed':
     'Some attached images could not be saved and were dropped from the message.',
+  'notice.historyImagesOmitted':
+    'Images in earlier messages are not viewable by the current model and were replaced with placeholders when sending (switching back to a vision model restores them).',
   'notice.providerNoVision':
     'The deepseek SDK silently drops image parts — the model will not see them.',
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',

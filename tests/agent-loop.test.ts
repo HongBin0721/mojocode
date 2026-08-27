@@ -18,7 +18,9 @@ vi.mock('ai', () => ({
   stepCountIs: (n: number) => ({ stepCountIs: n }),
 }));
 
-vi.mock('../src/agent/compact.js', () => ({
+vi.mock('../src/agent/compact.js', async (importOriginal) => ({
+  // stripImageParts 用真实现(loop 的发送时剥图依赖它),其余仍走 mock。
+  ...(await importOriginal<typeof import('../src/agent/compact.js')>()),
   compactMessages: mockCompactMessages,
   shouldCompact: mockShouldCompact,
   estimateTokens: mockEstimateTokens,
@@ -175,7 +177,30 @@ describe('图片附件', () => {
       role: 'user',
       content: [
         { type: 'text', text: '看这张图' },
-        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' },
+        // 粘贴图没有 absolutePath,filename 不进持久化的 file part(下游拿它
+        // 当可读回的路径用;见 buildUserContent)。
+        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=' },
+      ],
+    });
+  });
+
+  it('@图(带 absolutePath)保留 filename——它是能读回的相对路径', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    await agent.run('看这张图', {
+      images: [{ ...IMG, filename: 'src/shot.png', absolutePath: '/w/src/shot.png' }],
+    });
+
+    expect(agent.history[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: '看这张图' },
+        {
+          type: 'file',
+          mediaType: 'image/png',
+          data: 'iVBORw0KGgo=',
+          filename: 'src/shot.png',
+        },
       ],
     });
   });
@@ -213,7 +238,7 @@ describe('图片附件', () => {
       role: 'user',
       content: [
         { type: 'text', text: wrapGuidance('中途看图') },
-        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'shot.png' },
+        { type: 'file', mediaType: 'image/png', data: 'iVBORw0KGgo=' },
       ],
     });
   });
@@ -229,7 +254,7 @@ describe('图片附件', () => {
     const guidance = agent.history.find((m) => Array.isArray(m.content));
     expect(Array.isArray(guidance?.content) && guidance.content[1]).toMatchObject({
       type: 'file',
-      filename: 'shot.png',
+      data: IMG.data,
     });
   });
 
@@ -334,6 +359,52 @@ describe('非视觉模型图片降级', () => {
         (m.content as string).includes('重入消息'),
     );
     expect(message?.content).toContain('this model cannot view them directly');
+  });
+
+  it('历史内联图对非视觉模型发送时剥除,持久历史不动(曾整单 400)', async () => {
+    installDefaultStream();
+    const { agent, bus } = makeAgent({}, { providers: { test: { vision: false } } });
+    const notices: string[] = [];
+    bus.on((e) => {
+      if (e.type === 'notice') notices.push(e.message);
+    });
+    const imagePart = { type: 'file', mediaType: 'image/png', data: IMG.data, filename: 'shot.png' };
+    agent.setHistory([
+      { role: 'user', content: [{ type: 'text', text: '看这张图' }, imagePart] },
+      { role: 'assistant', content: '好的' },
+    ] as never);
+    await agent.run('刚才那张图里是什么?');
+
+    // 发出去的副本:file part 已换成带 filename 的占位文本。
+    const sentMessages = mockStreamText.mock.calls.at(-1)![0].messages as Array<{
+      content: unknown;
+    }>;
+    expect(JSON.stringify(sentMessages)).not.toContain(IMG.data);
+    expect(JSON.stringify(sentMessages)).toContain('[image omitted: shot.png]');
+    // 持久历史原样保留内联图——切回视觉模型即恢复。
+    expect(JSON.stringify(agent.history[0]!.content)).toContain(IMG.data);
+    // 一次性提示(第二轮不再重复)。
+    expect(notices).toHaveLength(1);
+    await agent.run('再确认一下');
+    expect(notices).toHaveLength(1);
+  });
+
+  it('视觉模型下历史内联图原样直发,零扰动', async () => {
+    installDefaultStream();
+    const { agent } = makeAgent();
+    agent.setHistory([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '看这张图' },
+          { type: 'file', mediaType: 'image/png', data: IMG.data, filename: 'shot.png' },
+        ],
+      },
+    ] as never);
+    await agent.run('刚才那张图里是什么?');
+
+    const sentMessages = mockStreamText.mock.calls.at(-1)![0].messages as unknown;
+    expect(JSON.stringify(sentMessages)).toContain(IMG.data);
   });
 });
 
