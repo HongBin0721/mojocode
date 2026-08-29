@@ -69,6 +69,17 @@ export function parseDiffLines(diff: string): ParsedDiffLine[] {
   return out;
 }
 
+/** +/− 行计数——DiffView 顶部统计与 ToolCard 收起态摘要共用同一份分类。 */
+export function countDiff(lines: ParsedDiffLine[]): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of lines) {
+    if (line.kind === 'add') additions++;
+    else if (line.kind === 'del') deletions++;
+  }
+  return { additions, deletions };
+}
+
 /** 评论指向哪一侧、哪一行(在 hunk 之外无行号的行不可评论)。 */
 export function commentTargetOf(line: ParsedDiffLine): { line: number; side: 'old' | 'new' } | undefined {
   if (line.kind === 'del' && line.oldLine !== undefined) return { line: line.oldLine, side: 'old' };
@@ -119,8 +130,7 @@ export function DiffView({
 }) {
   const all = useMemo(() => parseDiffLines(diff), [diff]);
   const lines = hideMeta ? all.filter((line) => line.kind !== 'meta') : all;
-  const adds = all.filter((line) => line.kind === 'add').length;
-  const dels = all.filter((line) => line.kind === 'del').length;
+  const { additions: adds, deletions: dels } = countDiff(all);
   const commentable = onLineClick !== undefined;
 
   return (

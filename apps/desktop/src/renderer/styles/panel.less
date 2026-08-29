@@ -11,9 +11,11 @@
   color: var(--color-foreground-subtle);
 }
 
-/* +N −N 统计(DiffView 顶部 / 文件条):纯彩色文字,不吃行级底色(git 状态色系) */
+/* +N −N 统计(DiffView 顶部 / 文件条 / 工具卡收起态):纯彩色文字,不吃
+   行级底色(git 状态色系) */
 .diff-stat,
-.review-stat {
+.review-stat,
+.tool-diffstat {
   .diff-add {
     background: none;
     box-shadow: none;

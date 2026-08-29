@@ -1,6 +1,7 @@
 /**
- * 一轮的收尾行:模型 · 耗时 · 本轮 token(含缓存命中段)。中断/出错的轮
- * 不落这条(reducer 里各走 aborted/error 分支)。
+ * 一轮的收尾行:耗时 · 本轮 token(含缓存命中段)。中断/出错的轮不落这条
+ * (reducer 里各走 aborted/error 分支)。model 不再显示——顶栏/Composer
+ * 常驻当前模型,每轮重复一遍是纯噪音(item 上字段仍在,只是不画)。
  */
 
 import React from 'react';
@@ -8,13 +9,11 @@ import { useLocale, t } from '../i18n/index.js';
 import { formatDuration, formatTokens, percent } from '../utils/format.js';
 
 export function TurnLine({
-  model,
   durationMs,
   tokens,
   inputTokens,
   cachedTokens,
 }: {
-  model: string;
   durationMs: number;
   tokens: number;
   inputTokens?: number;
@@ -27,7 +26,7 @@ export function TurnLine({
       : '';
   return (
     <div className="turn-line">
-      {model} · {formatDuration(durationMs)} · {formatTokens(tokens)} tokens{cacheNote}
+      {formatDuration(durationMs)} · {formatTokens(tokens)} tokens{cacheNote}
     </div>
   );
 }

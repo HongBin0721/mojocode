@@ -55,9 +55,10 @@ export function useLocale(): Locale {
   return useSyncExternalStore(onLocaleChange, getLocale, getLocale);
 }
 
+const catalogs: Record<Locale, Record<MessageKey, string>> = { en, 'zh-CN': zhCN };
+
 /** 在当前语言目录中查找 key,并填充 {name} 占位符。 */
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
-  const catalogs: Record<Locale, Record<MessageKey, string>> = { en, 'zh-CN': zhCN };
   const template = catalogs[current][key] ?? en[key];
   if (!params) return template;
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>

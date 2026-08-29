@@ -78,25 +78,9 @@ export const glyphs = {
  * 工具在时间线上的展示名:内建工具首字母大写(Claude Code 风格),
  * MCP 等外部工具保持原名。
  */
-const TOOL_LABELS: Record<string, string> = {
-  read: 'Read',
-  write: 'Write',
-  edit: 'Edit',
-  glob: 'Glob',
-  grep: 'Grep',
-  bash: 'Bash',
-  web_search: 'Web Search',
-  web_fetch: 'Fetch',
-  // 名字里就带上动作:它不带参数,紧随其后的是整份清单。
-  todo: 'Update Todos',
-  exit_plan: 'Plan',
-  task: 'Task',
-  skill: 'Skill',
-};
-
-export function toolDisplayName(name: string): string {
-  return TOOL_LABELS[name] ?? name;
-}
+// 定义下沉到 timeline-data.ts(GUI renderer 的 @core 白名单入口,单点维护);
+// 这里 re-export 维持 TUI 侧既有 import 路径。
+export { toolDisplayName } from './timeline-data.js';
 
 /**
  * 权限档位标签的显示颜色。full-access(以及自由组合出的 danger-full-access)

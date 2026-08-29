@@ -8,6 +8,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { TimelineItemView } from '../../src/renderer/components/TimelineItemView.js';
+import { TRUNCATED_MARK } from '../../src/renderer/components/ToolCard.js';
 import { setLocale } from '../../src/renderer/i18n/index.js';
 import type { TimelineItem } from '@core/types';
 
@@ -58,6 +59,25 @@ describe('TimelineItemView', () => {
     // 回退路径:不渲染步骤行,但正文仍在(不白屏)。
     expect(fallback.container.querySelector('.plan-step')).toBeNull();
     expect(fallback.container.textContent).toContain('一段没有步骤的说明。');
+  });
+
+  it('diff 卡统计走 parseDiffLines;截断的 diff 数字带 + 后缀', () => {
+    const diff = '--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n+new line\n-old line';
+    const { container } = render(
+      <TimelineItemView item={toolItem({ toolName: 'edit', output: { diff } })} />,
+    );
+    expect(container.querySelector('.tool-diffstat .diff-add')?.textContent).toBe('+1');
+    expect(container.querySelector('.tool-diffstat .diff-del')?.textContent).toBe('−1');
+
+    const truncated = render(
+      <TimelineItemView
+        item={toolItem({
+          toolName: 'write',
+          output: { diff: `${diff}\n\n${TRUNCATED_MARK}900 more characters)` },
+        })}
+      />,
+    );
+    expect(truncated.container.querySelector('.tool-diffstat .diff-add')?.textContent).toBe('+1+');
   });
 
   it('tool 卡展开:输出经 tokenize 上色,CJK 行整行弱色', () => {

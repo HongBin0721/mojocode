@@ -94,8 +94,10 @@
   white-space: pre-wrap;
   font-size: 13px;
 }
+/* info 级 notice 降权为无底色弱文本(warn 保留黄底提醒) */
 .notice-info {
-  background: var(--color-card);
+  background: none;
+  padding: 2px 4px;
   color: var(--color-foreground-subtle);
 }
 .notice-warn {
@@ -305,16 +307,18 @@
   overflow: hidden;
 }
 
-/* ---- 工具卡片:无边框、card 表面底、rounded-xl ---- */
+/* ---- 工具卡片:默认降权成无底色的行(Codex 式),失败/进行中才升级
+   为 card 底色卡片——成功的工具是过程记录,不该和正文抢视觉权重 ---- */
 
 .tool-card {
-  margin-bottom: 10px;
+  margin-bottom: 6px;
   border: none;
   border-radius: var(--radius-xl);
   overflow: hidden;
-  background: var(--color-card);
+  background: transparent;
 }
 .tool-error {
+  background: var(--color-card);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-destructive) 45%, transparent);
 }
 
@@ -358,10 +362,61 @@
   font-size: 11.5px;
 }
 
+/* 并进工具卡 meta 的「微思考」(时长 + title 悬停原文) */
+.tool-thought {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-foreground-subtlest);
+  flex: none;
+  font-size: 11.5px;
+}
+
+/* ---- 探索聚合卡:连续只读工具合成一条,展开逐条渲染原卡 ---- */
+
+.explore-steps {
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--color-border);
+  .tool-card {
+    margin-bottom: 4px;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+}
+
 .tool-active {
+  background: var(--color-card);
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
   .tool-row {
     cursor: default;
+  }
+}
+
+/* diff 卡收起态的 +/− 统计(着色复用 panel.less 的 .diff-add/.diff-del
+   git 状态色组,这里只管行内布局) */
+.tool-diffstat {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+/* 展开区底部的跳转行(评审面板 / 终端面板) */
+.tool-jump-row {
+  border-top: 1px solid var(--color-border);
+  background: var(--color-output);
+  padding: 4px 12px 8px;
+}
+.tool-jump {
+  .action-reset();
+  padding: 2px 0;
+  color: var(--color-foreground-subtle);
+  font-size: 12px;
+  &:hover {
+    color: var(--color-foreground);
+    text-decoration: underline;
   }
 }
 
@@ -455,6 +510,23 @@
 .todo-done {
   color: var(--color-foreground-subtlest);
   text-decoration: line-through;
+}
+
+/* 非末次 todo 调用的一行差分(完整清单只在末次渲染) */
+.todo-update {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 0 4px;
+  color: var(--color-foreground-subtlest);
+  font-size: 12.5px;
+}
+.todo-update-mark {
+  flex: none;
+}
+.todo-update-done .todo-update-mark {
+  color: var(--color-success);
 }
 
 /* 「进程 n/m」浮层卡:聊天列右上角(ZCode 形态) */

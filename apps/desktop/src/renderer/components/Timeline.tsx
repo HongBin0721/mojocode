@@ -4,12 +4,17 @@
  * 空会话(还没有任何用户/助手条目)渲染 ZCode 式空状态:时段问候居中。
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useTimelineStore } from '../state/timelineStore.js';
 import { useLocale, t } from '../i18n/index.js';
 import { currentGreetingKey } from '../utils/greeting.js';
 import { formatDuration } from '../utils/format.js';
+import { toolDisplayName } from '@core/timeline-data';
+import { groupTimeline } from '../utils/timeline-groups.js';
+import { useDesktopStore } from '../state/desktopStore.js';
 import { TimelineItemView } from './TimelineItemView.js';
+import { ExploreGroup } from './ExploreGroup.js';
+import { TodoUpdateLine } from './TodoUpdateLine.js';
 import { Markdown } from './Markdown.js';
 
 /** 空状态:按时段问候(ZCode 同款),居中。 */
@@ -43,7 +48,8 @@ function ActiveToolRow({
             {t('timeline.running')} <code>{command}</code>
           </span>
         ) : (
-          <span className="tool-name">{call.toolName}</span>
+          // 与定稿卡同一套 Title Case 显示名,完成瞬间标签不闪变。
+          <span className="tool-name">{toolDisplayName(call.toolName)}</span>
         )}
         {progress ? (
           <span className="tool-summary">
@@ -111,15 +117,32 @@ export function Timeline() {
   const empty =
     !activeText && items.every((item) => item.kind !== 'user' && item.kind !== 'assistant');
   // 空状态只留问候:banner 的信息(模型/目录/模式)已由顶栏与 Composer 承载。
-  const visibleItems = empty ? items.filter((item) => item.kind !== 'banner') : items;
+  // 渲染期分组:连续探索工具合成聚合卡、微思考并进工具卡 meta。流式中
+  // (open)尾部先不动,避免回溯 remount 用户正看着的卡。
+  const running = useDesktopStore((s) => s.snapshot?.agent.isRunning ?? false);
+  const entries = useMemo(() => {
+    const visible = empty ? items.filter((item) => item.kind !== 'banner') : items;
+    return groupTimeline(visible, { open: running });
+  }, [items, empty, running]);
 
   return (
     <div className="timeline" ref={scrollRef} onScroll={onScroll}>
       <div className="timeline-inner conv-col">
         {empty ? <EmptyState /> : null}
-        {visibleItems.map((item) => (
-          <TimelineItemView key={item.key} item={item} />
-        ))}
+        {entries.map((entry) =>
+          entry.kind === 'explore' ? (
+            <ExploreGroup key={entry.key} entry={entry} />
+          ) : entry.kind === 'todo-update' ? (
+            <TodoUpdateLine key={entry.key} completed={entry.completed} added={entry.added} />
+          ) : (
+            <TimelineItemView
+              key={entry.item.key}
+              item={entry.item}
+              thoughtMs={entry.thoughtMs}
+              thoughtText={entry.thoughtText}
+            />
+          ),
+        )}
         <ActiveArea />
       </div>
       <div ref={bottomRef} />

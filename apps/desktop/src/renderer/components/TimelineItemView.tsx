@@ -113,7 +113,16 @@ function UserEntry({ item }: { item: Extract<TimelineItem, { kind: 'user' }> }) 
   );
 }
 
-export const TimelineItemView = memo(function TimelineItemView({ item }: { item: TimelineItem }) {
+export const TimelineItemView = memo(function TimelineItemView({
+  item,
+  thoughtMs,
+  thoughtText,
+}: {
+  item: TimelineItem;
+  /** 渲染期分组把「微思考」并进工具卡 meta(见 utils/timeline-groups.ts)。 */
+  thoughtMs?: number;
+  thoughtText?: string;
+}) {
   switch (item.kind) {
     case 'user':
       return <UserEntry item={item} />;
@@ -148,13 +157,14 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
           output={item.output}
           isError={item.isError}
           durationMs={item.durationMs}
+          thoughtMs={thoughtMs}
+          thoughtText={thoughtText}
         />
       );
     }
     case 'turn':
       return (
         <TurnLine
-          model={item.model}
           durationMs={item.durationMs}
           tokens={item.tokens}
           inputTokens={item.inputTokens}
@@ -167,10 +177,7 @@ export const TimelineItemView = memo(function TimelineItemView({ item }: { item:
       return <div className="entry-error">{item.message}</div>;
     case 'divider':
       return <div className="divider">{item.label}</div>;
-    case 'collapsed':
-      return (
-        <div className="divider">⋯ {item.count}</div>
-      );
+    // 'collapsed' 只由 TUI 的 /focus 产生,GUI 没有对应入口——落到 default 不渲染。
     case 'banner':
       return <BannerItem item={item} />;
     default:
