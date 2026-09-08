@@ -1,6 +1,7 @@
 import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
-import { Box, Text, useInput, type JSX, type ScrollDirection } from './kit.js';
+import { Box, Text, useInput, useTerminalSize, type JSX, type ScrollDirection } from './kit.js';
 import { theme, glyphs, inputModeStyle } from './theme.js';
+import { IdleRule, StatusLine, phaseColor, type WorkState } from './StatusLine.js';
 import { t } from '../i18n/index.js';
 import { centeredWindowStart } from './picker-utils.js';
 import { fuzzyFilter } from '../app/file-index.js';
@@ -64,10 +65,19 @@ interface Props {
    */
   mode?: string;
   /**
-   * 任务运行中。输入仍然可用(引导消息),但边框退为弱化色,让视觉焦点
-   * 留给上方的流式输出;提示符保持模式色,示意"这里还能打字"。
+   * 任务运行中。输入仍然可用(引导消息);没有 work 阶段可显示的空当里
+   * (轮与轮之间)边框退为弱化色,提示符保持模式色,示意"这里还能打字"。
    */
   busy?: boolean;
+  /**
+   * 工作状态:有值时顶边线里嵌入 spinner + 阶段 + 已用时等(见 StatusLine),
+   * 且整个框(顶边标题、底边)取阶段色;空闲时顶边是一条纯线。
+   */
+  work?: WorkState;
+  /** 透传给顶边线的 ctrl+t 提示,见 StatusLine。 */
+  todoHint?: 'show' | 'hide';
+  /** 透传给顶边线的本轮 token,见 StatusLine。 */
+  turnTokens?: number;
   /** 自动补全菜单中展示的斜杠命令。 */
   commands: SlashCommand[];
   /**
@@ -151,6 +161,9 @@ const MENU_WINDOW = 8;
  * 防旧闭包覆盖)不再需要——处理器读 signal 永远是当前值。
  */
 export function Input(props: Props): JSX.Element {
+  // 宽度自己问渲染器要(同 PermissionPrompt),不从 App 逐层传:顶边线要
+  // 铺满整行,一个过期的列数就是一行折行。
+  const size = useTerminalSize();
   const [value, setValue] = createSignal('');
   const [cursor, setCursor] = createSignal(0);
   const [history, setHistory] = createSignal<string[]>([]);
@@ -702,8 +715,28 @@ export function Input(props: Props): JSX.Element {
   const cursorRow = () => countLines(value().slice(0, cursor())) - 1;
   const cursorCol = () => cursor() - (value().lastIndexOf('\n', cursor() - 1) + 1);
   const modeStyle = () => inputModeStyle(props.mode);
-  const borderColor = () => (props.disabled || props.busy ? theme.dim : modeStyle().color);
+  // 工作中整个框取阶段色(与顶边标题同色):框就是那条随阶段变色的状态带。
+  // disabled 排在最前:它同时关掉 useInput,框亮着而键盘不收会像"能打字"。
+  const borderColor = () => {
+    if (props.disabled) return theme.dim;
+    if (props.work) return phaseColor(props.work.phase);
+    return props.busy ? theme.dim : modeStyle().color;
+  };
   const promptColor = () => (props.disabled ? theme.dim : modeStyle().color);
+
+  /**
+   * 顶边线的公共参数。文本行与二级选择器共用同一条边(选择器顶掉的只是输入
+   * 框的"身体"),参数因此只写一处;`<Show>` 各自内联——把它包进函数再从
+   * JSX 里调用,通用编译模式不会把返回的 Show 当动态子节点插入,分支切换时
+   * 组件已销毁、节点却留在屏幕上(状态行冻在最后一帧)。成组传参用 memo 包
+   * 对象再 spread,见 kit 的 Solid 纪律。
+   */
+  const edgeProps = createMemo(() => ({
+    todoHint: props.todoHint,
+    tokens: props.turnTokens,
+    columns: size.columns,
+    color: borderColor(),
+  }));
 
   return (
     <Show when={selector()} keyed fallback={
@@ -792,7 +825,15 @@ export function Input(props: Props): JSX.Element {
             </Show>
           </Box>
         </Show>
-        <Box borderStyle="round" borderColor={borderColor()} paddingX={1}>
+        {/* 顶边线:工作状态嵌在线里,空闲是纯线。框只画底边——没有左右边,
+            提示符与光标顶到第 0 列(Codex 式)。 */}
+        <Show
+          when={props.work}
+          fallback={<IdleRule columns={size.columns} color={borderColor()} />}
+        >
+          {(work: () => WorkState) => <StatusLine work={work()} {...edgeProps()} />}
+        </Show>
+        <Box borderStyle="round" borderSides={['bottom']} borderColor={borderColor()}>
           <Text color={promptColor()}>{modeStyle().glyph} </Text>
           <Show
             when={value().length > 0}
@@ -837,7 +878,14 @@ export function Input(props: Props): JSX.Element {
       </Box>
     }>
       {(sel: SelectorState) => (
-        <SelectorView state={sel} onScroll={(d) => moveSelector(d === 'up' ? -1 : 1)} />
+        <>
+          {/* 选择器顶掉了输入框,工作状态线照旧留在它上方(与 App 里覆盖层的
+              处理一致),不然选项一打开 spinner 与已用时就没了。 */}
+          <Show when={props.work}>
+            {(work: () => WorkState) => <StatusLine work={work()} {...edgeProps()} />}
+          </Show>
+          <SelectorView state={sel} onScroll={(d) => moveSelector(d === 'up' ? -1 : 1)} />
+        </>
       )}
     </Show>
   );

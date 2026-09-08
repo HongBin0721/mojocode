@@ -1,3 +1,4 @@
+import stringWidth from 'string-width';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
@@ -53,9 +54,11 @@ describe('矮终端布局', () => {
     session.bus.emit({ type: 'text-delta', id: 't1', text: '流式回答内容\n'.repeat(20) });
     await ui.tick();
     const frame = ui.frame();
-    // 输入框的圆角下边框在帧里(边框被裁掉 = 输入不可见)
-    expect(frame).toContain('╰');
-    expect(frame).toContain('›');
+    // 提示符那行及其正下方的底边线都在帧里(边线被裁掉 = 输入不可见)
+    const lines = frame.split('\n');
+    const prompt = lines.findIndex((l) => l.includes('›'));
+    expect(prompt).toBeGreaterThan(0);
+    expect(lines[prompt + 1]).toMatch(/^─+$/);
     await ui.destroy();
   });
 
@@ -81,6 +84,7 @@ describe('矮终端布局', () => {
  * 的顶部 margin 都没拆。任何一条缝变宽,优先怀疑有两个 margin 来源。
  */
 describe('底部区间距', () => {
+  const WIDTH = 100;
   const usage = (cumulative: number) => ({
     inputTokens: 100,
     outputTokens: 20,
@@ -97,10 +101,17 @@ describe('底部区间距', () => {
     bus.emit({ type: 'text-end', id: '0' });
   }
 
-  /** 视口里第一个圆角边框(输入框或覆盖层)上方、到上一条非空行之间的空白行数。 */
+  /**
+   * 一行是不是底部区的边线:输入框的顶边(空闲纯线 / 工作状态线)铺满整行,
+   * 时间线里的 `── 分隔 ──` 不满行,不会误判;覆盖层则是圆角框。
+   */
+  const isEdge = (line: string) =>
+    line.includes('╭') || (line.startsWith('─') && stringWidth(line) >= WIDTH);
+
+  /** 视口里第一条边线上方、到上一条非空行之间的空白行数。 */
   function gapAboveFirstBorder(frame: string): number {
     const lines = frame.split('\n');
-    const border = lines.findIndex((l, i) => i > 0 && l.includes('╭'));
+    const border = lines.findIndex((l, i) => i > 0 && isEdge(l));
     if (border <= 0) throw new Error('frame 里找不到边框');
     let last = border - 1;
     while (last >= 0 && lines[last]!.trim() === '') last--;
@@ -109,7 +120,7 @@ describe('底部区间距', () => {
 
   it('常态:时间线与输入框之间恰好一行', async () => {
     const session = fakeSession();
-    const ui = await renderUi(() => <App session={session} />, { width: 100, height: 16 });
+    const ui = await renderUi(() => <App session={session} />, { width: WIDTH, height: 16 });
     overflowTimeline(session.bus);
     session.bus.emit({ type: 'turn-end', usage: usage(120), finishReason: 'stop' });
     await ui.tick();
@@ -118,21 +129,26 @@ describe('底部区间距', () => {
     await ui.destroy();
   });
 
-  it('任务运行中:状态行与输入框之间恰好一行', async () => {
+  it('任务运行中:状态线就是输入框的顶边,与时间线之间恰好一行', async () => {
     const session = fakeSession();
-    const ui = await renderUi(() => <App session={session} />, { width: 100, height: 16 });
+    const ui = await renderUi(() => <App session={session} />, { width: WIDTH, height: 16 });
     overflowTimeline(session.bus); // 不发 turn-end,状态行保持亮着
     await ui.tick();
 
     const frame = ui.frame();
     expect(frame).toContain('responding'); // 状态行确实在场
     expect(gapAboveFirstBorder(frame)).toBe(1);
+    // 状态嵌在顶边线里,正下方就是提示符那行——中间没有缝。
+    const lines = frame.split('\n');
+    const edge = lines.findIndex((l, i) => i > 0 && isEdge(l));
+    expect(lines[edge]).toMatch(/^── .*responding.* ─+$/);
+    expect(lines[edge + 1]).toContain('›');
     await ui.destroy();
   });
 
-  it('权限确认框:状态行与确认框之间恰好一行(框不再自带顶部 margin)', async () => {
+  it('权限确认框:状态线紧贴在确认框上方,与时间线之间恰好一行', async () => {
     const session = fakeSession();
-    const ui = await renderUi(() => <App session={session} />, { width: 100, height: 16 });
+    const ui = await renderUi(() => <App session={session} />, { width: WIDTH, height: 16 });
     overflowTimeline(session.bus);
     session.bus.emit({
       type: 'permission-request',
@@ -143,6 +159,11 @@ describe('底部区间距', () => {
     const frame = ui.frame();
     expect(frame).toContain('bash: npm test'); // 确认框在场(同时 work=waiting)
     expect(gapAboveFirstBorder(frame)).toBe(1);
+    // 状态线(第一条边线)与确认框的圆角顶边相邻:线是框的标题带,不留缝。
+    const lines = frame.split('\n');
+    const edge = lines.findIndex((l, i) => i > 0 && isEdge(l));
+    expect(lines[edge]).toMatch(/^── /);
+    expect(lines[edge + 1]).toContain('╭');
     await ui.destroy();
   });
 });

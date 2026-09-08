@@ -3,7 +3,7 @@ import stringWidth from 'string-width';
 import { Header } from '../../src/ui/Header.js';
 import { Footer } from '../../src/ui/Footer.js';
 import { TodoPanel } from '../../src/ui/TodoPanel.js';
-import { StatusLine } from '../../src/ui/StatusLine.js';
+import { IdleRule, StatusLine } from '../../src/ui/StatusLine.js';
 import { GoalLine } from '../../src/ui/GoalLine.js';
 import { renderPixelLogo } from '../../src/ui/logo.js';
 import { APP_NAME } from '../../src/config/paths.js';
@@ -225,25 +225,34 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
 
   it('StatusLine:阶段标签与提示', async () => {
     const ui = await renderUi(
-      () => <StatusLine phase="thinking" since={Date.now() - 3500} tokens={1234} columns={60} />,
+      () => <StatusLine work={{ phase: 'thinking', since: Date.now() - 3500 }} tokens={1234} columns={60} />,
       { width: 60, height: 3 },
     );
-    // 阶段文案本地化,断言结构字符(spinner 帧集合里的任意一个)存在即可
-    expect(ui.frame().trim().length).toBeGreaterThan(0);
+    const line = ui.frame().split('\n')[0]!;
+    // 状态嵌在顶边线里:`── ` 引线起头,余下的列补 `─` 到行尾,整行恰好铺满。
+    expect(line).toMatch(/^── .* ─+$/);
+    expect(stringWidth(line)).toBe(60);
     // 已用时与本轮 token 都在:跑长任务时它是"还在动"的唯一证据。
-    expect(ui.frame()).toContain('3s');
-    expect(ui.frame()).toContain('1.2k tok');
+    expect(line).toContain('3s');
+    expect(line).toContain('1.2k tok');
     await ui.destroy();
   });
 
-  it('StatusLine:窄终端按优先级丢尾部,绝不折行', async () => {
+  it('IdleRule:空闲时是一条铺满整行的纯线', async () => {
+    const ui = await renderUi(
+      () => <IdleRule columns={40} color="cyan" />,
+      { width: 40, height: 3 },
+    );
+    expect(ui.frame().split('\n')[0]).toBe('─'.repeat(40));
+    await ui.destroy();
+  });
+
+  it('StatusLine:窄终端按优先级丢尾部,绝不折行,线仍铺满', async () => {
     // 这一行每 100ms 重绘一次,折行会让底部区域每秒抖一次高度。
     for (const columns of [12, 20, 30, 46]) {
       const ui = await renderUi(
         () => <StatusLine
-          phase="tool"
-          detail="bash"
-          since={Date.now() - 3000}
+          work={{ phase: 'tool', detail: 'bash', since: Date.now() - 3000 }}
           tokens={1234}
           todoHint="show"
           columns={columns}
@@ -253,7 +262,8 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
       const lines = ui.frame().split('\n').filter((l) => l.trim());
       expect(lines.length, `${columns} 列`).toBe(1);
       for (const line of lines) {
-        expect(stringWidth(line), `${columns} 列: ${line}`).toBeLessThanOrEqual(columns);
+        expect(stringWidth(line), `${columns} 列: ${line}`).toBe(columns);
+        expect(line, `${columns} 列`).toMatch(/^── .* ─+$/);
       }
       await ui.destroy();
     }
@@ -261,7 +271,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
 
   it('StatusLine:压缩阶段画 ▰▱ 进度条与百分比', async () => {
     const ui = await renderUi(
-      () => <StatusLine phase="compacting" progress={0.4} since={Date.now()} columns={70} />,
+      () => <StatusLine work={{ phase: 'compacting', progress: 0.4, since: Date.now() }} columns={70} />,
       { width: 70, height: 3 },
     );
     const frame = ui.frame();
@@ -271,10 +281,27 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     await ui.destroy();
   });
 
+  it('StatusLine:实际宽度比 columns 窄时截断而不折行', async () => {
+    // 兜底防线:string-width 与终端对 CJK/歧义宽度字符的判定差 1 列就够让
+    // 这行折行,而它每 100ms 重绘一次——折行 = 底部区高度每秒抖一下。这里
+    // 用「按 40 列算、只给 20 列画」放大那种分歧,行数必须仍是 1。
+    const views = [
+      () => <IdleRule columns={40} color="cyan" />,
+      () => <StatusLine work={{ phase: 'thinking', since: Date.now() }} columns={40} />,
+    ];
+    for (const view of views) {
+      const ui = await renderUi(view, { width: 20, height: 4 });
+      const lines = ui.frame().split('\n').filter((l) => l.trim());
+      expect(lines.length).toBe(1);
+      expect(stringWidth(lines[0]!)).toBeLessThanOrEqual(20);
+      await ui.destroy();
+    }
+  });
+
   it('StatusLine:窄终端装不下进度条时整条不画,绝不折行', async () => {
     for (const columns of [14, 22]) {
       const ui = await renderUi(
-        () => <StatusLine phase="compacting" progress={0.4} since={Date.now()} columns={columns} />,
+        () => <StatusLine work={{ phase: 'compacting', progress: 0.4, since: Date.now() }} columns={columns} />,
         { width: columns, height: 4 },
       );
       const lines = ui.frame().split('\n').filter((l) => l.trim());

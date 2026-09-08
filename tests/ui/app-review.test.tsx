@@ -181,8 +181,10 @@ describe('/review 预设菜单', () => {
     await ui.press('down'); // 预设 4:custom
     await ui.press('return');
     await ui.tick();
-    // 输入框回填半成品(尾随空格保持命令菜单关闭)。
-    expect(ui.frame()).toContain('/review custom ');
+    // 输入框回填半成品(尾随空格保持命令菜单关闭)。输入框没有右边框了,
+    // 尾随空格顶在行尾、被 frame() 的行尾裁剪吃掉——空格本身由下面提交
+    // 结果里的 `custom 关注并发` 证明。
+    expect(ui.frame()).toContain('/review custom');
     await ui.type('关注并发');
     await ui.press('return');
     await ui.tick();

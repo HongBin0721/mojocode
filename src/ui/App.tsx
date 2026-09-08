@@ -11,7 +11,7 @@ import {
 import { Box, ScrollArea, Text, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
-import { StatusLine } from './StatusLine.js';
+import { StatusLine, type WorkState } from './StatusLine.js';
 import { TodoPanel } from './TodoPanel.js';
 import { GoalLine } from './GoalLine.js';
 import { TimelineEntry } from './Timeline.js';
@@ -820,6 +820,7 @@ export function App(props: Props): JSX.Element {
   // 空闲时清单仍走 Footer 的单行摘要,面板不重复占位。
   const todoPanelActive = () => Boolean(work()) && todos().length > 0;
   const todoPanelVisible = () => todoPanelActive() && todoPanelOpen();
+  const todoHint = () => (todoPanelActive() ? (todoPanelOpen() ? 'hide' : 'show') : undefined);
 
   // 流式正文尾部窗口(streamTailRows/activeStreamText)随动态区一起
   // 搬进了 ActiveStream.tsx——终端尺寸经它的 props 传入。
@@ -856,6 +857,9 @@ export function App(props: Props): JSX.Element {
       <Input
         onSubmit={handleSubmit}
         disabled={false}
+        work={work()}
+        todoHint={todoHint()}
+        turnTokens={turnTokens()}
         placeholder={
           running() || work()
             ? t('input.steer')
@@ -944,20 +948,23 @@ export function App(props: Props): JSX.Element {
           覆盖层)之间**唯一**的分隔——子块一律不再自带顶部 margin,否则
           缝叠成两行(时间线与输入框之间那道多出来的空行就是这么来的)。 */}
       <Box flexDirection="column" marginTop={1} flexShrink={0}>
-        {/* 工作状态行:主流 CLI 的位置——时间线之下、输入框之上。 */}
-        <Show when={work()}>
-          <StatusLine
-            phase={work()!.phase}
-            detail={work()!.detail}
-            progress={work()!.progress}
-            since={work()!.since}
-            todoHint={todoPanelActive() ? (todoPanelOpen() ? 'hide' : 'show') : undefined}
-            tokens={turnTokens()}
-            columns={size.columns}
-          />
-        </Show>
         <Show when={todoPanelVisible()}>
           <TodoPanel todos={todos()} columns={size.columns} />
+        </Show>
+        {/* 工作状态线常态是输入框的顶边(Input 自己画,见 StatusLine)。覆盖层
+            顶掉输入框时,状态线留在覆盖层上方——不然一开确认框 spinner 与
+            已用时就没了;空闲时覆盖层不需要它(那条线是输入框的边,不是分隔)。 */}
+        <Show when={overlayOpen() ? work() : undefined}>
+          {/* 不加 keyed:work 每次阶段变化都是新对象,keyed 会整块重建,
+              spinner 的定时器跟着重启、已用时清零。 */}
+          {(current: () => WorkState) => (
+            <StatusLine
+              work={current()}
+              todoHint={todoHint()}
+              tokens={turnTokens()}
+              columns={size.columns}
+            />
+          )}
         </Show>
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):

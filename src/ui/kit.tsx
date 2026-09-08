@@ -31,6 +31,7 @@ import {
   type KeyEvent,
   type MouseEvent as OtuiMouseEvent,
   type ScrollBoxRenderable,
+  type BorderSides,
 } from '@opentui/core';
 import {
   render as solidRender,
@@ -777,6 +778,9 @@ export function ScrollArea(props: { children?: JSX.Element }): JSX.Element {
 // Box
 // ---------------------------------------------------------------------------
 
+/** 直接复用上游的边名联合:这一项 kit 原样透传,自己再抄一份只会与上游漂移。 */
+export type BorderSide = BorderSides;
+
 export interface BoxProps {
   flexDirection?: 'row' | 'column';
   flexGrow?: number;
@@ -800,6 +804,11 @@ export interface BoxProps {
   gap?: number;
   /** Ink 只有名字差异:'round' → OpenTUI 'rounded'。 */
   borderStyle?: 'round';
+  /**
+   * 只画这几条边(输入框只画底边),不传即四边全画。没有左右边就没有
+   * 圆角可画,那几条边是纯 `─`;仅在 borderStyle 有值时生效。
+   */
+  borderSides?: BorderSide[];
   borderColor?: string;
   /** 左键单击(判定见 clickHandlers)。命中区就是这个 Box 的布局矩形。 */
   onClick?: (info: ClickInfo) => void;
@@ -816,6 +825,7 @@ export function Box(props: BoxProps): JSX.Element {
     'flexDirection',
     'flexShrink',
     'borderStyle',
+    'borderSides',
     'borderColor',
     'paddingX',
     'onClick',
@@ -827,7 +837,9 @@ export function Box(props: BoxProps): JSX.Element {
   // 条件键收进 memo 再 spread:直接写 `borderColor={undefined}` 会以
   // undefined 覆盖 renderable 的默认值,语义与「不传」不同。
   const extras = createMemo(() => ({
-    ...(local.borderStyle !== undefined ? { border: true, borderStyle: 'rounded' as const } : {}),
+    ...(local.borderStyle !== undefined
+      ? { border: local.borderSides ?? true, borderStyle: 'rounded' as const }
+      : {}),
     ...(local.borderColor !== undefined ? { borderColor: local.borderColor } : {}),
     ...(local.paddingX !== undefined
       ? { paddingLeft: local.paddingX, paddingRight: local.paddingX }

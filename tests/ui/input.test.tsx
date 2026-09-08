@@ -536,8 +536,8 @@ describe('滚轮滚列表', () => {
     const ui = await p;
     await ui.type('/');
 
-    // 菜单在输入框上方:输入框边框那行(`╭` 起头)在菜单容器之外。
-    const y = ui.frame().split('\n').findIndex((line) => line.includes('╭'));
+    // 菜单在输入框上方:输入框的顶边线(空闲时整行 `─`)在菜单容器之外。
+    const y = ui.frame().split('\n').findIndex((line) => /^─+$/.test(line));
     expect(y).toBeGreaterThanOrEqual(0);
     await ui.scroll(4, y, 'down');
     await ui.press('return');

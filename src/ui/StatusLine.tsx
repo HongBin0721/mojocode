@@ -1,10 +1,10 @@
-import { createSignal, onCleanup } from 'solid-js';
+import { createMemo, createSignal, onCleanup } from 'solid-js';
 import stringWidth from 'string-width';
-import { Box, Text, type JSX } from './kit.js';
+import { Text, type JSX } from './kit.js';
 import { theme, formatTokens, meterBar, toolDisplayName, truncateWidth } from './theme.js';
 import { t, type MessageKey } from '../i18n/index.js';
 
-/** 工作阶段。undefined(空闲)时整行不渲染,由 App 控制。 */
+/** 工作阶段。 */
 export type WorkPhase =
   | 'thinking'
   | 'responding'
@@ -29,7 +29,9 @@ export interface WorkState {
   since: number;
 }
 
-interface Props extends WorkState {
+interface Props {
+  /** 工作状态。空闲不是这个组件的形态——那时调用方画 IdleRule。 */
+  work: WorkState;
   /** 有任务清单时在提示里加上 ctrl+t 开关说明;undefined 表示没有清单。 */
   todoHint?: 'show' | 'hide';
   /**
@@ -37,8 +39,14 @@ interface Props extends WorkState {
    * ——那时不显示,免得看着像"一直是 0"。
    */
   tokens?: number;
-  /** 终端列数,整行按它裁剪。 */
+  /** 终端列数,整行按它铺满:标题之后的线一直画到行尾。 */
   columns: number;
+  /**
+   * 整行的颜色,缺省用阶段色。输入框传自己的边框色进来——那一句
+   * `borderColor()` 同时喂给顶线与底边,「这条线就是框的边」因此是一个
+   * 表达式用两处,而不是两条各自演化的规则。
+   */
+  color?: string;
 }
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
@@ -74,13 +82,48 @@ const DROP_ORDER: TailId[] = ['todo', 'tokens', 'interrupt', 'elapsed'];
 
 const SEP = ' · ';
 
+const RULE = '─';
+/** 标题左侧的引线。 */
+const LEAD = `${RULE}${RULE} `;
+const LEAD_WIDTH = stringWidth(LEAD);
+/** spinner 帧加它后面那个空格。 */
+const SPINNER_WIDTH = 2;
+/** 标题右侧至少保留 ` ─`:内容顶到行尾会像没画完。 */
+const MIN_TRAIL = 2;
+
+/** 阶段色。Input 用它给整个框上色,不必自己再维护一张阶段表。 */
+export function phaseColor(phase: WorkPhase): string {
+  return PHASE_COLORS[phase];
+}
+
 /**
- * 输入框上方的工作状态行:动画 spinner + 阶段文字 + 已用时 + 本轮 token +
- * 提示,与主流 CLI(Claude Code / Codex)的布局一致。定时器同时驱动
- * spinner 帧和秒数刷新,组件卸载(回到空闲)即停止。
+ * 空闲时的输入框顶边:一条铺满整行的纯线。与 StatusLine 是同一条边的两种
+ * 形态,由持有这条边的组件(Input)二选一——组件内部因此都不必处理"另一种
+ * 形态是什么"。
+ */
+export function IdleRule(props: { columns: number; color: string }): JSX.Element {
+  return (
+    <Text color={props.color} wrap="truncate-end">
+      {RULE.repeat(Math.max(0, props.columns))}
+    </Text>
+  );
+}
+
+/**
+ * 工作中的输入框顶边:把状态嵌进线里(Codex 式)——动画 spinner + 阶段 +
+ * 已用时 + 本轮 token + 提示,余下的列补 `─`。定时器同时驱动 spinner 帧和
+ * 秒数刷新,组件卸载(回到空闲)即停止。
  *
- * 尾部各段按 DROP_ORDER 丢到装得下为止:这一行随帧重绘,超宽折行会让底部
- * 区域每秒抖一次高度,把时间线顶上去(同 Footer.fitParts 的理由)。
+ * 整行先量后画,标题各段按 DROP_ORDER 丢到装得下为止。刻意不用 OpenTUI
+ * 原生的 box `title`:它超宽时整段消失而非截断,且只能一种颜色——尾巴的
+ * 弱化色就没了。
+ *
+ * 这一行铺满整行(含最后一列)是必须的:下方的底边由 OpenTUI 原生绘制,
+ * 它就是占满全宽的,顶线短一列会比底边短一截。因此这里不能照 Footer 那样
+ * 留 1 列余量,防线改由 `wrap="truncate-end"` 出:string-width 与终端对
+ * CJK/歧义宽度字符(`─` `·` 盲文 spinner `▰▱` 全是 Ambiguous)的判定差 1 列
+ * 就足以让这行折行,而它每 100ms 重绘一次,折行 = 底部区高度每秒抖一下。
+ * 截断把这种分歧降级成右端悄悄少画几格,绝不改变行高。
  */
 export function StatusLine(props: Props): JSX.Element {
   const [now, setNow] = createSignal(Date.now());
@@ -88,68 +131,78 @@ export function StatusLine(props: Props): JSX.Element {
   onCleanup(() => clearInterval(timer));
 
   const frame = () => FRAMES[Math.floor(now() / FRAME_MS) % FRAMES.length]!;
-  const seconds = () => Math.max(0, Math.floor((now() - props.since) / 1000));
-  const color = () => PHASE_COLORS[props.phase];
+  // 秒数单独成 memo:每 100ms 的滴答里它一秒才变一次,排版(parts)因此不必
+  // 跟着 spinner 帧重算。注意这只挡住了定时器这一路——流式期间 beginWork 每
+  // 个 delta 都新建一个 WorkState 对象,parts 仍会随之重算,量下来一秒几十次、
+  // 几十微秒,可以忽略,别为它再加一层缓存。
+  const seconds = createMemo(() => Math.max(0, Math.floor((now() - props.work.since) / 1000)));
+  const color = () => props.color ?? PHASE_COLORS[props.work.phase];
   const label = () =>
-    props.phase === 'tool'
-      ? t('status.runningTool', { tool: toolDisplayName(props.detail ?? '') })
-      : t(PHASE_LABELS[props.phase as Exclude<WorkPhase, 'tool'>]);
+    props.work.phase === 'tool'
+      ? t('status.runningTool', { tool: toolDisplayName(props.work.detail ?? '') })
+      : t(PHASE_LABELS[props.work.phase as Exclude<WorkPhase, 'tool'>]);
 
-  // 头部(spinner 两列 + 阶段)本身就超宽的极窄终端:硬截阶段名,绝不折行。
-  const fittedLabel = () => truncateWidth(label(), Math.max(1, props.columns - 3));
+  /**
+   * 整行排版一次算完。拆成一串互相调用的取值函数时,`trail` 要 `tail`、
+   * `tail` 在丢弃循环里反复要 `head`、`head` 又要进度条与截断后的阶段名,
+   * 一帧下来同样的 stringWidth 要算十几遍;这里按「阶段名 → 进度条 → 尾巴
+   * → 补线」一趟走完,每段只量一次。
+   */
+  const parts = createMemo(() => {
+    // 标题(spinner + 阶段 + 进度条 + 尾巴)可占的列数。
+    const avail = Math.max(1, props.columns - LEAD_WIDTH - MIN_TRAIL);
 
-  // 进度条:` ▰▰▰▱▱▱▱▱▱▱ 42%`。装不下时整条不画(尾部各段先按 DROP_ORDER
-  // 让路,见 headWidth 把条宽计入后 tail 的自适应),绝不折行、绝不截半条。
-  const barParts = () => {
-    if (props.progress === undefined) return undefined;
-    const { filled, empty } = meterBar(props.progress, BAR_CELLS);
-    const pct = `${Math.round(Math.min(1, Math.max(0, props.progress)) * 100)}%`;
-    return { filled: ` ${filled}`, rest: `${empty} ${pct}` };
-  };
-  const barShown = () => {
-    const bar = barParts();
-    if (!bar) return undefined;
-    const width = stringWidth(bar.filled) + stringWidth(bar.rest);
-    return 2 + stringWidth(fittedLabel()) + width <= props.columns - 1 ? bar : undefined;
-  };
-  const headWidth = () => {
-    const bar = barShown();
-    const barWidth = bar ? stringWidth(bar.filled) + stringWidth(bar.rest) : 0;
-    return 2 + stringWidth(fittedLabel()) + barWidth;
-  };
+    // 头部(spinner 两列 + 阶段)本身就超宽的极窄终端:硬截阶段名,绝不折行。
+    const fitted = truncateWidth(label(), Math.max(1, avail - SPINNER_WIDTH));
+    let head = SPINNER_WIDTH + stringWidth(fitted);
 
-  const tail = (): string => {
-    const parts = new Map<TailId, string>();
-    parts.set('elapsed', t('status.elapsed', { s: seconds() }));
-    if (props.tokens) parts.set('tokens', t('status.tokens', { n: formatTokens(props.tokens) }));
+    // 进度条:` ▰▰▰▱▱▱▱▱▱▱ 42%`。装不下时整条不画(尾部各段随后按 DROP_ORDER
+    // 让路),绝不折行、绝不截半条。
+    let bar: { filled: string; rest: string } | undefined;
+    const progress = props.work.progress;
+    if (progress !== undefined) {
+      const { filled, empty } = meterBar(progress, BAR_CELLS);
+      const pct = `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%`;
+      const candidate = { filled: ` ${filled}`, rest: `${empty} ${pct}` };
+      const width = stringWidth(candidate.filled) + stringWidth(candidate.rest);
+      if (head + width <= avail) {
+        bar = candidate;
+        head += width;
+      }
+    }
+
+    const segments = new Map<TailId, string>();
+    segments.set('elapsed', t('status.elapsed', { s: seconds() }));
+    if (props.tokens) segments.set('tokens', t('status.tokens', { n: formatTokens(props.tokens) }));
     if (props.todoHint) {
-      parts.set('todo', t(props.todoHint === 'hide' ? 'status.todoHide' : 'status.todoShow'));
+      segments.set('todo', t(props.todoHint === 'hide' ? 'status.todoHide' : 'status.todoShow'));
     }
-    parts.set('interrupt', t('status.interrupt'));
+    segments.set('interrupt', t('status.interrupt'));
 
-    const available = Math.max(1, props.columns - 1);
-    const joined = () => [...parts.values()].join(SEP);
-    const width = () =>
-      headWidth() + (parts.size > 0 ? SEP.length + stringWidth(joined()) : 0);
+    const joined = () =>
+      segments.size > 0 ? SEP + [...segments.values()].join(SEP) : '';
+    let tail = joined();
     for (const id of DROP_ORDER) {
-      if (width() <= available) break;
-      parts.delete(id);
+      if (head + stringWidth(tail) <= avail) break;
+      segments.delete(id);
+      tail = joined();
     }
-    return parts.size > 0 && width() <= available ? SEP + joined() : '';
-  };
+    if (head + stringWidth(tail) > avail) tail = '';
+
+    // 标题之后补到行尾的线。avail 已为 ` ─` 留位,只有极窄终端会空着。
+    const rest = props.columns - LEAD_WIDTH - head - stringWidth(tail);
+    return { label: fitted, bar, tail, trail: rest >= 2 ? ` ${RULE.repeat(rest - 1)}` : '' };
+  });
 
   return (
-    // marginBottom 而非 marginTop:与时间线的分隔由底部固定区的外层容器统一
-    // 给出;这里管的是与下方(待办面板/输入框)隔一行。marginTop 是它早年
-    // 还住在时间线 scrollbox 尾部时的遗留,搬出来后只会把缝叠成两行。
-    <Box marginBottom={1}>
-      <Text color={color()}>{frame()} </Text>
-      <Text color={color()} bold>
-        {fittedLabel()}
-      </Text>
-      <Text color={color()}>{barShown()?.filled ?? ''}</Text>
-      <Text color={theme.dim}>{barShown()?.rest ?? ''}</Text>
-      <Text color={theme.dim}>{tail()}</Text>
-    </Box>
+    <Text color={color()} wrap="truncate-end">
+      {LEAD}
+      {frame()}{' '}
+      <Text bold>{parts().label}</Text>
+      {parts().bar?.filled ?? ''}
+      <Text color={theme.dim}>{parts().bar?.rest ?? ''}</Text>
+      <Text color={theme.dim}>{parts().tail}</Text>
+      {parts().trail}
+    </Text>
   );
 }
