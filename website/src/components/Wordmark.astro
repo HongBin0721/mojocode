@@ -1,0 +1,10 @@
+---
+/** TUI 同款像素字 logo(scripts/gen-logo.mjs 生成),内联以便随容器缩放。 */
+import svg from '../assets/wordmark.svg?raw';
+interface Props { class?: string }
+const { class: className } = Astro.props;
+---
+<div class:list={['wordmark', className]} set:html={svg} />
+<style>
+  .wordmark :global(svg) { width: 100%; height: auto; display: block; }
+</style>

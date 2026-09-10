@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import remarkBaseLinks from './plugins/remark-base-links.mjs';
+import starlightThemeBlack from 'starlight-theme-black';
 
 // 文档站部署在 GitHub Pages 的项目子路径下,所以 base 是 /mojocode;
 // 换成自定义域名时只改 site 与 base 两行(正文链接由 remark 插件按 base 补前缀)。
@@ -30,6 +31,24 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/HongBin0721/mojocode/edit/main/website/',
       },
+      // 顶栏用 TUI 同款像素字(scripts/gen-logo.mjs 从 src/ui/logo.ts 生成)。
+      logo: { src: './src/assets/wordmark.svg', alt: 'mojocode', replacesTitle: true },
+      // 首次访问默认深色:终端工具的文档深色更贴产品。Starlight 只认 localStorage
+      // 里的偏好,这里在它的主题脚本跑之前写一次;用户切过之后以用户为准。
+      head: [
+        {
+          tag: 'script',
+          content: `try{localStorage.getItem('starlight-theme')||localStorage.setItem('starlight-theme','dark')}catch{}`,
+        },
+      ],
+      plugins: [
+        starlightThemeBlack({
+          navLinks: [
+            { label: '文档', translations: { en: 'Docs' }, link: '/guides/quickstart/' },
+            { label: '扩展', translations: { en: 'Extensions' }, link: '/extensions/overview/' },
+          ],
+        }),
+      ],
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         {

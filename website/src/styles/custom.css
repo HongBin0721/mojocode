@@ -1,14 +1,35 @@
-/* 品牌色:与 TUI 的 logo 渐变同一色系(青→紫)。 */
-:root {
-  --sl-color-accent-low: #1a2a3f;
-  --sl-color-accent: #3b82f6;
-  --sl-color-accent-high: #bcd6ff;
-  --sl-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif;
+/*
+ * 站点级微调。配色与字体由 starlight-theme-black 提供;这里只补首页布局
+ * 与几处正文细节。品牌色是 TUI logo 的青→靛渐变,只出现在 logo 与终端窗口里。
+ */
+
+/* 首页(splash)正文放宽,终端窗口需要横向空间。 */
+[data-has-hero] .sl-container,
+.sl-container:has(.hero) {
+  max-width: 72rem;
 }
-:root[data-theme='light'] {
-  --sl-color-accent-low: #dbeafe;
-  --sl-color-accent: #2563eb;
-  --sl-color-accent-high: #1e3a8a;
+.closing {
+  border-top: 1px solid var(--sl-color-hairline, #26303b);
+  padding: 3rem 0 1rem;
+  color: var(--sl-color-gray-2);
+  font-size: 1.02rem;
 }
+.closing p { margin: 0 0 0.6rem; }
+
 /* 表格里的 code 别换行,命令表一眼扫得清。 */
 table code { white-space: nowrap; }
+
+/* 首页:自带 Hero,隐藏主题的标题区(h1 + 描述 + Copy page)。 */
+body:has(.hero) .page-title { display: none; }
+
+/* 顶栏像素字:主题把 logo 压得太小,按导航栏高度给一个固定高度,保持像素边缘。 */
+.site-title img {
+  height: 1.05rem !important;
+  width: auto !important;
+  max-width: none !important;
+  image-rendering: pixelated;
+}
+
+/* 首页不需要「编辑此页」与上下页。 */
+body:has(.hero) footer .meta,
+body:has(.hero) footer .pagination-links { display: none; }

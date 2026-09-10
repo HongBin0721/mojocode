@@ -1,0 +1,44 @@
+---
+/**
+ * 首页的特性段:左文右图,或 flip 后右文左图。图那一侧由调用方放一个 Terminal。
+ * 不是卡片——每段是一整行,靠留白与一根细线分隔。
+ */
+interface Props {
+  title: string;
+  href?: string;
+  linkText?: string;
+  flip?: boolean;
+}
+const { title, href, linkText, flip = false } = Astro.props;
+---
+<section class:list={['feature', { flip }]}>
+  <div class="copy">
+    <h2>{title}</h2>
+    <div class="prose"><slot name="text" /></div>
+    {href && <a class="more" href={href}>{linkText}</a>}
+  </div>
+  <div class="demo"><slot /></div>
+</section>
+<style>
+  .feature {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 3rem;
+    align-items: center;
+    padding: 3.5rem 0;
+    border-top: 1px solid var(--sl-color-hairline, #26303b);
+  }
+  .feature.flip { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+  .feature.flip .copy { order: 2; }
+  .feature.flip .demo { order: 1; }
+  h2 { font-size: 1.5rem; line-height: 1.25; margin: 0 0 0.9rem; letter-spacing: -0.01em; }
+  .prose { color: var(--sl-color-gray-2); font-size: 0.98rem; line-height: 1.7; }
+  .prose :global(p) { margin: 0 0 0.7rem; }
+  .prose :global(code) { font-size: 0.86em; }
+  .more { display: inline-block; margin-top: 0.6rem; font-size: 0.92rem; text-decoration: none; border-bottom: 1px solid currentColor; }
+  @media (max-width: 860px) {
+    .feature { grid-template-columns: 1fr; gap: 1.5rem; padding: 2.5rem 0; }
+    .feature.flip .copy { order: 1; }
+    .feature.flip .demo { order: 2; }
+  }
+</style>

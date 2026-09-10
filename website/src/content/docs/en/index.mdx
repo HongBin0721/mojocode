@@ -5,43 +5,57 @@ template: splash
 head:
   - tag: title
     content: mojocode · a terminal coding agent for any LLM
-hero:
-  tagline: A general-purpose coding agent that lives in your terminal. Plug in any model, let it read code, edit files and run commands, with resumable sessions, automatic context compaction, and an extension API for everything else.
-  actions:
-    - text: Quickstart
-      link: /mojocode/en/guides/quickstart/
-      icon: right-arrow
-    - text: GitHub
-      link: https://github.com/HongBin0721/mojocode
-      icon: external
-      variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import Hero from '../../../components/Hero.astro';
+import Terminal from '../../../components/Terminal.astro';
+import Feature from '../../../components/Feature.astro';
+import { session, models, feedback, sessions, extension } from '../../../components/demos';
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh
-mojocode auth      # set up an API key
-mojocode           # open the full-screen TUI
-```
+<Hero
+  tagline="A general-purpose coding agent that lives in your terminal. Plug in any model; it reads code, edits files and runs commands. Sessions resume, context compacts itself, and interception policy is yours to write as an extension."
+  install="curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh"
+  primary={{ text: 'Quickstart', href: '/mojocode/en/guides/quickstart/' }}
+  secondary={{ text: 'GitHub', href: 'https://github.com/HongBin0721/mojocode' }}
+  copyLabel="Copy"
+  copiedLabel="Copied"
+/>
 
-<CardGrid stagger>
-  <Card title="Any model" icon="setting">
-    Presets for Kimi, DeepSeek and GLM; any OpenAI-compatible endpoint works. Model lists are fetched live, and thinking levels follow what each model actually supports.
-  </Card>
-  <Card title="Real tools" icon="laptop">
-    read / write / edit / glob / grep / bash, plus subagents, web fetch and search, and MCP tools. LSP diagnostics are fed back right after every write.
-  </Card>
-  <Card title="Sessions first" icon="document">
-    Every conversation is an append-only JSONL log. Continue with `-c`, pick one with `-r`, fork with `/fork`, or rewind to any message with esc esc.
-  </Card>
-  <Card title="Pi-style extensions" icon="puzzle">
-    One TypeScript file is an extension: hooks, commands, tools, status lines. There is no permission system; interception policy is yours to write.
-  </Card>
-  <Card title="Scripts and CI" icon="rocket">
-    `mojocode -p "..."` runs once, `--json` streams events, pipes just work. `doctor` checks environment, keys and connectivity in one go.
-  </Card>
-  <Card title="Single binary" icon="download">
-    Standalone executables for six macOS / Linux / Windows targets, runtime included, no Node required.
-  </Card>
-</CardGrid>
+<Terminal title="mojocode — ~/dev/shop" html={session.en} />
+
+<Feature title="Any model, the same tools" href="/mojocode/en/config/providers/" linkText="Models and providers">
+  <div slot="text">
+    <p>Presets for Kimi, DeepSeek and GLM; any OpenAI-compatible endpoint (vLLM, Ollama, a gateway) is one `providers` entry away. Model lists are fetched live, never hardcoded.</p>
+    <p>Thinking levels follow what each model actually supports: `/think` lists only what the catalog says exists, and models the family table cannot describe take raw parameters per model.</p>
+  </div>
+  <Terminal title="mojocode" html={models.en} compact />
+</Feature>
+
+<Feature title="Breakage shows up immediately" href="/mojocode/en/config/lsp/" linkText="LSP diagnostics" flip>
+  <div slot="text">
+    <p>After every write / edit, the language server's errors and warnings ride back to the model with the tool result, including "editing A broke B". Installed servers are used; missing ones are skipped silently.</p>
+    <p>Long investigations go to a subagent with its own context and step budget; only the conclusion returns. The explore kind gets read-only tools.</p>
+  </div>
+  <Terminal title="mojocode" html={feedback.en} compact />
+</Feature>
+
+<Feature title="Sessions you can go back to" href="/mojocode/en/guides/sessions/" linkText="Sessions">
+  <div slot="text">
+    <p>Every conversation is an append-only JSONL log that is always complete on disk. `-c` continues the latest, `-r` picks one, `--fork-session` branches off an old one; in the TUI, esc esc rewinds to any message.</p>
+    <p>Past 80% of the context window the history is compacted into a summary and the session keeps going; replay still shows the original conversation.</p>
+  </div>
+  <Terminal title="zsh" html={sessions.en} compact />
+</Feature>
+
+<Feature title="No permission system. Extensions instead." href="/mojocode/en/extensions/overview/" linkText="Extensions" flip>
+  <div slot="text">
+    <p>Same stance as pi: no prompts, no sandbox levels, no plan mode. The boundary belongs to a container or a disposable working copy; that is the fence that actually holds.</p>
+    <p>To intercept, drop a TypeScript file into `~/.mojocode/extensions/`: veto in `tool_call`, rewrite in `tool_result`, register commands and tools, show a status line. The built-in /goal, /review, todo, MCP and LSP use the very same API.</p>
+  </div>
+  <Terminal title="guard.ts" html={extension.en} compact />
+</Feature>
+
+<section class="closing">
+  <p>Single binary for six platforms, runtime included; `-p` runs once and pipes into CI.</p>
+  <p><a href="/mojocode/en/guides/quickstart/">Start with the install</a>, or skim <a href="/mojocode/en/guides/tui/">every command and shortcut</a>.</p>
+</section>

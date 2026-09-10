@@ -1,0 +1,73 @@
+---
+/**
+ * 首页首屏:像素字 logo、一句话、安装命令、两个入口。
+ * 最醒目的东西留给 logo 与下方的终端窗口(由页面放置),这里不再加任何装饰。
+ */
+import Wordmark from './Wordmark.astro';
+interface Props {
+  tagline: string;
+  install: string;
+  primary: { text: string; href: string };
+  secondary: { text: string; href: string };
+  copyLabel: string;
+  copiedLabel: string;
+}
+const { tagline, install, primary, secondary, copyLabel, copiedLabel } = Astro.props;
+---
+<header class="hero">
+  <Wordmark class="mark" />
+  <p class="tagline">{tagline}</p>
+  <div class="install">
+    <code>{install}</code>
+    <button type="button" class="copy" data-copy={install} data-label={copyLabel} data-copied={copiedLabel} aria-label={copyLabel}>{copyLabel}</button>
+  </div>
+  <p class="actions">
+    <a class="primary" href={primary.href}>{primary.text}</a>
+    <a class="secondary" href={secondary.href}>{secondary.text}</a>
+  </p>
+</header>
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.hero .copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy ?? '');
+        btn.textContent = btn.dataset.copied ?? '';
+        setTimeout(() => (btn.textContent = btn.dataset.label ?? ''), 1500);
+      } catch { /* 剪贴板不可用时按钮保持原样 */ }
+    });
+  });
+</script>
+<style>
+  .hero { padding: 3.5rem 0 2.5rem; }
+  .hero :global(.mark) { width: min(100%, 26rem); }
+  .tagline {
+    max-width: 34em;
+    margin: 1.75rem 0 1.5rem;
+    font-size: clamp(1.1rem, 1.6vw, 1.35rem);
+    line-height: 1.55;
+    color: var(--sl-color-white);
+  }
+  .install {
+    display: inline-flex;
+    align-items: stretch;
+    max-width: 100%;
+    border: 1px solid var(--sl-color-hairline, #26303b);
+    border-radius: 8px;
+    background: var(--sl-color-black);
+    font-family: var(--font-geist-mono, ui-monospace, Menlo, monospace);
+    font-size: 0.86rem;
+  }
+  .install code { padding: 0.65rem 0.9rem; overflow-x: auto; white-space: nowrap; background: none; }
+  .install .copy {
+    border: 0; border-left: 1px solid var(--sl-color-hairline, #26303b);
+    background: none; color: var(--sl-color-gray-2); padding: 0 0.9rem; cursor: pointer; font: inherit;
+  }
+  .install .copy:hover { color: var(--sl-color-white); }
+  .actions { display: flex; gap: 1.25rem; align-items: center; margin: 1.5rem 0 0; }
+  .primary {
+    padding: 0.6rem 1.1rem; border-radius: 8px; text-decoration: none; font-weight: 600;
+    background: var(--sl-color-white); color: var(--sl-color-black);
+  }
+  .secondary { color: var(--sl-color-gray-2); text-decoration: none; border-bottom: 1px solid currentColor; }
+  .secondary:hover { color: var(--sl-color-white); }
+</style>

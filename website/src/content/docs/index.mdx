@@ -5,43 +5,57 @@ template: splash
 head:
   - tag: title
     content: mojocode · 终端里的通用编程 agent
-hero:
-  tagline: 运行在终端里的通用编程 agent。接任意大模型,读代码、改文件、跑命令,会话可恢复、上下文自动压缩,一切都可以用扩展改。
-  actions:
-    - text: 快速开始
-      link: /mojocode/guides/quickstart/
-      icon: right-arrow
-    - text: GitHub
-      link: https://github.com/HongBin0721/mojocode
-      icon: external
-      variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import Hero from '../../components/Hero.astro';
+import Terminal from '../../components/Terminal.astro';
+import Feature from '../../components/Feature.astro';
+import { session, models, feedback, sessions, extension } from '../../components/demos';
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh
-mojocode auth      # 配一把 API key
-mojocode           # 进入全屏 TUI
-```
+<Hero
+  tagline="运行在终端里的通用编程 agent。接任意大模型,读代码、改文件、跑命令;会话可恢复,上下文自动压缩,拦截策略由你用扩展写。"
+  install="curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh"
+  primary={{ text: '快速开始', href: '/mojocode/guides/quickstart/' }}
+  secondary={{ text: 'GitHub', href: 'https://github.com/HongBin0721/mojocode' }}
+  copyLabel="复制"
+  copiedLabel="已复制"
+/>
 
-<CardGrid stagger>
-  <Card title="任意模型" icon="setting">
-    内置 Kimi、DeepSeek、GLM 三家预设,任何 OpenAI 兼容端点都能接。模型列表实时从服务商拉取,思考档位按模型能力给出。
-  </Card>
-  <Card title="真实的工具" icon="laptop">
-    read / write / edit / glob / grep / bash,加上子 agent、联网抓取与搜索、MCP 工具。写完文件立刻回喂 LSP 诊断。
-  </Card>
-  <Card title="会话是第一公民" icon="document">
-    每场对话追加写入 JSONL,随时 `-c` 续上、`-r` 挑一个恢复、`/fork` 分叉、esc esc 回退到任意一句重来。
-  </Card>
-  <Card title="Pi 式扩展" icon="puzzle">
-    一个 TypeScript 文件就是一个扩展:钩子、命令、工具、状态行。没有权限系统,拦截策略由你写。
-  </Card>
-  <Card title="脚本与 CI" icon="rocket">
-    `mojocode -p "..."` 单次执行,`--json` 输出事件流,配合管道使用。`doctor` 一次体检环境、密钥与连通性。
-  </Card>
-  <Card title="单二进制" icon="download">
-    macOS / Linux / Windows 六个平台的独立可执行文件,自带运行时,不需要 Node。
-  </Card>
-</CardGrid>
+<Terminal title="mojocode — ~/dev/shop" html={session['zh-CN']} />
+
+<Feature title="任意模型,同一套工具" href="/mojocode/config/providers/" linkText="模型与服务商">
+  <div slot="text">
+    <p>内置 Kimi、DeepSeek、GLM 三家预设,任何 OpenAI 兼容端点(vLLM、Ollama、网关)写一段 `providers` 就能接。模型列表实时从服务商拉取,不硬编码。</p>
+    <p>思考档位按模型真实能力给出:目录里说它支持什么,`/think` 就只列什么;家族表达不了的开关可以按模型写原始参数。</p>
+  </div>
+  <Terminal title="mojocode" html={models['zh-CN']} compact />
+</Feature>
+
+<Feature title="改坏了当场就知道" href="/mojocode/config/lsp/" linkText="LSP 诊断回喂" flip>
+  <div slot="text">
+    <p>每次 write / edit 之后,对应语言的 LSP 服务器把错误与警告随工具结果一起喂回模型,连「改了 A 弄坏了 B」也报得出来。装了就用,没装静默跳过。</p>
+    <p>大段调研交给子 agent:独立上下文、独立步数预算,只把结论带回主对话。explore 类型只有只读工具。</p>
+  </div>
+  <Terminal title="mojocode" html={feedback['zh-CN']} compact />
+</Feature>
+
+<Feature title="会话是可以回去的" href="/mojocode/guides/sessions/" linkText="会话">
+  <div slot="text">
+    <p>每场对话追加写入 JSONL,磁盘上永远是完整的。`-c` 续上最近一次,`-r` 挑一个恢复,`--fork-session` 从旧会话分叉出新的;TUI 里 esc esc 回退到任意一句重来。</p>
+    <p>上下文超过窗口的 80% 自动压缩成摘要继续,回放看到的仍是原始对话。</p>
+  </div>
+  <Terminal title="zsh" html={sessions['zh-CN']} compact />
+</Feature>
+
+<Feature title="没有权限系统,有扩展" href="/mojocode/extensions/overview/" linkText="扩展" flip>
+  <div slot="text">
+    <p>与 pi 一致:没有确认框、没有沙箱档位、没有计划模式。边界交给容器或一次性的工作副本,那才是靠得住的围栏。</p>
+    <p>要拦截就写一个 TypeScript 文件放进 `~/.mojocode/extensions/`:`tool_call` 钩子否决、`tool_result` 改写、注册命令与工具、挂状态行。内置的 /goal、/review、todo、MCP、LSP 用的是同一份 API。</p>
+  </div>
+  <Terminal title="guard.ts" html={extension['zh-CN']} compact />
+</Feature>
+
+<section class="closing">
+  <p>单二进制,六个平台,自带运行时;`-p` 单次执行配合管道进 CI。</p>
+  <p><a href="/mojocode/guides/quickstart/">从安装开始</a>,或者先看 <a href="/mojocode/guides/tui/">全部命令与快捷键</a>。</p>
+</section>
