@@ -1,0 +1,44 @@
+---
+title: mojocode
+description: 运行在终端里的通用编程 agent,可接入任意大模型——内置 Kimi、DeepSeek、GLM 预设,也支持任何 OpenAI 兼容接口。
+template: splash
+hero:
+  tagline: 运行在终端里的通用编程 agent。接任意大模型,读代码、改文件、跑命令,会话可恢复、上下文自动压缩,一切都可以用扩展改。
+  actions:
+    - text: 快速开始
+      link: /mojocode/guides/quickstart/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/HongBin0721/mojocode
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh
+mojocode auth      # 配一把 API key
+mojocode           # 进入全屏 TUI
+```
+
+<CardGrid stagger>
+  <Card title="任意模型" icon="setting">
+    内置 Kimi、DeepSeek、GLM 三家预设,任何 OpenAI 兼容端点都能接。模型列表实时从服务商拉取,思考档位按模型能力给出。
+  </Card>
+  <Card title="真实的工具" icon="laptop">
+    read / write / edit / glob / grep / bash,加上子 agent、联网抓取与搜索、MCP 工具。写完文件立刻回喂 LSP 诊断。
+  </Card>
+  <Card title="会话是第一公民" icon="document">
+    每场对话追加写入 JSONL,随时 `-c` 续上、`-r` 挑一个恢复、`/fork` 分叉、esc esc 回退到任意一句重来。
+  </Card>
+  <Card title="Pi 式扩展" icon="puzzle">
+    一个 TypeScript 文件就是一个扩展:钩子、命令、工具、状态行。没有权限系统,拦截策略由你写。
+  </Card>
+  <Card title="脚本与 CI" icon="rocket">
+    `mojocode -p "..."` 单次执行,`--json` 输出事件流,配合管道使用。`doctor` 一次体检环境、密钥与连通性。
+  </Card>
+  <Card title="单二进制" icon="download">
+    macOS / Linux / Windows 六个平台的独立可执行文件,自带运行时,不需要 Node。
+  </Card>
+</CardGrid>

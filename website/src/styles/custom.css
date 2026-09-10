@@ -1,0 +1,14 @@
+/* 品牌色:与 TUI 的 logo 渐变同一色系(青→紫)。 */
+:root {
+  --sl-color-accent-low: #1a2a3f;
+  --sl-color-accent: #3b82f6;
+  --sl-color-accent-high: #bcd6ff;
+  --sl-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #dbeafe;
+  --sl-color-accent: #2563eb;
+  --sl-color-accent-high: #1e3a8a;
+}
+/* 表格里的 code 别换行,命令表一眼扫得清。 */
+table code { white-space: nowrap; }

@@ -1,0 +1,44 @@
+---
+title: mojocode
+description: A terminal coding agent that works with any LLM — Kimi, DeepSeek and GLM presets built in, plus any OpenAI-compatible endpoint.
+template: splash
+hero:
+  tagline: A general-purpose coding agent that lives in your terminal. Plug in any model, let it read code, edit files and run commands, with resumable sessions, automatic context compaction, and an extension API for everything else.
+  actions:
+    - text: Quickstart
+      link: /mojocode/en/guides/quickstart/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/HongBin0721/mojocode
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HongBin0721/mojocode/main/install.sh | sh
+mojocode auth      # set up an API key
+mojocode           # open the full-screen TUI
+```
+
+<CardGrid stagger>
+  <Card title="Any model" icon="setting">
+    Presets for Kimi, DeepSeek and GLM; any OpenAI-compatible endpoint works. Model lists are fetched live, and thinking levels follow what each model actually supports.
+  </Card>
+  <Card title="Real tools" icon="laptop">
+    read / write / edit / glob / grep / bash, plus subagents, web fetch and search, and MCP tools. LSP diagnostics are fed back right after every write.
+  </Card>
+  <Card title="Sessions first" icon="document">
+    Every conversation is an append-only JSONL log. Continue with `-c`, pick one with `-r`, fork with `/fork`, or rewind to any message with esc esc.
+  </Card>
+  <Card title="Pi-style extensions" icon="puzzle">
+    One TypeScript file is an extension: hooks, commands, tools, status lines. There is no permission system; interception policy is yours to write.
+  </Card>
+  <Card title="Scripts and CI" icon="rocket">
+    `mojocode -p "..."` runs once, `--json` streams events, pipes just work. `doctor` checks environment, keys and connectivity in one go.
+  </Card>
+  <Card title="Single binary" icon="download">
+    Standalone executables for six macOS / Linux / Windows targets, runtime included, no Node required.
+  </Card>
+</CardGrid>
