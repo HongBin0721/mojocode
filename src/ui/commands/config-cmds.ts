@@ -1,8 +1,5 @@
 import { t } from '../../i18n/index.js';
 import {
-  APPROVAL_PRESETS,
-  isDangerousPermissions,
-  presetById,
   reasoningEffortSchema,
   TIMELINE_MODES,
   type TimelineMode,
@@ -13,7 +10,7 @@ import type { ReasoningEffort } from '../../config/schema.js';
 import type { SessionHandle } from '../../app/session-handle.js';
 import type { CommandHandler } from './types.js';
 
-/** 配置类命令:approvals / think / setting / focus / provider / models。 */
+/** 配置类命令:think / setting / focus / provider / models。 */
 
 /**
  * /think 选择器与参数校验同源的可选档位。生效可选集由 Session 的
@@ -28,40 +25,6 @@ export async function selectableEfforts(session: SessionHandle): Promise<Reasoni
     .catch(() => undefined);
   return (caps?.efforts ?? supportedEfforts(session.provider)).filter((l) => l !== 'auto');
 }
-
-export const approvals: CommandHandler = async (ctx, arg) => {
-  const preset = APPROVAL_PRESETS.find((p) => p.id === arg);
-  if (!preset) {
-    ctx.push({
-      kind: 'notice',
-      level: 'warn',
-      message: t('notice.approvalsUsage', {
-        list: APPROVAL_PRESETS.map((p) => p.id).join('|'),
-        mode: ctx.modeLabel(),
-      }),
-    });
-    return;
-  }
-  const next = presetById(preset.id);
-  ctx.session.setPermissions(next);
-  ctx.setPerms(next);
-  ctx.setPlanActive(false);
-  ctx.push({ kind: 'notice', level: 'info', message: t('notice.modeSet', { mode: preset.id }) });
-  // full-access 绕过硬拒名单,而且和别的档位一样会留到下次启动——
-  // 时间线上必须留一条,事后翻记录能认出这一段跑在无沙箱下。
-  if (isDangerousPermissions(next)) {
-    ctx.push({
-      kind: 'notice',
-      level: 'warn',
-      message: t('notice.modeDanger', { mode: preset.id }),
-    });
-  }
-  // 落盘范围是本工作区的 .mojocode/config.json,不碰全局配置。
-  const saved = await ctx.persistPermissions(next);
-  if (saved) {
-    ctx.push({ kind: 'notice', level: 'info', message: t('notice.modeSavedTo', { path: saved }) });
-  }
-};
 
 export const think: CommandHandler = async (ctx, arg) => {
   // 档位与当前 provider/model 绑定:只接受它能完整表达的值,不支持的档位

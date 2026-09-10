@@ -45,6 +45,7 @@
     "diff": "^9.0.0",
     "execa": "^10.0.1",
     "fast-glob": "^3.3.3",
+    "jiti": "^2.7.0",
     "jpeg-js": "^0.4.4",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",

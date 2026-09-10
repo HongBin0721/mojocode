@@ -16,7 +16,6 @@ import type {
   WireEvent,
 } from './ipc.js';
 import type { StateSnapshot } from '@core/protocol';
-import type { PermissionRequest } from '@core/events';
 import type { TimelineItem } from '@core/types';
 
 export interface MojocodeDesktopApi {
@@ -65,7 +64,6 @@ export interface PushPayloads {
   event: TaskScoped<WireEvent[]>;
   replay: TaskScoped<TimelineItem[]>;
   connection: TaskScoped<ConnectionState>;
-  permission: TaskScoped<PermissionRequest>;
   /** undefined = 会话列表读取失败(降级提示)。 */
   tasks: TaskSummary[] | undefined;
 }

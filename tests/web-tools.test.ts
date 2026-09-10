@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createWebTools } from '../src/tools/web.js';
-import { runSearch } from '../src/tools/web-backends.js';
+import { createWebTools } from '../src/extensions/web/tools.js';
+import { runSearch } from '../src/extensions/web/backends.js';
 import type { ResolvedSearchBackend } from '../src/config/search.js';
-import type { ToolContext } from '../src/tools/context.js';
+import type { WebToolDeps } from '../src/extensions/web/tools.js';
 
 const GLM_BACKEND: ResolvedSearchBackend = {
   id: 'glm',
@@ -20,13 +20,10 @@ const EXA_BACKEND: ResolvedSearchBackend = {
   auth: 'x-api-key',
 };
 
-/** 只填工具真正用到的字段(plan-tool.test.ts 的手法)。 */
-function makeCtx(backend: ResolvedSearchBackend | undefined, checkNet = vi.fn(async () => {})) {
-  const ctx = {
-    gate: { checkNet },
-    searchBackend: () => backend,
-  } as unknown as ToolContext;
-  return { ctx, checkNet };
+/** web 工具只要搜索后端一样东西(见 WebToolDeps),不收整个 ToolContext。 */
+function makeCtx(backend: ResolvedSearchBackend | undefined) {
+  const ctx: WebToolDeps = { searchBackend: () => backend };
+  return { ctx };
 }
 
 type Execute = (input: Record<string, unknown>, options: unknown) => Promise<Record<string, unknown>>;
@@ -125,29 +122,18 @@ describe('runSearch 适配器', () => {
 });
 
 describe('web_search 工具', () => {
-  it('先过 checkNet,成功返回结果对象', async () => {
+  it('成功返回结果对象', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => jsonResponse({ search_result: [{ title: 'T', link: 'https://x.dev', content: 'c' }] })),
     );
-    const { ctx, checkNet } = makeCtx(GLM_BACKEND);
+    const { ctx } = makeCtx(GLM_BACKEND);
     const tools = createWebTools(ctx);
     const out = await executeOf(tools.web_search)({ query: 'hello' }, {});
-    expect(checkNet).toHaveBeenCalledWith({ tool: 'web_search', query: 'hello' });
     expect(out.backend).toBe('glm');
     expect(out.count).toBe(1);
   });
 
-  it('checkNet 拒绝时不发任何请求', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    const checkNet = vi.fn(async () => {
-      throw new Error('User denied this action.');
-    });
-    const tools = createWebTools(makeCtx(GLM_BACKEND, checkNet).ctx);
-    await expect(executeOf(tools.web_search)({ query: 'q' }, {})).rejects.toThrow('denied');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 
   it('空结果带提示信息', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ search_result: [] })));
@@ -159,17 +145,16 @@ describe('web_search 工具', () => {
 });
 
 describe('web_fetch 工具', () => {
-  it('HTML 转 Markdown,抽 title,checkNet 单一卡口', async () => {
+  it('HTML 转 Markdown,抽 title', async () => {
     const html =
       '<html><head><title>My Doc</title></head><body><h1>Hello</h1><p>World <a href="https://x.dev">link</a></p><script>evil()</script></body></html>';
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } })),
     );
-    const { ctx, checkNet } = makeCtx(undefined);
+    const { ctx } = makeCtx(undefined);
     const tools = createWebTools(ctx);
     const out = await executeOf(tools.web_fetch)({ url: 'https://docs.foo.dev/a' }, {});
-    expect(checkNet).toHaveBeenCalledWith({ tool: 'web_fetch', url: 'https://docs.foo.dev/a' });
     expect(out.title).toBe('My Doc');
     expect(out.content).toContain('# Hello');
     expect(out.content).toContain('[link](https://x.dev)');
@@ -205,61 +190,26 @@ describe('web_fetch 工具', () => {
     expect(out.content).toBe('not here');
   });
 
-  it('重定向逐跳鉴权:落点先过 checkNet,再请求', async () => {
-    const seen: string[] = [];
-    const fetchMock = vi.fn(async (u: string) => {
-      seen.push(u);
-      if (u === 'https://docs.foo.dev/a') {
-        return new Response(null, { status: 302, headers: { location: 'https://other.dev/final' } });
-      }
-      return new Response('<html><body>ok</body></html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html' },
-      });
-    });
-    vi.stubGlobal('fetch', fetchMock);
 
-    const { ctx, checkNet } = makeCtx(undefined);
-    const out = await executeOf(createWebTools(ctx).web_fetch)({ url: 'https://docs.foo.dev/a' }, {});
-    expect(checkNet).toHaveBeenCalledTimes(2);
-    expect(checkNet).toHaveBeenLastCalledWith({ tool: 'web_fetch', url: 'https://other.dev/final' });
-    expect(seen).toEqual(['https://docs.foo.dev/a', 'https://other.dev/final']);
-    expect(out.finalUrl).toBe('https://other.dev/final');
-    // 必须是 manual:follow 会让 undici 先把内网那一跳真的请求出去
-    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].redirect).toBe('manual');
-  });
 
-  it('重定向落点被拒时,那一跳的请求根本没有发出去', async () => {
-    const seen: string[] = [];
-    const fetchMock = vi.fn(async (u: string) => {
-      seen.push(u);
-      return new Response(null, {
-        status: 302,
-        headers: { location: 'http://169.254.169.254/latest/meta-data/' },
-      });
-    });
-    vi.stubGlobal('fetch', fetchMock);
 
-    const checkNet = vi.fn(async (req: { url?: string }) => {
-      if (req.url?.includes('169.254')) throw new Error('Refused: private address');
-    });
-    const tools = createWebTools(makeCtx(undefined, checkNet as never).ctx);
-    await expect(
-      executeOf(tools.web_fetch)({ url: 'https://evil.dev/redirect' }, {}),
-    ).rejects.toThrow(/Refused/);
-    // 关键断言:内网地址从未被请求
-    expect(seen).toEqual(['https://evil.dev/redirect']);
-  });
-
-  it('重定向成环时报错而不是无限跟随', async () => {
+  it('跨站重定向后的落点以 finalUrl 报出(fetch 自己跟随重定向)', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://loop.dev/next' } })),
+      vi.fn(async () => {
+        const res = new Response('<html><body>ok</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+        Object.defineProperty(res, 'url', { value: 'https://other.dev/final' });
+        return res;
+      }),
     );
-    const tools = createWebTools(makeCtx(undefined).ctx);
-    await expect(executeOf(tools.web_fetch)({ url: 'https://loop.dev/a' }, {})).rejects.toThrow(
-      /redirects/,
+    const out = await executeOf(createWebTools(makeCtx(undefined).ctx).web_fetch)(
+      { url: 'https://docs.foo.dev/a' },
+      {},
     );
+    expect(out.finalUrl).toBe('https://other.dev/final');
   });
 
   it('正文读取阶段超时也返回 timedOut 对象,不抛裸 TimeoutError', async () => {

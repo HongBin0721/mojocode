@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { t } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import type { SkillCommandInfo } from '../../src/skills/discovery.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 /**
  * 覆盖斜杠技能:动态发现的技能合入 `/` 菜单(内置同名优先),提交
@@ -36,12 +36,9 @@ async function setup(
       compact: async () => {},
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(run),
-    mcpStatuses: [],
     skills,
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     refreshSkills,
     runSkill,
     store: { id: 'test-session', messages: [] },

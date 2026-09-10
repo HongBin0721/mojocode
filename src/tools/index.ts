@@ -3,17 +3,12 @@ import { t } from '../i18n/index.js';
 import { createFileTools } from './files.js';
 import { createSearchTools } from './search.js';
 import { createBashTool } from './bash.js';
-import { createWebTools } from './web.js';
 import { createViewTools } from './view-image.js';
-import { createTodoTool, TodoStore } from './todo.js';
-import { createExitPlanTool } from './plan.js';
 import type { ToolContext } from './context.js';
 
-export { TodoStore } from './todo.js';
-export type { TodoItem } from './todo.js';
 export type { ToolContext } from './context.js';
 
-export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet {
+export function createBuiltinTools(ctx: ToolContext): ToolSet {
   const files = createFileTools(ctx);
   const search = createSearchTools(ctx);
 
@@ -24,12 +19,8 @@ export function createBuiltinTools(ctx: ToolContext, todos: TodoStore): ToolSet 
     glob: search.glob,
     grep: search.grep,
     bash: createBashTool(ctx),
-    // web_fetch 恒在;web_search 仅在解析出搜索后端(有 key)时注册。
-    ...createWebTools(ctx),
     // view_image 仅在解析出视觉模型(config 或 provider 预设)时注册。
     ...createViewTools(ctx),
-    todo: createTodoTool(todos),
-    exit_plan: createExitPlanTool(ctx),
   };
 }
 
@@ -101,11 +92,6 @@ export function summarizeToolResult(toolName: string, output: unknown): string {
       });
       return o.incomplete ? `${size} · ${t('sum.taskIncomplete')}` : size;
     }
-    case 'exit_plan':
-      // 非计划模式下的误调也返回 approved:false,但那不是"用户打回了方案"
-      // ——照直说成打回,时间线就在报告一次根本没发生过的审批。
-      if (o.notApplicable) return t('sum.planNotApplicable');
-      return o.approved ? t('sum.planApproved', { mode: String(o.mode) }) : t('sum.planRejected');
     default:
       return t('sum.done');
   }

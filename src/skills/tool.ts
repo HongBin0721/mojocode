@@ -3,9 +3,10 @@
  *
  * 三层渐进披露的枢纽:L1(name+description 列表)挂在工具 description 上,
  * 常驻上下文但每技能只占几十 token;L2(SKILL.md 正文)在 execute 时现读
- * 现返;L3(技能目录里的 references/ 等)靠激活时登记的只读扩根,模型
- * 后续用 read/glob 自取。工具 description 属于可缓存前缀——技能列表变化
- * 时由 bootstrap 整个重建工具(digest 对比),而不是在这里动态拼。
+ * 现返;L3(技能目录里的 references/ 等)模型后续用 read/glob 自取——
+ * 工具没有路径围栏,技能目录在哪都读得到。工具 description 属于可缓存
+ * 前缀——技能列表变化时由 bootstrap 整个重建工具(digest 对比),而不是在
+ * 这里动态拼。
  */
 
 import { tool } from 'ai';
@@ -24,11 +25,6 @@ export interface SkillForkResult {
 
 export interface SkillToolDeps {
   manager: SkillManager;
-  /**
-   * 激活:登记技能目录为只读扩根;主 agent 且技能带 allowed-tools 时做
-   * 一次性的会话预授权确认。由 bootstrap 注入(它才够得着 gate 与扩根集合)。
-   */
-  activate: (meta: SkillMeta) => Promise<void>;
   /**
    * `context: fork` 的执行通道(task.ts 的 runTaskSubagent 闭包)。子 agent
    * 语境下为 undefined——fork 技能退化为内联返回正文,守住一层递归的约束。
@@ -55,8 +51,8 @@ export function skillToolDescription(index: SkillIndex): string {
     'Load a skill: a reusable instruction package provided by the user or the project. ' +
     'Call this when a listed skill matches the task at hand, BEFORE attempting the task ' +
     'yourself — the skill contains the proven procedure. The result is the skill body; ' +
-    'follow it. The skill directory becomes readable, so files it references can be ' +
-    'read directly.\n\nAvailable skills:\n' +
+    'follow it. Files the skill references live next to it and can be read directly.' +
+    '\n\nAvailable skills:\n' +
     (lines.length > 0 ? lines.join('\n') : '(none)')
   );
 }
@@ -95,7 +91,6 @@ export function createSkillTool(deps: SkillToolDeps) {
         );
       }
 
-      await deps.activate(meta);
       const body = await readSkillBody(meta);
       const prompt = substituteArgs(body, args ?? '');
 

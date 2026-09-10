@@ -8,48 +8,31 @@ import {
   Show,
   Switch,
 } from 'solid-js';
-import { Box, ScrollArea, Text, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
+import { Box, ScrollArea, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkState } from './StatusLine.js';
 import { TodoPanel } from './TodoPanel.js';
-import { GoalLine } from './GoalLine.js';
+import { ExtensionStatusLine } from './ExtensionStatusLine.js';
 import { TimelineEntry } from './Timeline.js';
-import { PermissionPrompt } from './PermissionPrompt.js';
 import { collapseItems } from './focus.js';
-import {
-  buildResumeItems,
-  createTimelineController,
-  nextKey,
-  sessionBanner,
-} from './timeline-controller.js';
+import { createTimelineController, nextKey } from './timeline-controller.js';
 import { createProviderActions } from './provider-actions.js';
 import { createSubmitGate } from './commands/submit-gate.js';
 import { dispatch } from './commands/index.js';
-import { launchReview } from './commands/review-cmds.js';
 import type { CommandContext } from './commands/types.js';
 import type { TimelineItem } from './types.js';
-import type {
-  PermissionDecision,
-  PermissionRequest,
-} from '../core/events.js';
 import type { SessionHandle } from '../app/session-handle.js';
 import { SessionStore } from '../session/store.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
-import { ReviewPicker, type ReviewPickerRow } from './ReviewPicker.js';
 import { SettingsPanel } from './SettingsPanel.js';
-import { ModePicker, type ModeOption } from './ModePicker.js';
-import type { TodoItem } from '../tools/index.js';
+import { parseTodos, type TodoItem } from './timeline-data.js';
+// 两个 state key 从零依赖的 wire 模块取:静态 import 扩展实现模块会把
+// `ai` + `zod` 整个拉进 TUI chunk,而这里只要两个字符串。
+import { TODO_STATE_KEY } from '../core/extension-types.js';
 import {
-  APPROVAL_PRESETS,
-  isDangerousPermissions,
-  nextCycleStep,
-  permissionsLabel,
-  presetById,
   TIMELINE_MODES,
-  type ApprovalPresetId,
-  type Permissions,
   type ReasoningEffort,
   type StatusSegment,
   type TimelineMode,
@@ -58,11 +41,7 @@ import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, providerModelIsVision } from '.
 import { ModelsPicker } from './ModelsPicker.js';
 import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
 import type { ProviderModels } from '../model/registry.js';
-import {
-  saveLanguage,
-  savePermissions,
-  saveStatusBar,
-} from '../config/save.js';
+import { saveLanguage, saveStatusBar } from '../config/save.js';
 import { selectableEfforts } from './commands/config-cmds.js';
 import { getLocale, setLocale, t, type Locale } from '../i18n/index.js';
 import { createFileLister } from '../app/file-index.js';
@@ -71,7 +50,6 @@ import { readClipboardImage } from '../app/clipboard.js';
 import {
   buildCommands,
   FOCUS_DESCRIPTIONS,
-  PRESET_DESCRIPTIONS,
   THINK_DESCRIPTIONS,
 } from './commands/registry.js';
 import { ActiveStream } from './ActiveStream.js';
@@ -86,17 +64,15 @@ interface Props {
   itemsRef?: { current: TimelineItem[] };
 }
 
+/** 空清单的稳定引用:没有 todo 时也不该每次求值造一个新数组。 */
+const EMPTY_TODOS: TodoItem[] = [];
+
 export function App(props: Props): JSX.Element {
   const session = props.session;
   const { exit } = useApp();
   const size = useTerminalSize();
 
-  const [permission, setPermission] = createSignal<PermissionRequest | undefined>(undefined);
   const [running, setRunning] = createSignal(false);
-  // 从 store 取初值:恢复会话时 restoreState 在 bootstrap 阶段就填好了
-  // todos,那时还没有订阅者,只靠 subscribe 的话要等模型下次调 todo 工具
-  // 才显示。
-  const [todos, setTodos] = createSignal<TodoItem[]>(session.todos.get());
   // ctrl+t 折叠/展开工作中的实时任务面板;偏好保持整个会话。
   //
   // 默认关闭(与 Claude Code 一致):模型每次调 todo 工具,时间线上就多一条
@@ -106,20 +82,6 @@ export function App(props: Props): JSX.Element {
   const [todoPanelOpen, setTodoPanelOpen] = createSignal(false);
   const [providerLabel, setProviderLabel] = createSignal(session.provider.label);
   const [model, setModel] = createSignal(session.provider.model);
-  // 两轴权限 + plan 标志。UI 展示与判断都从这份镜像取,靠 permission-change
-  // 事件与 bootstrap 同步。
-  const [perms, setPerms] = createSignal<Permissions>({
-    sandbox: session.config.sandbox,
-    approval: session.config.approval,
-  });
-  const [planActive, setPlanActive] = createSignal(session.config.plan);
-  // 有没有目标在身。只管"那一行要不要渲染";轮数与已用时由 GoalLine 自己
-  // 按秒现取——目标循环两轮之间几十秒里 App 没有任何信号变化,靠 props
-  // 传快照会一直停在设定目标那一刻的数字。初值取 session:`mojocode -c`
-  // 恢复的目标在首帧就该显示出来。
-  const [goalActive, setGoalActive] = createSignal(session.goal.active);
-  // 状态栏/头部显示的标签:plan 压过两轴。
-  const modeLabel = () => (planActive() ? 'plan' : permissionsLabel(perms()));
   const [think, setThink] = createSignal<ReasoningEffort>(session.provider.reasoningEffort);
   const [ctrlCArmed, setCtrlCArmed] = createSignal(false);
   const [locale, setLocaleState] = createSignal(getLocale());
@@ -127,20 +89,14 @@ export function App(props: Props): JSX.Element {
   // /setting 设置面板(语言、状态栏)。开着时 Input 与 Footer 卸载,面板
   // 自带按键处理——与回退选择器同一套互斥渲染。
   const [settingsOpen, setSettingsOpen] = createSignal(false);
-  // 点底栏权限档位弹出的选项框。与设置面板同一套互斥渲染(Input/Footer 卸载)。
-  const [modePickerOpen, setModePickerOpen] = createSignal(false);
   // esc-esc 回退:第一次 esc 预备(footer 提示),第二次打开回退选择器。
   const [escArmed, setEscArmed] = createSignal(false);
-  // shift+tab 切换后在状态栏短暂回显新档位:mode 段可能在 /setting 里被关掉,
-  // Header 又只在默认档时不显示且早已滚出屏幕——没有这个回显,按下去会毫无反馈。
-  const [modeFlash, setModeFlash] = createSignal<string | undefined>(undefined);
-  let modeFlashTimer: NodeJS.Timeout | undefined;
   // /focus 时间线密度;ctrl+o 会话内循环切换,/focus <mode> 落盘。
   // `?? 'full'` 防御测试里的精简版 fake session(config 缺字段)。
   const [timelineMode, setTimelineMode] = createSignal<TimelineMode>(
     session.config.timeline ?? 'full',
   );
-  // ctrl+o 切换后在 footer 短暂回显新档位(与 modeFlash 同理:得有反馈)。
+  // ctrl+o 切换后在 footer 短暂回显新档位(得有反馈)。
   const [focusFlash, setFocusFlash] = createSignal<TimelineMode | undefined>(undefined);
   let focusFlashTimer: NodeJS.Timeout | undefined;
   // ctrl+r 的详情开关:思考正文与工具输出默认折叠,展开是全局的一档
@@ -156,166 +112,26 @@ export function App(props: Props): JSX.Element {
   // 数据在打开前拉好;单组失败在选择器里就地标注,手动输入行永远兜底。
   const [modelsPicker, setModelsPicker] = createSignal<ProviderModels[] | undefined>(undefined);
   const [providerPicker, setProviderPicker] = createSignal<ProviderRow[] | undefined>(undefined);
-  // /review 选完预设后的第二级选择器(基准分支 / 提交),同上面的互斥渲染。
-  const [reviewPicker, setReviewPicker] = createSignal<
-    { kind: 'base' | 'commit'; title: string; rows: ReviewPickerRow[] } | undefined
-  >(undefined);
   // 回退后预填输入框的内容;Input 写入后回调清空,避免它重挂载时二次覆盖
   // 用户的新草稿。
   const [prefill, setPrefill] = createSignal<{ text: string } | undefined>(undefined);
   const clearPrefill = () => setPrefill(undefined);
-  // /review 第二级选择器 esc 返回预设层:请求 Input 重开 review 的二级
-  // 选择器。与 prefill 同一消费语义(新对象 + 回调清空)。
-  const [selectorRequest, setSelectorRequest] = createSignal<
-    { command: string; index?: number } | undefined
-  >(undefined);
-  const clearSelectorRequest = () => setSelectorRequest(undefined);
-
   /**
-   * 有覆盖层占着屏幕底部——授权确认框、回退选择器、档位选项框、设置面板、
-   * 模型/厂商选择器、/review 的分支/提交选择器取第一个成立的(见下方渲染处
-   * 的 <Switch>)。它们渲染期间 Input 与 Footer 都已卸载,所以任何「靠 footer
-   * 回显反馈」的全局快捷键都要拿它挡一下。
+   * 有覆盖层占着屏幕底部——回退选择器、设置面板、模型/厂商选择器取第一个
+   * 成立的(见下方渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已
+   * 卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
    */
   const overlayOpen = () =>
-    permission() !== undefined ||
     rewind() !== undefined ||
     settingsOpen() ||
-    modePickerOpen() ||
     modelsPicker() !== undefined ||
-    providerPicker() !== undefined ||
-    reviewPicker() !== undefined;
-
-  /**
-   * 把两轴档位写进本工作区的 `.mojocode/config.json`(底栏选项框与 /approvals
-   * 共用这一条落盘路径;shift+tab 不走,见 applyMode)。
-   *
-   * 落盘是尽力而为:写不进去只提示一句,本会话的档位早已生效,不该被一个
-   * 写文件的失败拖住。返回配置文件路径,失败为 undefined。
-   */
-  const persistPermissions = async (next: Permissions): Promise<string | undefined> =>
-    savePermissions(session.root, next).catch((err: Error) => {
-      push({
-        kind: 'notice',
-        level: 'warn',
-        message: t('notice.modeSaveFailed', { message: err.message }),
-      });
-      return undefined;
-    });
-
-  /**
-   * 切到某一档权限(预设 id 或 'plan')。shift+tab 的循环、点击底栏弹出的
-   * 选项框都归到这一个出口上。
-   *
-   * `persist` 由调用方点名,没有默认值:落盘改的是可提交的项目配置,新加一个
-   * 入口时必须停下来想一次它算不算"用户点名指定了这一档"。
-   * - 选项框(与 /approvals 同理):用户指着某一档选的,落盘,选一次管到下次启动。
-   * - shift+tab:盲步进——按下去之前并不知道会落在哪一档,一次误触不该改写
-   *   项目配置。尤其是从 plan 出来那一步,循环规定落到 read-only,那是"退出
-   *   计划模式"的附带结果,不是用户对档位的表态;真按它落盘,项目里签入的
-   *   `auto` 就被两下 tab 悄悄改成了 read-only。
-   *
-   * plan 任何情况下都不落盘——它是一次协作方式的选择(方案批准后就该还原),
-   * 不是档位;存下来会让每个新会话都莫名其妙地开在计划模式里。
-   */
-  const applyMode = (id: ApprovalPresetId | 'plan', opts: { persist: boolean }) => {
-    if (id === 'plan') {
-      session.setPlan(true);
-      setPlanActive(true);
-    } else {
-      const next = presetById(id);
-      session.setPermissions(next);
-      setPerms(next);
-      setPlanActive(false);
-      // full-access 绕过硬拒名单——只给底栏两秒的回显不够:得在时间线上留一条,
-      // 事后翻记录也看得见这一段是在无沙箱下跑的。
-      if (isDangerousPermissions(next)) {
-        push({ kind: 'notice', level: 'warn', message: t('notice.modeDanger', { mode: id }) });
-      }
-      // 落盘的那条路要说出来:一次点选改掉了一个可提交的文件,不该只有底栏
-      // 闪两秒。(/approvals 自己会提示,它不走这里。)
-      if (opts.persist) {
-        void persistPermissions(next).then((saved) => {
-          if (saved) {
-            push({
-              kind: 'notice',
-              level: 'info',
-              message: t('notice.modeSavedTo', { path: saved }),
-            });
-          }
-        });
-      }
-    }
-    // 档位可能在 /setting 里被关掉、Header 又早已滚出屏幕,没有回显就等于
-    // 没有反馈。
-    setModeFlash(id);
-    if (modeFlashTimer) clearTimeout(modeFlashTimer);
-    modeFlashTimer = setTimeout(() => setModeFlash(undefined), 2000);
-  };
-
-  /**
-   * 权限档位循环一步(read-only → ask → auto → full-access → plan → read-only)。
-   * 只改本会话,不落盘:盲步进的落点不算用户对档位的表态(见 applyMode)。
-   *
-   * 调用方负责挡住覆盖层打开时的情形:授权确认框开着时改规则,等于在"要不要
-   * 放行这一次"的中途改掉规则本身;其余覆盖层渲染期间 Footer 已卸载,切了档位
-   * 没有任何反馈。
-   */
-  const cycleMode = () => {
-    const step = nextCycleStep(
-      { sandbox: session.config.sandbox, approval: session.config.approval },
-      session.config.plan,
-    );
-    applyMode('plan' in step ? 'plan' : step.preset, { persist: false });
-  };
-
-  /**
-   * 底栏档位的选项框(点一下弹出)。它比 shift+tab 多的是"由你指定落在哪一档"
-   * ——正因为是点名指定的,这一档会落盘到本工作区,选一次管到下次启动。
-   * plan 与四个预设并列列出:底栏那一段显示的就是这五种取值。
-   */
-  const modeOptions = (): ModeOption[] => [
-    ...APPROVAL_PRESETS.map((p) => ({
-      id: p.id as string,
-      label: t(PRESET_DESCRIPTIONS[p.id]),
-      current: !planActive() && p.id === permissionsLabel(perms()),
-    })),
-    { id: 'plan', label: t('approvalopt.plan'), current: planActive() },
-  ];
-
-  const pickMode = (id: string) => {
-    setModePickerOpen(false);
-    applyMode(id as ApprovalPresetId | 'plan', { persist: true });
-  };
-
-  /**
-   * 弹出授权确认框,并关掉被它抢占的那些覆盖层。
-   *
-   * 确认框在 <Switch> 里优先级最高,底下几个只是渲染不出来、信号还开着——
-   * 不就地关掉的话,用户决定完确认框它们就"复活"盖在输入框上,那时一个下意识
-   * 的回车按到的是它们的确认动作(改权限档位 / 回退到某条消息 / 进设置分区 /
-   * 切模型或厂商),而不是提交消息。回退那一支尤其严重:它会截断历史。
-   *
-   * 关掉等价于按 esc:它们都只有游标和草稿这类本地状态,丢弃即可。
-   */
-  const showPermission = (request: PermissionRequest) => {
-    setModePickerOpen(false);
-    setSettingsOpen(false);
-    setRewind(undefined);
-    setModelsPicker(undefined);
-    setProviderPicker(undefined);
-    setReviewPicker(undefined);
-    setPermission(request);
-  };
-
-  // 待处理的权限 resolver。Solid 下就是普通变量:处理器读的永远是当前值。
-  let resolvePermission: ((decision: PermissionDecision) => void) | undefined;
+    providerPicker() !== undefined;
 
   /**
    * 事件状态机:AgentEvent → 时间线/流式/状态行/用量(实现见
-   * timeline-controller.ts)。App 只拿回 getter/setter;权限弹窗、权限镜像、
-   * 模型名、目标行这四样归 App 的信号,经回调上抛。必须在 setup 作用域内
-   * 同步创建(订阅的 onCleanup 绑定当时的 owner)。
+   * timeline-controller.ts)。App 只拿回 getter/setter;模型名归 App 的信号,
+   * 经回调上抛。必须在 setup 作用域内同步创建(订阅的 onCleanup 绑定当时的
+   * owner)。
    */
   const {
     items,
@@ -332,16 +148,14 @@ export function App(props: Props): JSX.Element {
     setWork,
     endWork,
     setUsage,
-  } = createTimelineController(session, {
-    onPermissionRequest: showPermission,
-    // 命令侧的手动同步是同值 setState,与事件路径并存不碍事。
-    onPermissionChange: (permissions, plan) => {
-      setPerms(permissions);
-      setPlanActive(plan);
-    },
-    getModel: model,
-    onGoalActiveChange: setGoalActive,
-  });
+  } = createTimelineController(session, { getModel: model });
+
+  // 装配期的提示(见 SessionHandle.startupNotices):进程内模式下 bootstrap
+  // emit 的时刻没有任何订阅者,只能在这里取。远程模式该字段为空,提示经
+  // SSE 走 bus,不会重复。
+  for (const notice of session.startupNotices ?? []) {
+    push({ kind: 'notice', level: notice.level, message: notice.message });
+  }
 
   let ctrlCTimer: NodeJS.Timeout | undefined;
   let escTimer: NodeJS.Timeout | undefined;
@@ -350,11 +164,6 @@ export function App(props: Props): JSX.Element {
   // 可变状态,语义注释随实现住在 ./commands/submit-gate.ts。
   const submitGate = createSubmitGate();
 
-  {
-    const off = session.todos.subscribe(setTodos);
-    onCleanup(off);
-  }
-
   // 技能列表变化(新增/删除 SKILL.md、/skills 强制重扫)时 bump 信号,
   // 驱动 commands memo 重算,`/` 菜单跟着刷新。
   const [skillsTick, setSkillsTick] = createSignal(0);
@@ -362,38 +171,35 @@ export function App(props: Props): JSX.Element {
     const off = session.skillsChanged(() => setSkillsTick((n) => n + 1));
     onCleanup(off);
   }
-
-  // 把权限门禁的询问回调桥接到确认提示组件。
-  session.gate.setAsker((request) => {
-    showPermission(request);
-    return new Promise<PermissionDecision>((resolve) => {
-      resolvePermission = resolve;
-    });
+  // 扩展的命令表/状态行同款:变化时 bump 信号,菜单与输入框上方的状态行重算。
+  const [extensionsTick, setExtensionsTick] = createSignal(0);
+  {
+    const off = session.extensionsChanged(() => setExtensionsTick((n) => n + 1));
+    onCleanup(off);
+  }
+  const extensionStatus = createMemo(() => {
+    extensionsTick();
+    return session.extensionStatus;
+  });
+  /**
+   * todo 清单由 todo 扩展经 setState 发布(核心不再有 TodoStore):形状不对
+   * 一律当没有——扩展没装、或换了别的实现时,面板与底栏摘要各自消失即可。
+   *
+   * **memo 而非普通箭头**:parseTodos 是个 filter,每次求值都返回新数组,而
+   * 这个访问器一次渲染要被读五遍(todoPanelActive / todoPanelVisible /
+   * todoHint / Footer / TodoPanel),新引用还会让 TodoPanel 里按 props.todos
+   * 建的 memo 每遍都重算。它原来是 `session.todos.subscribe` 喂的 signal,
+   * 引用天然稳定;搬成扩展状态之后这份稳定性得自己补回来。
+   */
+  const todos = createMemo((): TodoItem[] => {
+    extensionsTick();
+    return parseTodos(session.extensionState[TODO_STATE_KEY]) ?? EMPTY_TODOS;
   });
 
-  const onDecide = (decision: PermissionDecision) => {
-    setPermission(undefined);
-    // 决定之后 agent 继续跑,状态从"等待确认"回到"思考中";若拒绝导致
-    // 回合结束,turn-end/aborted 会随后把状态清掉。
-    setWork((prev) => (prev ? { phase: 'thinking', since: prev.since } : prev));
-    const resolve = resolvePermission;
-    resolvePermission = undefined;
-    resolve?.(decision);
-  };
-
-  // ctrl+c 无论何时都要能退出(包括权限确认框打开时),所以单独一个
-  // 始终激活的处理器。依赖 kit render() 默认的 exitOnCtrlC: false——否则
-  // 渲染器会在 useInput 之前吞掉这个按键,这里永远收不到。
+  // ctrl+c 无论何时都要能退出(包括覆盖层打开时),所以单独一个始终激活的
+  // 处理器。依赖 kit render() 默认的 exitOnCtrlC: false——否则渲染器会在
+  // useInput 之前吞掉这个按键,这里永远收不到。
   useInput((input, key) => {
-    // shift+tab 循环切权限档位(ask → auto → plan),与 Claude Code /
-    // Codex 的手感一致。full-access 刻意不在循环里。授权确认框开着时不接:
-    // 那会在你决定"要不要放行这一次"的中途改掉规则本身。
-    // 其余覆盖层(回退选择器、设置面板)打开时同样不接:它们渲染期间 Footer
-    // 已卸载,切了档位没有任何反馈,之后的写操作会在用户不知情的模式下放行。
-    if (key.tab && key.shift && !overlayOpen()) {
-      cycleMode();
-      return;
-    }
     if (key.ctrl && input === 't') {
       setTodoPanelOpen((open) => !open);
       return;
@@ -438,7 +244,6 @@ export function App(props: Props): JSX.Element {
   onCleanup(() => {
     if (ctrlCTimer) clearTimeout(ctrlCTimer);
     if (escTimer) clearTimeout(escTimer);
-    if (modeFlashTimer) clearTimeout(modeFlashTimer);
     if (focusFlashTimer) clearTimeout(focusFlashTimer);
     if (expandFlashTimer) clearTimeout(expandFlashTimer);
     if (copyFlashTimer) clearTimeout(copyFlashTimer);
@@ -451,19 +256,14 @@ export function App(props: Props): JSX.Element {
     copyFlashTimer = setTimeout(() => setCopyFlash(undefined), 2000);
   });
 
-  // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/models、
-  // shift+tab 等会话中途的改动会反映进去。
+  // 重建时间线时的横幅:与 sessionBanner 的区别是读 state 镜像,/models
+  // 等会话中途的改动会反映进去。
   const bannerItem = (): TimelineItem => ({
     key: nextKey(),
     kind: 'banner',
     providerLabel: providerLabel(),
     model: model(),
     root: session.root,
-    mode: modeLabel(),
-    mcpSummary:
-      session.mcpStatuses.length > 0
-        ? `${session.mcpStatuses.filter((s) => s.connected).length}/${session.mcpStatuses.length}`
-        : undefined,
   });
 
   // 重放时间线:/resume 与 esc-esc 回退共用。全屏渲染下这只是一次普通的
@@ -482,23 +282,17 @@ export function App(props: Props): JSX.Element {
       // 窗口——没有可作废的提交,清掉标志只会重新打开 busy 门(见
       // submit-gate 的注释)。窗口次秒级,忽略这次 esc;轮子转
       // 起来后走下面的正常中断。
-      if (submitGate.cannedPending && !session.agent.isRunning && !session.goal.busy) return;
+      if (submitGate.cannedPending && !session.agent.isRunning) return;
       submitGate.invalidate();
-      if (!session.agent.isRunning && !session.goal.busy) {
+      if (!session.agent.isRunning) {
         setRunning(false);
         return;
       }
     }
     if (session.agent.isRunning) {
-      // 目标循环进行中时,中断这一轮就够了:那一轮收不到 turn-end,
-      // GoalController 据此停下整个循环(见它的 run())。
+      // 链条(首轮 + 扩展排的续跑)期间 isRunning 一直为真,两轮之间也是:
+      // abort 落在轮内就掐当前流,落在两轮之间就丢掉排好的续跑(见 loop.ts)。
       session.agent.abort();
-      return;
-    }
-    // 评估窗口:agent 是空闲的,但用户按 esc 要停的是整个循环。不拦下的话
-    // 这次 esc 会去武装回退选择器,而循环转头又若无其事地开了下一轮。
-    if (session.goal.busy) {
-      session.goal.clear('aborted');
       return;
     }
     // 压缩期间历史随时会被替换,回退下标不可靠,不开选择器。
@@ -590,12 +384,8 @@ export function App(props: Props): JSX.Element {
 
   // ---- 斜杠命令:dispatch 入口与依赖上下文(实现见 ./commands/) ----
 
-  /** 运行中拦截谓词:isRunning、isCompacting、提交在途、goal.busy 任一成立。 */
-  const busy = () =>
-    session.agent.isRunning ||
-    session.agent.isCompacting ||
-    submitGate.pending ||
-    session.goal.busy;
+  /** 运行中拦截谓词:isRunning、isCompacting、提交在途任一成立。 */
+  const busy = () => session.agent.isRunning || session.agent.isCompacting || submitGate.pending;
 
   const cmdCtx: CommandContext = {
     session,
@@ -606,13 +396,8 @@ export function App(props: Props): JSX.Element {
     setWork,
     endWork,
     usage,
-    perms,
-    planActive,
-    modeLabel,
     think,
     timelineMode,
-    setPerms,
-    setPlanActive,
     setThink,
     setTimelineMode,
     setProviderLabel,
@@ -621,11 +406,9 @@ export function App(props: Props): JSX.Element {
     setSettingsOpen,
     setModelsPicker,
     setProviderPicker,
-    setReviewPicker,
     setPrefill,
     busy,
     bannerItem,
-    persistPermissions,
     providerActions,
     submitGate,
   };
@@ -634,9 +417,6 @@ export function App(props: Props): JSX.Element {
 
   // @ 文件补全的数据源:懒扫描 + TTL 缓存,注入给 Input。
   const fileLister = createFileLister(session.root);
-
-  // 稳定引用:GoalLine 靠自己的秒表驱动,每次现读快照。
-  const goalSnapshot = () => session.goal.snapshot();
 
   const handleSubmit = (text: string, pastedImages?: ImageAttachment[]) => {
     if (text.startsWith('/')) {
@@ -648,13 +428,13 @@ export function App(props: Props): JSX.Element {
     // 阶段二的应用轮提示词随后撞上防重入兜底、整份灌进用户那轮;且这条
     // 路径会清掉 submitPending 把 busy 门重新打开。窗口期内拒绝——轮子转
     // 起来(turn-start 之后)inject 恢复正常,引导照常可用。
-    if (submitGate.cannedPending && !session.agent.isRunning && !session.goal.busy) {
+    if (submitGate.cannedPending && !session.agent.isRunning) {
       push({ kind: 'notice', level: 'warn', message: t('notice.cannedBusy') });
       return;
     }
     // 以 agent 的真实运行状态为准,不依赖可能滞后的渲染状态。展开
     // @ 引用是异步的,空闲时先亮起运行态保住提交的即时反馈。
-    if (!session.agent.isRunning && !session.goal.busy) setRunning(true);
+    if (!session.agent.isRunning) setRunning(true);
     // 回车之后、run() 之前有一段 agent 仍是 idle 的窗口。不标记的话,
     // 这期间 esc 会去武装回退选择器而不是取消,/clear 之类命令也会绕过
     // busy 拦截把历史换掉,随后排队的这一轮再往新会话里写。
@@ -665,7 +445,6 @@ export function App(props: Props): JSX.Element {
       try {
         const result = await expandAtReferences(text, {
           root: session.root,
-          denyPath: session.config.permissions.denyPath,
           // 非视觉模型直接以引用模式展开 @图:省掉纯 JS 降采样(大截图要
           // 几百毫秒 CPU)。判定与 Agent.prepareUserMessage 共用
           // providerModelIsVision;粘贴图没有引用模式,降级发生在 Agent 侧
@@ -691,7 +470,7 @@ export function App(props: Props): JSX.Element {
       }
       // 展开期间按了 esc(或又提交了一次):这一轮作废,不再发起。
       if (submitGate.gen !== gen) {
-        if (!session.agent.isRunning && !session.goal.busy) setRunning(false);
+        if (!session.agent.isRunning) setRunning(false);
         return;
       }
       submitGate.clearPending();
@@ -710,18 +489,11 @@ export function App(props: Props): JSX.Element {
         ...(expanded !== text ? { display: text } : {}),
         ...(images.length > 0 ? { images } : {}),
       };
-      if (await session.goal.steer(expanded, runOptions)) {
-        // 这里**不**回显用户消息:与 inject 那条路不同,这条最终是经
-        // agent.run 发出去的,会发 turn-start,时间线届时自己回显一次。
-        // 两边都推的话会出现两条用户气泡。
-        push({ kind: 'notice', level: 'info', message: t('notice.goalSteered') });
-        return;
-      }
       setRunning(true);
-      // 经 goal.run 而不是 agent.run:没有目标时它就是原样透传,有目标时
-      // 由它接管后续的评估与自动续跑,setRunning(false) 也因此只在整个
-      // 循环结束时才触发,状态行在自动续跑期间保持常亮。
-      await session.goal
+      // run 覆盖整个链条(首轮 + 扩展经 followUp 排的续跑,如 /goal 的评估
+      // 后续跑),setRunning(false) 因此只在链条结束时才触发,状态行在自动
+      // 续跑期间保持常亮。
+      await session.agent
         .run(expanded, Object.keys(runOptions).length > 0 ? runOptions : undefined)
         .finally(() => setRunning(false));
     })().catch((err: Error) => {
@@ -741,12 +513,6 @@ export function App(props: Props): JSX.Element {
   const commands = createMemo<SlashCommand[]>(() => {
     locale();
     const optionSources: Record<string, SlashCommand['options']> = {
-      approvals: () =>
-        APPROVAL_PRESETS.map((p) => ({
-          value: p.id,
-          label: t(PRESET_DESCRIPTIONS[p.id]),
-          current: !planActive() && p.id === permissionsLabel(perms()),
-        })),
       // 档位来源见 selectableEfforts(与 /think 参数校验同一处)。
       think: async () =>
         (await selectableEfforts(session)).map((l) => ({
@@ -760,25 +526,6 @@ export function App(props: Props): JSX.Element {
           label: t(FOCUS_DESCRIPTIONS[m]),
           current: m === timelineMode(),
         })),
-      // /review 的预设选择器(Codex 式两行渲染):四个固定预设,顺序与 Codex
-      // 一致。base/commit 提交后在命令分支里再开第二级选择器选分支/提交;
-      // custom 提交后预填输入框。git 在 server 侧跑——--attach 时仓库不在 UI
-      // 这台机器上;非仓库返回空表,Input 的选择器对空表回退成裸提交,由命令
-      // 分支给出 no-repo 提示。
-      review: async (): Promise<CommandOption[]> => {
-        const targets = await session.reviewTargets().catch(() => undefined);
-        if (!targets?.isRepo) return [];
-        return [
-          { value: 'base', title: t('reviewopt.baseTitle'), label: t('reviewopt.baseDesc') },
-          {
-            value: 'uncommitted',
-            title: t('reviewopt.uncommittedTitle'),
-            label: t('reviewopt.uncommittedDesc'),
-          },
-          { value: 'commit', title: t('reviewopt.commitTitle'), label: t('reviewopt.commitDesc') },
-          { value: 'custom', title: t('reviewopt.customTitle'), label: t('reviewopt.customDesc') },
-        ];
-      },
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
           value: id,
@@ -806,14 +553,30 @@ export function App(props: Props): JSX.Element {
     // 内置命令是不可替代的会话操作,不能被仓库里的一个文件顶掉。
     // description 是用户内容,原样展示,不过 t()。
     skillsTick();
+    extensionsTick();
     const taken = new Set(builtin.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
+    // 扩展注册的命令排在内置之后、技能之前:它们是会话进程里的代码,比磁盘
+    // 上的一个 SKILL.md 更接近内置;同名规则与技能一致——内置优先。
+    const extensionCommands = session.extensionCommands
+      .filter((c) => !taken.has(c.name))
+      .map((c) => {
+        taken.add(c.name);
+        return {
+          name: c.name,
+          description: c.argumentHint ? `${c.description} · ${c.argumentHint}` : c.description,
+          ...(c.selectorTitle ? { selectorTitle: c.selectorTitle } : {}),
+          // 取值每次现取(档位要标当前生效的那一档,分支列表要跑 git),
+          // 所以是一次 RPC 而不是随快照过线的静态表。
+          ...(c.hasOptions ? { options: (path: string[]) => session.commandOptions(c.name, path) } : {}),
+        };
+      });
     const skillCommands = session.skills
       .filter((s) => !taken.has(s.name))
       .map((s) => ({
         name: s.name,
         description: s.argumentHint ? `${s.description} · ${s.argumentHint}` : s.description,
       }));
-    return [...builtin, ...skillCommands];
+    return [...builtin, ...extensionCommands, ...skillCommands];
   });
 
   // 工作中且有任务时,状态行下方挂实时任务面板(Claude Code 的 ctrl+t 面板);
@@ -848,33 +611,22 @@ export function App(props: Props): JSX.Element {
     // 再叠一层的话,状态行/待办面板都不在的常态会空出两行——正是时间线与
     // 输入框之间那道多出来的缝。与上方块的间距归上方块自己的 marginBottom。
     <Box flexDirection="column">
-      {/* 目标进度贴在输入框正上方靠右:一眼能看到跑到第几轮、花了多久,
-          而不必敲 /goal 去问。授权确认框、回退选择器或设置面板打开时不渲染
+      {/* 扩展的状态行贴在输入框正上方靠右(如 /goal 的「目标 3/10 · 1m04s」):
+          一眼能看到进度而不必敲命令去问。回退选择器或设置面板打开时不渲染
           (它们走的是那串互斥分支的其他支)。 */}
-      <Show when={goalActive()}>
-        <GoalLine snapshot={goalSnapshot} columns={size.columns} />
-      </Show>
+      <ExtensionStatusLine entries={extensionStatus} columns={size.columns} />
       <Input
         onSubmit={handleSubmit}
         disabled={false}
         work={work()}
         todoHint={todoHint()}
         turnTokens={turnTokens()}
-        placeholder={
-          running() || work()
-            ? t('input.steer')
-            : planActive()
-              ? t('input.planPlaceholder')
-              : t('input.placeholder')
-        }
-        mode={modeLabel()}
+        placeholder={running() || work() ? t('input.steer') : t('input.placeholder')}
         busy={running() || Boolean(work())}
         commands={commands()}
         onEscape={handleEscape}
         prefill={prefill()}
         onPrefillConsumed={clearPrefill}
-        requestSelector={selectorRequest()}
-        onSelectorConsumed={clearSelectorRequest}
         fileIndex={fileLister}
         readClipboardImage={readClipboardImage}
         onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
@@ -886,10 +638,6 @@ export function App(props: Props): JSX.Element {
         // 实时面板已在上方展开时,底栏不再重复一行摘要。
         todos={todoPanelVisible() ? [] : todos()}
         model={model()}
-        mode={modeLabel()}
-        // 点底栏的档位弹出选项框(覆盖层打开时 Footer 不在,也就没有"确认框
-        // 中途改规则"的口子)。
-        onModeClick={() => setModePickerOpen(true)}
         root={session.root}
         think={think()}
         segments={statusSegments()}
@@ -899,15 +647,13 @@ export function App(props: Props): JSX.Element {
             ? t('status.ctrlcAgain')
             : escArmed()
               ? t('status.escAgainRewind')
-              : modeFlash()
-                ? t('status.modeCycled', { mode: modeFlash()! })
-                : focusFlash()
-                  ? t('status.focusCycled', { mode: focusFlash()! })
-                  : expandFlash() !== undefined
-                    ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
-                    : copyFlash() !== undefined
-                      ? t('status.selectionCopied', { n: copyFlash()! })
-                      : undefined
+              : focusFlash()
+                ? t('status.focusCycled', { mode: focusFlash()! })
+                : expandFlash() !== undefined
+                  ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
+                  : copyFlash() !== undefined
+                    ? t('status.selectionCopied', { n: copyFlash()! })
+                    : undefined
         }
       />
     </Box>
@@ -968,14 +714,10 @@ export function App(props: Props): JSX.Element {
         </Show>
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
-            授权确认框 > 回退选择器 > 档位选项框 > 设置面板 > 模型/厂商选择器
-            > /review 的分支/提交选择器 > 常态输入框,按这个优先级取第一个成立
-            的。用 Switch 而不是层层嵌套的 Show/fallback——后者每加一个覆盖层
-            就多一级缩进,还得改上一个人的那支。 */}
+            回退选择器 > 设置面板 > 模型/厂商选择器 > 常态输入框,按这个优先级
+            取第一个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者每
+            加一个覆盖层就多一级缩进,还得改上一个人的那支。 */}
         <Switch fallback={<InputArea />}>
-          <Match when={permission()} keyed>
-            {(request: PermissionRequest) => <PermissionPrompt request={request} onDecide={onDecide} />}
-          </Match>
           <Match when={rewind()} keyed>
             {(entries: RewindEntry[]) => (
               <RewindPicker
@@ -984,13 +726,6 @@ export function App(props: Props): JSX.Element {
                 onCancel={() => setRewind(undefined)}
               />
             )}
-          </Match>
-          <Match when={modePickerOpen()}>
-            <ModePicker
-              options={modeOptions()}
-              onPick={pickMode}
-              onCancel={() => setModePickerOpen(false)}
-            />
           </Match>
           <Match when={settingsOpen()}>
             <SettingsPanel
@@ -1025,28 +760,6 @@ export function App(props: Props): JSX.Element {
                   void providerActions.applyProviderSwitch(id, apiKey);
                 }}
                 onCancel={() => setProviderPicker(undefined)}
-              />
-            )}
-          </Match>
-          <Match when={reviewPicker()} keyed>
-            {(picker: { kind: 'base' | 'commit'; title: string; rows: ReviewPickerRow[] }) => (
-              <ReviewPicker
-                title={picker.title}
-                rows={picker.rows}
-                onPick={(value) => {
-                  setReviewPicker(undefined);
-                  launchReview(cmdCtx, `${picker.kind} ${value}`);
-                }}
-                onCancel={() => {
-                  // esc 退回上一级:重开预设选择器,光标还原到刚才那个预设
-                  // (base=0 / commit=2)。Input 随本浮层关闭而重挂,请求在
-                  // 挂载效应里消费。
-                  setReviewPicker(undefined);
-                  setSelectorRequest({
-                    command: 'review',
-                    index: picker.kind === 'base' ? 0 : 2,
-                  });
-                }}
               />
             )}
           </Match>

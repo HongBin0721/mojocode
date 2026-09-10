@@ -8,6 +8,11 @@
     "jsxImportSource": "@opentui/solid",
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    // 搬家会留下大量已无人走的旧路径(死 import、退役字段的残留引用)。
+    // 没有 lint 配置,`npm run typecheck` 就是唯一的关卡——一次扩展化重构
+    // 里它一口气放过了四个文件的死 import,开着它们才是把这件事修在根上。
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "exactOptionalPropertyTypes": false,
     "esModuleInterop": true,
     "skipLibCheck": true,

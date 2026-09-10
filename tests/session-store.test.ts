@@ -140,7 +140,7 @@ describe('SessionStore 增量保存', () => {
 
   it('state 写入失败后不被脏检查跳过,下次仍会重试', async () => {
     const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
-    const state = { todos: [], allowBash: ['Bash(git:*)'], allowWrite: [] };
+    const state = { changedFiles: [{ path: 'a.ts', kind: 'created' as const, count: 1 }] };
 
     const spy = vi.spyOn(fs, 'appendFile').mockRejectedValueOnce(new Error('EPERM') as never);
     await store.saveState(state).catch(() => {});
@@ -148,7 +148,7 @@ describe('SessionStore 增量保存', () => {
 
     await store.saveState(state); // 同样的状态:失败过就不该被认为"已写过"
     const reopened = await SessionStore.open(store.id, dir);
-    expect(reopened.state.allowBash).toEqual(['Bash(git:*)']);
+    expect(reopened.state.changedFiles).toEqual(state.changedFiles);
   });
 
   it('含 base64 图片的 parts 消息经 JSONL 往返后完全一致', async () => {
@@ -199,7 +199,7 @@ describe('旧格式兼容', () => {
 
     const store = await SessionStore.open(id, dir);
     expect(store.messages).toHaveLength(2); // 取最后一条快照
-    expect(store.state.todos).toEqual([]);
+    expect(store.state.changedFiles).toBeUndefined();
 
     // 无旁车 → list 走慢路径,依然能列出。
     const metas = await SessionStore.list('/w', dir);
@@ -263,39 +263,16 @@ function commonPrefix(a: string, b: string): string {
 describe('state 记录', () => {
   it('saveState 往返,脏检查不写重复记录', async () => {
     const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
-    const state = {
-      todos: [{ content: '任务', status: 'pending' as const }],
-      allowBash: ['Bash(npm test:*)'],
-      allowWrite: ['src/**'],
-      permissionMode: 'acceptEdits' as const,
-    };
+    const state = { changedFiles: [{ path: 'a.ts', kind: 'created' as const, count: 1 }] };
     await store.saveState(state);
     await store.saveState(state); // 未变,不应追加
-    await store.saveState({ ...state, allowBash: [...state.allowBash] }); // 内容相同,同样跳过
+    await store.saveState({ changedFiles: [...state.changedFiles] }); // 内容相同,同样跳过
 
     const records = await readRecords(store.id);
     expect(records.filter((r) => r.kind === 'state')).toHaveLength(1);
 
     const reopened = await SessionStore.open(store.id, dir);
     expect(reopened.state).toEqual(state);
-  });
-
-  it('未完成的目标随状态往返;没有目标时字段整个不出现', async () => {
-    // 无目标时必须一字不差地还是老样子:多写一个 `goal: undefined` 会让
-    // JSON.stringify 变样,脏检查便会给每个老会话平白追加一条 state 记录。
-    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
-    // 用非空的 base:全空等于 EMPTY_STATE,脏检查会直接跳过,第一条记录根本不会写。
-    const base = { todos: [{ content: '任务', status: 'pending' as const }], allowBash: [], allowWrite: [] };
-    await store.saveState(base);
-    let records = await readRecords(store.id);
-    expect(JSON.stringify(records.at(-1))).not.toContain('goal');
-
-    await store.saveState({ ...base, goal: { condition: '让 npm test 全绿' } });
-    records = await readRecords(store.id);
-    expect(records.filter((r) => r.kind === 'state')).toHaveLength(2);
-
-    const reopened = await SessionStore.open(store.id, dir);
-    expect(reopened.state.goal).toEqual({ condition: '让 npm test 全绿' });
   });
 });
 
@@ -304,12 +281,12 @@ describe('fork', () => {
     const src = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
     const history: ModelMessage[] = [msg('user', 'a'), msg('assistant', 'b')];
     await src.save(history);
-    await src.saveState({ todos: [], allowBash: ['Bash(git:*)'], allowWrite: [] });
+    await src.saveState({ changedFiles: [{ path: 'a.ts', kind: 'created', count: 1 }] });
 
     const forked = await src.fork({ provider: 'deepseek', model: 'd' });
     expect(forked.id).not.toBe(src.id);
     expect(forked.messages).toHaveLength(2);
-    expect(forked.state.allowBash).toEqual(['Bash(git:*)']);
+    expect(forked.state.changedFiles).toEqual([{ path: 'a.ts', kind: 'created', count: 1 }]);
     expect(forked.meta.provider).toBe('deepseek');
     expect(forked.meta.title).toBe(src.meta.title);
 
@@ -624,28 +601,62 @@ describe('会话生命周期(归档/改名/删除)', () => {
 });
 
 describe('changedFiles 状态往返', () => {
-  it('空时字段不出现;非空经 state 记录往返', async () => {
+  it('空状态不写记录;非空经 state 记录往返', async () => {
     const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
-    // 空的 changedFiles 不产生字段:与加此功能前的 state JSON 一字不差
-    //(初始 EMPTY_STATE 的脏检查直接跳过,这里换个非空 state 触发写入)。
-    await store.saveState({
-      todos: [{ content: 'x', status: 'pending' }],
-      allowBash: [],
-      allowWrite: [],
-    });
-    const records = await readRecords(store.id);
-    const stateRecord = records.find((r) => r.kind === 'state') as unknown as {
-      state: Record<string, unknown>;
-    };
-    expect('changedFiles' in stateRecord.state).toBe(false);
+    // 空状态与初始 EMPTY_STATE 相同:脏检查直接跳过,不写一条空记录。
+    await store.saveState({});
+    expect((await readRecords(store.id)).filter((r) => r.kind === 'state')).toHaveLength(0);
 
-    await store.saveState({
-      todos: [],
-      allowBash: [],
-      allowWrite: [],
-      changedFiles: [{ path: 'a.ts', kind: 'created', count: 1 }],
-    });
+    await store.saveState({ changedFiles: [{ path: 'a.ts', kind: 'created', count: 1 }] });
     const reopened = await SessionStore.open(store.id, dir);
     expect(reopened.state.changedFiles).toEqual([{ path: 'a.ts', kind: 'created', count: 1 }]);
+  });
+});
+
+describe('扩展的自定义记录(custom)', () => {
+  it('saveCustom 落盘并入内存;重开会话按顺序读回,按 type 过滤', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await store.saveCustom('todo', { items: ['a'] });
+    await store.saveCustom('goal', { condition: 'tests pass' });
+    await store.saveCustom('todo', { items: ['a', 'b'] });
+
+    expect(store.custom('todo').map((r) => r.data)).toEqual([{ items: ['a'] }, { items: ['a', 'b'] }]);
+    expect(store.custom().map((r) => r.type)).toEqual(['todo', 'goal', 'todo']);
+
+    const reopened = await SessionStore.open(store.id, dir);
+    expect(reopened.custom('todo').map((r) => r.data)).toEqual([{ items: ['a'] }, { items: ['a', 'b'] }]);
+    expect(reopened.custom('goal')[0]!.data).toEqual({ condition: 'tests pass' });
+    // 对话历史不受影响:custom 不是消息。
+    expect(reopened.messages).toEqual([]);
+
+    const fromDisk = await SessionStore.readCustom(store.id, dir, 'goal');
+    expect(fromDisk).toHaveLength(1);
+    expect(fromDisk[0]!.data).toEqual({ condition: 'tests pass' });
+  });
+
+  it('custom() 返回副本,原地改数据不影响 store;saveCustom 的入参随后被改也不影响已存记录', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    const data = { items: ['a'] };
+    await store.saveCustom('todo', data);
+    data.items.push('leak');
+    const view = store.custom('todo');
+    (view[0]!.data as { items: string[] }).items.push('leak2');
+    expect(store.custom('todo')[0]!.data).toEqual({ items: ['a'] });
+  });
+
+  it('分叉把扩展记录整体带到新文件,顺序与 at 不变', async () => {
+    const store = await SessionStore.create({ root: '/w', provider: 'kimi', model: 'm', dir });
+    await store.save([msg('user', 'hi'), msg('assistant', 'yo')]);
+    await store.saveCustom('todo', { items: ['a'] });
+    await store.saveCustom('goal', { condition: 'x' });
+    const original = store.custom();
+
+    const forked = await store.fork({ provider: 'kimi', model: 'm' });
+    expect(forked.custom()).toEqual(original);
+    const reopened = await SessionStore.open(forked.id, dir);
+    expect(reopened.custom()).toEqual(original);
+    // 分叉文件里的顺序:meta → snapshot → state → custom…
+    const kinds = (await readRecords(forked.id)).map((r) => r.kind);
+    expect(kinds).toEqual(['meta', 'snapshot', 'state', 'custom', 'custom']);
   });
 });

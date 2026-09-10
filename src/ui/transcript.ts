@@ -1,5 +1,5 @@
 import { renderMarkdownAnsi } from './markdown-ansi.js';
-import { extractDiff, extractPlan, extractTodos } from './timeline-data.js';
+import { extractDiff, extractTodos } from './timeline-data.js';
 import {
   formatCacheHit,
   formatDuration,
@@ -33,7 +33,7 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
       case 'banner':
         out.push(
           DIM(
-            `── ${APP_NAME} · ${item.providerLabel} · ${item.model} · ${item.mode} · ${item.root} ──`,
+            `── ${APP_NAME} · ${item.providerLabel} · ${item.model} · ${item.root} ──`,
           ),
         );
         break;
@@ -58,28 +58,19 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         );
         break;
       case 'tool': {
-        // 保真度对齐时间线本身:方案正文、diff、todo 清单与 bash 输出都是
-        // 用户在屏幕上看过的内容,dump 丢了它们就违背了"整场会话可回看"的
-        // 承诺(exit_plan 的方案在批准后尤其是唯一留档)。
+        // 保真度对齐时间线本身:diff、todo 清单与 bash 输出都是用户在屏幕上
+        // 看过的内容,dump 丢了它们就违背了"整场会话可回看"的承诺。
         const args = formatToolInput(item.toolName, item.input);
         out.push(
           '',
           `${glyphs.bullet} ${toolDisplayName(item.toolName)}${args ? DIM(`(${truncateWidth(args, 100)})`) : ''}`,
         );
         const todos = extractTodos(item);
-        const plan = extractPlan(item);
         if (todos) {
           for (const todo of todos) {
             const box = todo.status === 'completed' ? glyphs.checked : glyphs.unchecked;
             out.push(`  ${DIM(`${box} ${todo.content}`)}`);
           }
-        } else if (plan) {
-          out.push(
-            ...renderMarkdownAnsi(plan, width - 2)
-              .split('\n')
-              .map((l) => `  ${l}`),
-          );
-          out.push(`  ${DIM(`${glyphs.branch}  ${item.summary}`)}`);
         } else {
           out.push(`  ${DIM(`${glyphs.branch}  ${truncateWidth(item.summary, 160)}`)}`);
         }

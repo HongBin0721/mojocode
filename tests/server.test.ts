@@ -4,11 +4,10 @@ import type { AddressInfo } from 'node:net';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EventBus, type PermissionRequest } from '../src/core/events.js';
+import { EventBus } from '../src/core/events.js';
 import type { StateSnapshot } from '../src/server/protocol.js';
 import { t } from '../src/i18n/index.js';
-import { TodoStore } from '../src/tools/index.js';
-import { createPermissionBroker, startServer, type RunningServer } from '../src/server/serve.js';
+import { startServer, type RunningServer } from '../src/server/serve.js';
 import { connectRemote, type RemoteSession } from '../src/client/remote.js';
 import { ProviderSwitchError, type Session } from '../src/app/bootstrap.js';
 import type { ResolvedProvider } from '../src/config/load.js';
@@ -38,13 +37,11 @@ const config = {
   model: 'kimi-k2',
   sandbox: 'workspace-write',
   approval: 'on-request',
-  plan: false,
   statusBar: [],
   timeline: 'full',
   goalMaxTurns: 10,
   providers: { kimi: { apiKey: 'super-secret' } },
   search: { backend: 'off', apiKey: 'search-secret' },
-  permissions: { allowBash: [], denyBash: [], allowWrite: [], denyPath: [], allowNet: [] },
   mcpServers: {
     local: { type: 'stdio', command: 'gh-mcp', args: [], env: { GITHUB_TOKEN: 'ghp_secret' }, enabled: true },
     remote: { type: 'http', url: 'https://mcp.example.com', headers: { Authorization: 'Bearer secret' }, enabled: true },
@@ -55,7 +52,6 @@ type FakeParts = ReturnType<typeof fakeSession>;
 
 function fakeSession() {
   const bus = new EventBus();
-  const todos = new TodoStore();
   let history: ModelMessage[] = [{ role: 'user', content: 'hello' }];
   let displayPrefix: ModelMessage[] = [{ role: 'user', content: 'compacted-away' }];
   const runGate: { resolve?: () => void } = {};
@@ -79,10 +75,8 @@ function fakeSession() {
     }),
     save: vi.fn(async () => {}),
     switch: vi.fn(() => ({ ...provider, model: 'kimi-next' })),
-    setPermissions: vi.fn(),
-    setPlan: vi.fn(),
     setReasoningEffort: vi.fn(),
-    goalSet: vi.fn(),
+    runCommand: vi.fn(async () => {}),
     resumeSession: vi.fn(async () => {
       throw new ProviderSwitchError(new Error('missing key for glm'));
     }),
@@ -93,11 +87,6 @@ function fakeSession() {
       currentBranch: 'main',
       branches: [{ name: 'feature', subject: 'first' }],
     })),
-    reviewCommits: vi.fn(async () => [
-      { sha: 'abc1234', subject: 'second: add b', date: '2 hours ago' },
-      { sha: 'def5678', subject: 'first', date: '3 hours ago' },
-    ]),
-    startReview: vi.fn(async () => ({ ok: true })),
     startSimplify: vi.fn(async () => ({ ok: true })),
     refreshSkills: vi.fn(async () => [{ name: 'demo', description: 'demo skill' }]),
   };
@@ -123,18 +112,13 @@ function fakeSession() {
       setHistory: spies.setHistory,
     },
     gate: { setAsker: vi.fn() },
-    todos,
-    goal: {
-      active: false,
-      busy: false,
-      state: undefined,
-      set: spies.goalSet,
-      clear: vi.fn(),
-      snapshot: () => undefined,
-      steer: vi.fn(() => false),
-      run: vi.fn(async () => {}),
-    },
-    mcpStatuses: [{ name: 'srv', connected: true, toolCount: 2 }],
+    extensionCommands: [{ name: 'goal', description: 'Keep working', argumentHint: '<condition> | clear' }],
+    extensionStatus: [{ id: 'goal', text: '◎ goal 1/10', since: 1_000 }],
+    extensionState: { todo: [{ content: 'a', status: 'pending' }] },
+    extensionsChanged: vi.fn(() => () => {}),
+    // 装配期提示:serve 在每个非无缝 SSE 连接上补发,少了它重连就炸。
+    startupNotices: [],
+    runCommand: spies.runCommand,
     store: {
       id: 'session-0001',
       get messages() {
@@ -154,8 +138,6 @@ function fakeSession() {
     resumeSession: spies.resumeSession,
     forkSession: vi.fn(async () => ({ id: 'session-0003' })),
     switch: spies.switch,
-    setPermissions: spies.setPermissions,
-    setPlan: spies.setPlan,
     setReasoningEffort: spies.setReasoningEffort,
     listProviderModels: vi.fn(async () => [
       { providerId: 'kimi', label: 'Kimi', models: [{ id: 'kimi-k2' }, { id: 'kimi-next' }] },
@@ -165,12 +147,9 @@ function fakeSession() {
     refreshEnvironment: vi.fn(async () => {}),
     skills: [{ name: 'demo', description: 'demo skill' }],
     skillsChanged: vi.fn(() => () => {}),
-    mcpStatusChanged: vi.fn(() => () => {}),
     refreshSkills: spies.refreshSkills,
     runSkill: spies.runSkill,
     reviewTargets: spies.reviewTargets,
-    reviewCommits: spies.reviewCommits,
-    startReview: spies.startReview,
     startSimplify: spies.startSimplify,
     archiveSession: vi.fn(async (id: string, archived: boolean) => ({
       id,
@@ -199,7 +178,6 @@ function fakeSession() {
   return {
     session,
     bus,
-    todos,
     setHistory: (m: ModelMessage[]) => (history = m),
     setDisplayPrefix: (m: ModelMessage[]) => (displayPrefix = m),
     runGate,
@@ -226,12 +204,11 @@ async function boot(parts = fakeSession()): Promise<{
   server: RunningServer;
   remote: RemoteSession;
 }> {
-  const broker = createPermissionBroker();
-  const server = await startServer({ session: parts.session, broker });
+  const server = await startServer({ session: parts.session });
   cleanups.push(() => server.close());
   const remote = await connectRemote({ url: server.url, token: server.token, ownsServer: false });
   cleanups.push(() => remote.dispose());
-  return { parts, server, remote, broker } as never;
+  return { parts, server, remote };
 }
 
 describe('server ↔ remote client', () => {
@@ -260,7 +237,6 @@ describe('server ↔ remote client', () => {
       { role: 'user', content: 'compacted-away' },
       { role: 'user', content: 'hello' },
     ]);
-    expect(remote.mcpStatuses).toHaveLength(1);
   });
 
   // /history 挂在 turn-end / aborted / compaction 上,是热路径:没压缩过的
@@ -296,13 +272,9 @@ describe('server ↔ remote client', () => {
     expect(revived?.message).toBe('boom');
   });
 
-  it('todos 变化经 state 推送驱动 client 订阅者', async () => {
-    const { parts, remote } = await boot();
-    const snapshots: number[] = [];
-    remote.todos.subscribe((items) => snapshots.push(items.length));
-    parts.todos.set([{ content: 'a', status: 'pending' }]);
-    await waitFor(() => snapshots.length > 0);
-    expect(remote.todos.get()).toEqual([{ content: 'a', status: 'pending' }]);
+  it('扩展的结构化状态经 state 推送镜像到 client', async () => {
+    const { remote } = await boot();
+    expect(remote.extensionState).toEqual({ todo: [{ content: 'a', status: 'pending' }] });
   });
 
   it('skills 进快照镜像;refreshSkills 即时调用;runSkill 走 deferred', async () => {
@@ -319,28 +291,17 @@ describe('server ↔ remote client', () => {
     });
   });
 
-  it('reviewTargets/reviewCommits 即时返回;startReview 走 deferred,乐观 run 标志随完成清除', async () => {
+  it('reviewTargets 即时返回;startSimplify 走 deferred,乐观 run 标志随完成清除', async () => {
     const { parts, remote } = await boot();
 
+    // 分支列表(GUI 顶栏的分支切换器):普通即时 RPC。/review 已是扩展命令,
+    // 它自己在会话进程里跑 git,不经这条线。
     const targets = await remote.reviewTargets();
     expect(parts.spies.reviewTargets).toHaveBeenCalledOnce();
     expect(targets.isRepo).toBe(true);
     expect(targets.branches).toEqual([{ name: 'feature', subject: 'first' }]);
 
-    const commits = await remote.reviewCommits();
-    expect(parts.spies.reviewCommits).toHaveBeenCalledOnce();
-    expect(commits[0]?.subject).toBe('second: add b');
-
-    const pending = remote.startReview('base main', { display: '/review base main' });
-    // 乐观 run 标志在 ack 之前同步置位:ack 往返的窗口期内 isRunning 不为 false。
-    expect(remote.agent.isRunning).toBe(true);
-    await expect(pending).resolves.toEqual({ ok: true });
-    expect(parts.spies.startReview).toHaveBeenCalledWith('base main', {
-      display: '/review base main',
-    });
-    await waitFor(() => !remote.agent.isRunning);
-
-    // /simplify 走同一条 deferred 通道,乐观标志同样随完成清除。
+    // /simplify 走 deferred 通道,乐观标志在 ack 之前同步置位、随完成清除。
     const pendingSimplify = remote.startSimplify('src/foo.ts', { display: '/simplify src/foo.ts' });
     expect(remote.agent.isRunning).toBe(true);
     await expect(pendingSimplify).resolves.toEqual({ ok: true });
@@ -405,31 +366,6 @@ describe('server ↔ remote client', () => {
     await waitFor(() => remote.agent.isRunning === false);
   });
 
-  it('授权往返:permission-request 事件 → client asker → broker 兑现决定', async () => {
-    const parts = fakeSession();
-    const broker = createPermissionBroker();
-    const server = await startServer({ session: parts.session, broker });
-    cleanups.push(() => server.close());
-    const remote = await connectRemote({ url: server.url, token: server.token, ownsServer: false });
-    cleanups.push(() => remote.dispose());
-
-    remote.gate.setAsker(async (request) => {
-      expect(request.title).toBe('bash: rm -rf /tmp/x');
-      return { type: 'allow-always', rule: 'Bash(rm:*)' };
-    });
-
-    const request: PermissionRequest = {
-      id: 'perm-1',
-      toolName: 'bash',
-      title: 'bash: rm -rf /tmp/x',
-      risk: 'execute',
-    };
-    // 模拟 gate:先发事件,再等 broker(与 gate.askSerialized 的顺序一致)。
-    const decisionPromise = broker.ask(request);
-    parts.bus.emit({ type: 'permission-request', request });
-    const decision = await decisionPromise;
-    expect(decision).toEqual({ type: 'allow-always', rule: 'Bash(rm:*)' });
-  });
 
   it('回退链路:setHistory 即时更新镜像并送达 server,save 随后', async () => {
     const { parts, remote } = await boot();
@@ -564,6 +500,26 @@ describe('server ↔ remote client', () => {
     expect(chunks).not.toContain('offline');
   });
 
+  it('装配期提示补发给新连上的 client,且不因"还没人订阅"而丢失', async () => {
+    // 装配期的警告(磁盘扩展加载失败之类)产生于 bootstrap 内部:那一刻
+    // serve 还没 bus.on、client 更没连上。两处都要接住——server 在每个
+    // 非无缝 SSE 连接上补发,client 在第一个订阅者接上前先排队(渲染层要到
+    // connectRemote 返回、App 挂载之后才订阅,补发帧早就到了)。
+    const parts = fakeSession();
+    (parts.session as unknown as { startupNotices: unknown[] }).startupNotices = [
+      { level: 'warn', message: 'extension foo failed to load' },
+    ];
+    const { remote } = await boot(parts);
+    // 刻意等补发帧先到,再订阅——真实时序就是 connectRemote 返回之后 App
+    // 才挂载;不睡这一下,帧比订阅晚到,client 侧的排队根本没被考到。
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const seen: string[] = [];
+    remote.bus.on((event) => {
+      if (event.type === 'notice') seen.push(event.message);
+    });
+    await waitFor(() => seen.includes('extension foo failed to load'));
+  });
+
   it('鉴权:缺 token 一律 401', async () => {
     const { server } = await boot();
     const res = await fetch(`${server.url}/state`);
@@ -576,33 +532,6 @@ describe('server ↔ remote client', () => {
     expect(bad.status).toBe(401);
   });
 
-  // 回归:授权请求只广播一次。断线重连、或 `--attach` 连上一个正跑到一半的
-  // server 时,没有重放就永远等不到确认框,server 侧 gate 一直 await = 整轮挂死。
-  it('待决的授权请求会重放给后接入的客户端', async () => {
-    const parts = fakeSession();
-    const broker = createPermissionBroker();
-    const server = await startServer({ session: parts.session, broker });
-    cleanups.push(() => server.close());
-
-    const request: PermissionRequest = {
-      id: 'perm-late',
-      toolName: 'bash',
-      title: 'bash: rm -rf /tmp/x',
-      risk: 'execute',
-    };
-    // 没有任何客户端在场时发起询问——这一条广播注定没人收到。
-    const decisionPromise = broker.ask(request);
-    parts.bus.emit({ type: 'permission-request', request });
-
-    // 客户端此刻才接入,并且在 App 挂载之前(asker 尚未注册)。
-    const remote = await connectRemote({ url: server.url, token: server.token, ownsServer: false });
-    cleanups.push(() => remote.dispose());
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    // 注册 asker:重放 + 排队两条路径合起来,请求必须最终到达。
-    remote.gate.setAsker(async () => ({ type: 'allow' }));
-
-    expect(await decisionPromise).toEqual({ type: 'allow' });
-  });
 
   // SSE 断点续传:断线期间广播的 event / call-result 经序号缓冲无缝重放。
   // call-result 是重点——丢了它,pendingCalls 里的 promise 永不 settle,
@@ -692,15 +621,30 @@ describe('server ↔ remote client', () => {
     expect(errors).toEqual([]);
   });
 
-  it('顺序依赖的调用按发起顺序到达(goalSet 先于 setPermissions)', async () => {
+  it('顺序依赖的调用按发起顺序到达(runCommand 先于 setReasoningEffort)', async () => {
     const { parts, remote } = await boot();
     const order: string[] = [];
-    parts.spies.goalSet.mockImplementation(() => order.push('set'));
-    parts.spies.setPermissions.mockImplementation(() => order.push('perms'));
-    remote.goal.set('all tests green');
-    remote.setPermissions({ sandbox: 'read-only', approval: 'never' });
+    parts.spies.runCommand.mockImplementation(async () => {
+      order.push('cmd');
+    });
+    parts.spies.setReasoningEffort.mockImplementation(() => order.push('effort'));
+    void remote.runCommand('goal', 'all tests green');
+    void remote.setReasoningEffort('high');
     await waitFor(() => order.length === 2);
-    expect(order).toEqual(['set', 'perms']);
+    expect(order).toEqual(['cmd', 'effort']);
+    expect(parts.spies.runCommand).toHaveBeenCalledWith('goal', 'all tests green');
+  });
+
+  it('扩展的命令表与状态行随快照镜像;since 按 sentAt 校到本地时钟', async () => {
+    const { remote } = await boot();
+    expect(remote.extensionCommands).toEqual([
+      { name: 'goal', description: 'Keep working', argumentHint: '<condition> | clear' },
+    ]);
+    const [status] = remote.extensionStatus;
+    expect(status).toMatchObject({ id: 'goal', text: '◎ goal 1/10' });
+    // server 报的 since 是 1_000(它的时钟);镜像加上"收到时刻 − sentAt"的偏差,
+    // 结果应落在本地时钟上——即近似 Date.now() − (sentAt − 1_000)。
+    expect(Math.abs(status!.since! - (Date.now() - (remote.snapshot.sentAt - 1_000)))).toBeLessThan(2_000);
   });
 });
 
@@ -769,7 +713,6 @@ describe('乐观运行标志(乱序回执)', () => {
     // ack 还没回来;等它落地之后再断言——修复前正是这一步把标志置回 true。
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(remote.agent.isRunning).toBe(false);
-    expect(remote.goal.busy).toBe(false);
 
     await remote.dispose();
     for (const client of sse) client.end();
@@ -782,11 +725,8 @@ function minimalState(): StateSnapshot {
     root: '/tmp/fake-root',
     provider,
     config,
-    mcpStatuses: [],
     storeId: 's1',
     agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-    goal: { active: false, busy: false },
-    todos: [],
     skills: [],
     sentAt: Date.now(),
   };

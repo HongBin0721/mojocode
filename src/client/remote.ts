@@ -4,35 +4,28 @@
  * 把 server(src/server/serve.ts)镜像成一个结构性满足 `SessionHandle` 的
  * 对象,App.tsx 对本地 Session 与远程会话零区分:
  *
- *  - **同步读取**(isRunning、权限、provider、todos、goal、历史)从 SSE 驱动
- *    的本地镜像取——server 在任何状态变化时推送 state 快照;
+ *  - **同步读取**(isRunning、权限、provider、扩展状态、历史)从 SSE
+ *    驱动的本地镜像取——server 在任何状态变化时推送 state 快照;
  *  - **方法调用**走 `POST /call`,并经内部队列**串行化**:App 里存在
- *    `goal.set(...)` 紧跟 `goal.run(...)` 这类顺序依赖,两条 fetch 并发出去
- *    可能乱序到达;
- *  - **长任务**(run / goalRun / compact)POST 只拿 ack,完成回执经 SSE
+ *    `runCommand` 紧跟 `run` 这类顺序依赖,两条 fetch 并发出去可能乱序到达;
+ *  - **长任务**(run / runSkill / compact)POST 只拿 ack,完成回执经 SSE
  *    call-result 送达——它们可能一跑几小时,长连接会被各层 HTTP 超时斩断;
- *  - **授权**:permission-request 事件照常经 bus 到达 App(渲染确认框),
- *    镜像同时调用 setAsker 注册的回调拿决定,回执 `POST /permission`。
  *
- * 乐观运行标志:`run`/`goalRun` 的 ack 与 state 推送之间有一个来回的窗口,
+ * 乐观运行标志:`run` 的 ack 与 state 推送之间有一个来回的窗口,
  * 镜像里 isRunning 仍是 false——期间二次提交会误开新轮、esc 会误开回退
  * 选择器。ack 即置乐观位,首次看到 server 报 isRunning=true(状态已权威)
  * 或任务完成时清除。
  */
 
 import type { ModelMessage } from 'ai';
-import {
-  EventBus,
-  type PermissionAsker,
-  type PermissionDecision,
-  type PermissionRequest,
-} from '../core/events.js';
-import type { Config, Permissions, ProviderConfig, ReasoningEffort } from '../config/schema.js';
+import { EventBus, type AgentEvent } from '../core/events.js';
+import type { Config, ProviderConfig, ReasoningEffort } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
-import type { McpStatus } from '../mcp/client.js';
-import type { TodoItem } from '../tools/index.js';
-import type { GoalState, GoalStatus } from '../agent/goal.js';
-import type { GoalStopReason } from '../core/events.js';
+import type {
+  ExtensionCommandInfo,
+  ExtensionCommandOption,
+  ExtensionStatusEntry,
+} from '../core/extension.js';
 import type { ChangedFileEntry, SessionMeta } from '../session/store.js';
 import type { FileContent } from '../app/workspace-read.js';
 import type { GitOpResult } from '../agent/workspace-write.js';
@@ -41,10 +34,10 @@ import type { ModelTestResult, ProviderModels } from '../model/registry.js';
 import type { ModelCapabilities } from '../model/catalog.js';
 import type { DoctorReport } from '../app/doctor.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
-import type { ReviewCommit, ReviewStartResult, ReviewTargets } from '../agent/review.js';
+import type { ReviewTargets } from '../agent/review.js';
 import type { SimplifyStartResult } from '../agent/simplify.js';
 import { ProviderSwitchError } from '../app/bootstrap.js';
-import type { RunOptions, SessionHandle } from '../app/session-handle.js';
+import type { SessionHandle } from '../app/session-handle.js';
 import { estimateTokens } from '../agent/compact.js';
 import {
   DEFERRED_METHODS,
@@ -110,6 +103,15 @@ export interface RemoteSession extends SessionHandle {
   saveProvider(id: string, patch: ProviderConfig): Promise<void>;
   deleteProvider(id: string): Promise<void>;
   /**
+   * 本地分支列表(当前分支 + 其余本地分支)。git 在 server 侧跑——`--attach`
+   * 时仓库不在 UI 这台机器上;普通即时 RPC。
+   *
+   * 与 listSessions 同理不进 SessionHandle:唯一的消费方是 GUI 顶栏的分支
+   * 切换器,TUI 一处都不读。`/review` 也不需要它——它是扩展命令,在会话
+   * 进程里直接调 collectReviewTargets。
+   */
+  reviewTargets(): Promise<ReviewTargets>;
+  /**
    * 镜像快照更新通知(GUI 桥订阅,变化后重推 renderer)。SSE 的 `state`
    * 帧不产生 bus 事件,没有这条通道,配置/模型切换这类"纯状态"变更要等
    * 下一个 agent 事件才会被桥转发。返回退订函数。
@@ -142,10 +144,41 @@ export interface RemoteSession extends SessionHandle {
   notifyServerExit(message: string): void;
 }
 
+/**
+ * 订阅之前到达的事件先排队,第一个订阅者接上时补发。
+ *
+ * 与 `askerQueue` 之于 `setAsker` 是同一条理由:`connectRemote` 一接上 SSE,
+ * server 就会把「新客户端必须知道的事」写过来(装配期警告、待决授权请求),
+ * 而渲染层要到 `await connectRemote()` 返回、App 挂载之后才 `bus.on`
+ * ——中间那个窗口里 emit 出去就是掉在地上,而那正是 server 侧特意补发的那批。
+ * 只补给**第一个**订阅者(渲染层),之后来的按普通事件处理。
+ */
+class QueuedEventBus extends EventBus {
+  private subscribed = false;
+  private queued: AgentEvent[] = [];
+
+  override on(handler: (event: AgentEvent) => void): () => void {
+    const off = super.on(handler);
+    if (!this.subscribed) {
+      this.subscribed = true;
+      for (const event of this.queued.splice(0, this.queued.length)) handler(event);
+    }
+    return off;
+  }
+
+  override emit(event: AgentEvent): void {
+    if (!this.subscribed) {
+      this.queued.push(event);
+      return;
+    }
+    super.emit(event);
+  }
+}
+
 export async function connectRemote(options: RemoteOptions): Promise<RemoteSession> {
   const { url, token } = options;
   const headers = { authorization: `Bearer ${token}` };
-  const bus = new EventBus();
+  const bus = new QueuedEventBus();
 
   const fetchJson = async (path: string, init?: RequestInit): Promise<unknown> => {
     const res = await fetch(`${url}${path}`, { ...init, headers: { ...headers, ...init?.headers } });
@@ -167,29 +200,47 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
   let closed = false;
 
   // 乐观运行标志(见文件头注释)。
-  const optimistic = { run: false, goal: false, compact: false };
+  const optimistic = { run: false, compact: false };
 
-  // todos 迷你 store:App 用 get/subscribe,变化来自 state 推送。
-  let todoItems: TodoItem[] = state.todos;
-  const todoListeners = new Set<(items: TodoItem[]) => void>();
   // skills 同款迷你 store(App 的命令菜单靠它感知列表变化)。老 server 的
   // 快照没有 skills 字段,镜像为一律空表。
   let skillItems = state.skills ?? [];
+  // 已镜像内容的序列化缓存。每帧只序列化**新来的**那份,与缓存比字符串:
+  // 原来两边都 stringify,而这两份数据不小(整张命令表带本地化描述、状态
+  // 行、以及 state 桶里的整份 todo 清单),applyState 一轮要跑几十上百次。
+  let skillsKey = JSON.stringify(skillItems);
   const skillListeners = new Set<() => void>();
+  // 扩展的命令表与状态行,同款。since 是 server 时钟:记下每帧的时钟偏差
+  // (收到时刻 − sentAt),读取时校到本地时钟——`--attach` 到另一台机器时
+  // 已用时才不会带着两台机器的钟差。
+  const emptyExtensions = {
+    commands: [] as ExtensionCommandInfo[],
+    status: [] as ExtensionStatusEntry[],
+    state: {} as Record<string, unknown>,
+  };
+  let extensionItems = state.extensions ?? emptyExtensions;
+  let extensionsKey = JSON.stringify(extensionItems);
+  let clockSkew = Date.now() - state.sentAt;
+  const extensionListeners = new Set<() => void>();
   const stateListeners = new Set<() => void>();
   const applyState = (next: StateSnapshot): void => {
     state = next;
+    clockSkew = Date.now() - next.sentAt;
     if (next.agent.isRunning) optimistic.run = false;
-    if (next.goal.busy) optimistic.goal = false;
     if (next.agent.isCompacting) optimistic.compact = false;
-    if (JSON.stringify(next.todos) !== JSON.stringify(todoItems)) {
-      todoItems = next.todos;
-      for (const listener of todoListeners) listener(todoItems);
-    }
     const nextSkills = next.skills ?? [];
-    if (JSON.stringify(nextSkills) !== JSON.stringify(skillItems)) {
+    const nextSkillsKey = JSON.stringify(nextSkills);
+    if (nextSkillsKey !== skillsKey) {
       skillItems = nextSkills;
+      skillsKey = nextSkillsKey;
       for (const listener of skillListeners) listener();
+    }
+    const nextExtensions = next.extensions ?? emptyExtensions;
+    const nextExtensionsKey = JSON.stringify(nextExtensions);
+    if (nextExtensionsKey !== extensionsKey) {
+      extensionItems = nextExtensions;
+      extensionsKey = nextExtensionsKey;
+      for (const listener of extensionListeners) listener();
     }
     // 快照整体的变更通知(GUI 桥用):TUI 在事件驱动下按需拉镜像,但
     // saveProvider/switch/远端其他客户端的操作只带来 state 帧、没有 bus
@@ -287,10 +338,7 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     });
     // 完成回执的历史刷新挂在 completion 上,ack 失败时一并收尾。
     const settled = completion.finally(() => {
-      if (RUN_LIKE_METHODS.has(method) || method === 'goalRun') {
-        optimistic.run = false;
-        optimistic.goal = false;
-      }
+      if (RUN_LIKE_METHODS.has(method)) optimistic.run = false;
       if (method === 'compact') optimistic.compact = false;
       void refreshHistory();
     });
@@ -300,10 +348,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     // 先清了标志,ack 的 .then 再把它置回 true,就永远没人清了。isRunning
     // 从此恒为真:命令全被 busy 拦、esc 永远走中断、提交一律退化成 inject。
     if (RUN_LIKE_METHODS.has(method)) optimistic.run = true;
-    if (method === 'goalRun') {
-      optimistic.run = true;
-      optimistic.goal = true;
-    }
     if (method === 'compact') optimistic.compact = true;
     void enqueue(() => postCall({ id, method, args }))
       .then((response) => {
@@ -319,34 +363,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
         entry?.reject(error);
       });
     return settled;
-  };
-
-  // ---- 授权桥 ----
-  let asker: PermissionAsker | undefined;
-  /**
-   * asker 注册之前到达的授权请求。connectRemote 早在 App 挂载(才调
-   * setAsker)之前就返回了,而 `--attach` 连上的 server 可能正跑到一半、
-   * 一接上就重放待决请求——直接丢弃的话 server 侧的 gate 会一直 await,
-   * 整轮挂死。这里先排队,setAsker 时补发。
-   */
-  const askerQueue: PermissionRequest[] = [];
-  /** 问一次并把决定回执给 server;重复到达的同一 id 由 server 侧幂等吸收。 */
-  const askPermission = (request: PermissionRequest): void => {
-    void Promise.resolve(asker!(request)).then((decision) =>
-      answerPermission(request.id, decision),
-    );
-  };
-
-  const answerPermission = (id: string, decision: PermissionDecision): void => {
-    void enqueue(() =>
-      fetch(`${url}/permission`, {
-        method: 'POST',
-        headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ id, decision }),
-      }),
-    ).catch(() => {
-      // 断线时由 SSE 侧统一报错。
-    });
   };
 
   // ---- SSE 下行流 ----
@@ -375,12 +391,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
     }
     const event = deserializeEvent(message.event);
     bus.emit(event);
-    // 授权询问:事件已经让 App 弹出确认框;这里拿 setAsker 注册的回调等决定,
-    // 回执给 server。与本地模式同构(gate 那边 emit 之后调用 ask)。
-    if (event.type === 'permission-request') {
-      if (asker) askPermission(event.request);
-      else askerQueue.push(event.request);
-    }
     // 历史随轮次推进:turn-end 时 server 侧已把本轮增量并进内存历史。
     if (
       event.type === 'turn-end' ||
@@ -477,27 +487,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
   void readSse();
   await sseReadyPromise;
 
-  // ---- goal 镜像 ----
-  const goalStatus = (): GoalStatus | undefined => {
-    const status = state.goal.status;
-    if (!status) return undefined;
-    // server 侧的计时在流逝,按快照年龄外推;轮数/判词等离散值等推送更新。
-    return { ...status, elapsedMs: status.elapsedMs + Math.max(0, Date.now() - state.sentAt) };
-  };
-  const goalState = (): Readonly<GoalState> | undefined => {
-    const status = state.goal.status;
-    if (!status) return undefined;
-    return {
-      condition: status.condition,
-      startedAt: state.sentAt - status.elapsedMs,
-      turns: status.turns,
-      lastReason: status.lastReason,
-      tokenBaseline: 0,
-      evaluatorTokens: 0,
-      restored: status.restored,
-    };
-  };
-
   const remote: RemoteSession = {
     get snapshot() {
       return state;
@@ -551,44 +540,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
         };
         void call('setHistory', { messages }).catch(() => {});
       },
-    },
-    gate: {
-      setAsker: (ask) => {
-        asker = ask;
-        // 注册前排队的请求补发(见 askerQueue 的注释)。
-        const queued = askerQueue.splice(0, askerQueue.length);
-        for (const request of queued) askPermission(request);
-      },
-    },
-    todos: {
-      get: () => todoItems,
-      subscribe: (listener) => {
-        todoListeners.add(listener);
-        return () => todoListeners.delete(listener);
-      },
-    },
-    goal: {
-      get active() {
-        return state.goal.active;
-      },
-      get busy() {
-        return state.goal.busy || optimistic.goal;
-      },
-      get state() {
-        return goalState();
-      },
-      set: (condition) => {
-        void call('goalSet', { condition }).catch(() => {});
-      },
-      clear: (reason?: GoalStopReason) => {
-        void call('goalClear', { reason }).catch(() => {});
-      },
-      snapshot: goalStatus,
-      steer: (text, options?: RunOptions) => call<boolean>('goalSteer', { text, options }),
-      run: (text, options) => callDeferred('goalRun', { text, options }).then(() => undefined),
-    },
-    get mcpStatuses() {
-      return state.mcpStatuses;
     },
     store: {
       get id() {
@@ -671,19 +622,6 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       await refreshState();
       return next;
     },
-    setPermissions: (permissions: Permissions) => {
-      // 乐观镜像:App 紧接着会读 config.sandbox/approval(shift+tab 循环步进
-      // 就是拿它算下一档);等 state 推送会慢一拍,连按两次会在同一档打转。
-      state = {
-        ...state,
-        config: { ...state.config, sandbox: permissions.sandbox, approval: permissions.approval, plan: false },
-      };
-      void call('setPermissions', { permissions }).catch(() => {});
-    },
-    setPlan: (active: boolean) => {
-      state = { ...state, config: { ...state.config, plan: active } };
-      void call('setPlan', { active }).catch(() => {});
-    },
     setReasoningEffort: (level: ReasoningEffort) => {
       state = { ...state, provider: { ...state.provider, reasoningEffort: level } };
       return call<void>('setReasoningEffort', { level });
@@ -709,18 +647,39 @@ export async function connectRemote(options: RemoteOptions): Promise<RemoteSessi
       const list = await call<SkillCommandInfo[]>('refreshSkills');
       // RPC 返回值直接更新镜像:随后的 state 推送内容相同,diff 后静默。
       skillItems = list;
+      skillsKey = JSON.stringify(list);
       for (const listener of skillListeners) listener();
       return list;
     },
+    get extensionCommands() {
+      return extensionItems.commands;
+    },
+    get extensionStatus() {
+      // since 校到本地时钟(见 clockSkew)。
+      return extensionItems.status.map((entry) =>
+        entry.since === undefined ? entry : { ...entry, since: entry.since + clockSkew },
+      );
+    },
+    get extensionState() {
+      return extensionItems.state ?? {};
+    },
+    commandOptions: (name: string, path?: string[]) =>
+      call<ExtensionCommandOption[]>('commandOptions', { name, path }),
+    extensionsChanged: (listener: () => void) => {
+      extensionListeners.add(listener);
+      return () => {
+        extensionListeners.delete(listener);
+      };
+    },
+    // 即时 RPC:处理器要发起一轮就在 server 侧 followUp,忙碌状态随 state 推送带回,
+    // 所以不点乐观 run 标志(见 protocol.ts 对 RUN_LIKE_METHODS 的说明)。
+    runCommand: (name, args) => call<void>('runCommand', { name, args }),
     // deferred:一整轮 agent.run,乐观 run 标志的置位/清除见 callDeferred。
     runSkill: (name, args, opts) =>
       callDeferred('runSkill', { name, args, options: opts }).then(() => undefined),
-    // /review:选择器数据源是普通即时 RPC;评审本身是 deferred(同 runSkill)。
+    // 分支列表:GUI 顶栏的分支切换器在用(/review 搬进扩展后与评审无关)。
     reviewTargets: () => call<ReviewTargets>('reviewTargets'),
-    reviewCommits: () => call<ReviewCommit[]>('reviewCommits'),
-    startReview: (scope, opts) =>
-      callDeferred('startReview', { scope, options: opts }) as Promise<ReviewStartResult>,
-    // /simplify:与 startReview 同理——一整轮 agent.run 的 deferred RPC。
+    // /simplify:一整轮 agent.run 的 deferred RPC。
     startSimplify: (target, opts) =>
       callDeferred('startSimplify', { target, options: opts }) as Promise<SimplifyStartResult>,
     stateChanged: (listener: () => void) => {

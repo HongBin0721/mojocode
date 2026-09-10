@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseSkillMd, parseFrontmatter, parseAllowedTools, isValidSkillName } from '../src/skills/parse.js';
+import { parseSkillMd, parseFrontmatter, isValidSkillName } from '../src/skills/parse.js';
 import { discoverSkills, readSkillBody, toCommandInfos } from '../src/skills/discovery.js';
 import { SkillManager } from '../src/skills/manager.js';
 import { substituteArgs } from '../src/skills/substitute.js';
@@ -42,27 +42,6 @@ describe('parseFrontmatter', () => {
   });
 });
 
-describe('parseAllowedTools', () => {
-  it('空格分隔且规则含空格时按括号深度合并', () => {
-    expect(parseAllowedTools('Bash(git status:*) Read Bash(npm test:*)')).toEqual([
-      'Bash(git status:*)',
-      'Read',
-      'Bash(npm test:*)',
-    ]);
-  });
-
-  it('逗号分隔与列表形式', () => {
-    expect(parseAllowedTools('Read, Grep')).toEqual(['Read', 'Grep']);
-    expect(parseAllowedTools(['Read', 'Grep'])).toEqual(['Read', 'Grep']);
-  });
-
-  it('空值返回 undefined', () => {
-    expect(parseAllowedTools('')).toBeUndefined();
-    expect(parseAllowedTools(undefined)).toBeUndefined();
-    expect(parseAllowedTools([])).toBeUndefined();
-  });
-});
-
 describe('parseSkillMd', () => {
   it('name 缺省回退目录名;布尔字段宽容解析;未知字段忽略', () => {
     const parsed = parseSkillMd(
@@ -90,16 +69,15 @@ describe('parseSkillMd', () => {
     expect(parseSkillMd(SKILL('description: d'), 'a--b').ok).toBe(false);
   });
 
-  it('argument-hint / context: fork / allowed-tools 全解析', () => {
+  it('argument-hint / context: fork 全解析', () => {
     const parsed = parseSkillMd(
-      SKILL('description: d\nargument-hint: "[issue]"\ncontext: fork\nallowed-tools: Bash(git log:*)'),
+      SKILL('description: d\nargument-hint: "[issue]"\ncontext: fork'),
       'demo',
     );
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.meta.argumentHint).toBe('[issue]');
     expect(parsed.meta.context).toBe('fork');
-    expect(parsed.meta.allowedTools).toEqual(['Bash(git log:*)']);
   });
 });
 

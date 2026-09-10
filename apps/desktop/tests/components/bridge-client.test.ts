@@ -108,7 +108,6 @@ describe('initBridge', () => {
     expect(desktop.tasks).toEqual([{ id: 't1' }]);
     expect(desktop.focusedTaskId).toBe('t1');
     expect(desktop.connection).toBe('connected');
-    expect(desktop.permission).toEqual(permission);
     const timeline = useTimelineStore.getState();
     expect(timeline.focusedTaskId).toBe('t1');
     expect(timeline.items.map((item) => item.key)).toEqual(['replay-banner']);
@@ -125,16 +124,6 @@ describe('initBridge', () => {
     expect(Object.keys(byTask).sort()).toEqual(['t1', 't2']);
   });
 
-  it('permission-resolved → 清对应任务的审批卡,不进 reducer', () => {
-    const api = installFakeApi();
-    dispose = initBridge();
-    useDesktopStore.getState().applyPermission('t1', { id: 'p1' } as never);
-    api.emitEvents('t1', [
-      { type: 'permission-resolved', id: 'p1', decision: { type: 'allow' } } as AgentEvent,
-    ]);
-    expect(useDesktopStore.getState().runtimes['t1']?.permission).toBeUndefined();
-    expect(useTimelineStore.getState().byTask['t1']).toBeUndefined();
-  });
 
   it('tool-output-delta → panelStore.appendChunk,不进 reducer;bash tool-start 注入命令行', () => {
     const api = installFakeApi();
@@ -189,6 +178,6 @@ describe('initBridge', () => {
     for (const [channel, unsub] of api.unsubs) {
       expect(unsub, channel).toHaveBeenCalledTimes(1);
     }
-    expect(api.unsubs.size).toBe(6);
+    expect(api.unsubs.size).toBe(5);
   });
 });

@@ -140,14 +140,7 @@
   font-size: 11px;
   color: var(--color-foreground-subtlest);
 }
-.banner-mode {
-  padding: 1px 8px;
-  border-radius: 9999px;
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-foreground-subtle);
-}
-.banner-root,
-.banner-mcp {
+.banner-root {
   color: var(--color-foreground-subtlest);
 }
 
@@ -455,22 +448,6 @@
   font-size: 12px;
 }
 
-/* ---- 方案卡(exit_plan)---- */
-
-.plan-card {
-  margin-bottom: 12px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-xl);
-  padding: 12px 16px;
-  background: var(--color-card);
-}
-.plan-title {
-  font-size: 11px;
-  letter-spacing: 1.5px;
-  color: var(--color-foreground-subtlest);
-  margin-bottom: 8px;
-}
-
 /* ---- todo ---- */
 
 .todo-list {
@@ -584,11 +561,16 @@
 .work {
   color: var(--color-foreground-subtle);
 }
-.work-waiting {
-  color: var(--color-warning);
-}
 .work-compacting {
   color: var(--color-accent);
+}
+
+/* 扩展的状态行:独立一行,空闲时照样显示,所以不吃底部内边距。 */
+.status-extensions {
+  padding-bottom: 0;
+}
+.status-extension {
+  color: var(--color-foreground-subtle);
 }
 
 .status-elapsed {
@@ -631,29 +613,6 @@
 .entry-avatar-ghost {
   background: transparent;
   box-shadow: none;
-}
-
-.plan-steps {
-  .flex-col(7px);
-}
-.plan-step {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: var(--fs-13);
-  line-height: 1.5;
-  color: var(--color-foreground-subtle);
-}
-.plan-step svg {
-  flex: none;
-  margin-top: 2px;
-  color: var(--color-foreground-subtle);
-}
-.plan-step-done {
-  color: var(--color-foreground-body);
-}
-.plan-step-done svg {
-  color: var(--color-success);
 }
 
 .tool-icon {

@@ -12,7 +12,7 @@ import { REASONING_EFFORTS } from '@core/schema';
 import { useModelCapabilities } from '../../utils/use-model-capabilities.js';
 import { t, useLocale } from '../../i18n/index.js';
 import { formatTokens, formatContextWindow } from '../../utils/format.js';
-import { localizeEffort } from '../../utils/mode-label.js';
+import { localizeEffort } from '../../utils/effort-label.js';
 import { Select } from '../Select.js';
 import { Modal } from '../overlays/Modal.js';
 import { ChevronDownIcon, XIcon } from '../icons.js';

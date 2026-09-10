@@ -85,9 +85,9 @@ function isMicroReasoning(item: ReasoningItem): boolean {
   return text === '' || (!text.includes('\n') && text.length <= MICRO_REASONING_MAX);
 }
 
-/** todo/exit_plan 走专门卡片,没有 meta 区可挂思考。 */
+/** todo 走专门卡片,没有 meta 区可挂思考。 */
 function isPlainToolCard(item: ToolItem): boolean {
-  return item.toolName !== 'todo' && item.toolName !== 'exit_plan';
+  return item.toolName !== 'todo';
 }
 
 function makeExplore(steps: (ToolItem | ReasoningItem)[]): ExploreEntry {

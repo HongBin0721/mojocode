@@ -1,14 +1,14 @@
 import fs from 'node:fs/promises';
-import { resolveInsideWorkspace, SandboxError } from '../permissions/sandbox.js';
+import path from 'node:path';
 import { looksBinary } from '../tools/files.js';
 
 /**
  * GUI 文件预览的读取器(`readFile` RPC 的实现)。必须跑在 server 侧:
  * `--attach` 场景下仓库在 server 那台机器,GUI 直接读盘读不到。
  *
- * 失败一律以 reason 码返回、不抛异常(FileDiff 的先例)——GUI 好渲染灰态;
- * 路径防线完整复用 sandbox.ts(realpath 防符号链接逃逸 + DEFAULT_DENY 对
- * .env 与密钥文件的拒绝),这里不自造第二套规则。
+ * 失败一律以 reason 码返回、不抛异常(FileDiff 的先例)——GUI 好渲染灰态。
+ * 这是一个 HTTP 端点(`GET` 语义的 RPC),`denied` 只挡路径穿越出工作区——
+ * 它是端点自己的边界,与 agent 的工具无关(那些没有围栏,Pi 式)。
  */
 
 /** 预览上限:比模型 read 的 400KB 略宽,超限不做部分读取(首版从简)。 */
@@ -27,11 +27,7 @@ export interface FileContent {
   truncated: boolean;
 }
 
-export async function readWorkspaceFile(
-  root: string,
-  file: string,
-  denyPath?: string[],
-): Promise<FileContent> {
+export async function readWorkspaceFile(root: string, file: string): Promise<FileContent> {
   const fail = (reason: FileReadFailure, size = 0): FileContent => ({
     ok: false,
     reason,
@@ -40,13 +36,20 @@ export async function readWorkspaceFile(
     truncated: false,
   });
 
-  let resolved;
+  // realpath 之后再比对:工作区内的符号链接可以指向工作区之外,只比字面
+  // 路径拦不住穿越。不存在的目标 realpath 会 ENOENT,顺手就是 not-found。
+  let realRoot: string;
+  let absolute: string;
   try {
-    resolved = await resolveInsideWorkspace(file, { root, denyPath });
+    realRoot = await fs.realpath(root);
+    absolute = await fs.realpath(path.resolve(root, file));
   } catch (err) {
-    if (err instanceof SandboxError) return fail('denied');
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fail('not-found');
     throw err;
   }
+  const rel = path.relative(realRoot, absolute);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return fail('denied');
+  const resolved = { absolute, relative: rel.split(path.sep).join('/') };
 
   let stat;
   try {

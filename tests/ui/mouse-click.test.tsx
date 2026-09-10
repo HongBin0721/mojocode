@@ -8,12 +8,10 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { PermissionPrompt } from '../../src/ui/PermissionPrompt.js';
 import { RewindPicker } from '../../src/ui/RewindPicker.js';
 import { SessionPicker } from '../../src/ui/SessionPicker.js';
 import { SettingsPanel } from '../../src/ui/SettingsPanel.js';
 import { setLocale, t } from '../../src/i18n/index.js';
-import type { PermissionDecision, PermissionRequest } from '../../src/core/events.js';
 import type { StatusSegment } from '../../src/config/schema.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
 import type { JSX } from '../../src/ui/kit.js';
@@ -44,80 +42,15 @@ const clickOn = async (ui: UiHandle, needle: string): Promise<void> => {
  */
 const settle = () => sleep(300);
 
-const ruledRequest: PermissionRequest = {
-  id: 'req-1',
-  toolName: 'write',
-  title: 'write: index.js',
-  suggestedRule: 'index.js',
-  risk: 'write',
-};
-
-describe('PermissionPrompt 点击', () => {
-  it('点击选项即决策,与数字键同一档语义', async () => {
-    const decisions: PermissionDecision[] = [];
-    const ui = await renderUi(
-      () => <PermissionPrompt request={ruledRequest} onDecide={(d) => decisions.push(d)} />,
-      { width: 70, height: 14 },
-    );
-    // 第 2 项 = 本次会话始终允许,带建议规则。
-    await clickOn(ui, '2.');
-    expect(decisions).toEqual([{ type: 'allow-always', rule: 'index.js' }]);
-    await ui.destroy();
-  });
-
-  it('点在哪一项就是哪一项,与光标位置无关', async () => {
-    const decisions: PermissionDecision[] = [];
-    const ui = await renderUi(
-      () => <PermissionPrompt request={ruledRequest} onDecide={(d) => decisions.push(d)} />,
-      { width: 70, height: 14 },
-    );
-    await ui.press('down'); // 光标停在第 2 项
-    await clickOn(ui, '4.'); // 但点的是"拒绝"
-    expect(decisions).toEqual([{ type: 'deny' }]);
-    await ui.destroy();
-  });
-
-  /**
-   * 这条是点击判定"零位移"标准的锁:<text> 上按下就进入拖选,横向划过一行
-   * 去复制文字时按下与抬起都落在这一行——判定一旦放宽到按元素比较,复制一段
-   * 文本就会顺手把这一行点了(在授权框里就是手滑放行)。
-   */
-  it('横向拖选不算点击;拖完再点仍然正常', async () => {
-    const decisions: PermissionDecision[] = [];
-    const ui = await renderUi(
-      () => <PermissionPrompt request={ruledRequest} onDecide={(d) => decisions.push(d)} />,
-      { width: 70, height: 14 },
-    );
-    const row = locate(ui, '1.');
-    await ui.mockMouse.drag(row.x, row.y, row.x + 8, row.y);
-    await ui.tick();
-    expect(decisions).toEqual([]);
-
-    await ui.click(row.x, row.y);
-    expect(decisions).toEqual([{ type: 'allow' }]);
-    await ui.destroy();
-  });
-
-  it('右键不触发点击', async () => {
-    const decisions: PermissionDecision[] = [];
-    const ui = await renderUi(
-      () => <PermissionPrompt request={ruledRequest} onDecide={(d) => decisions.push(d)} />,
-      { width: 70, height: 14 },
-    );
-    const row = locate(ui, '1.');
-    await ui.mockMouse.click(row.x, row.y, 2 /* RIGHT */);
-    await ui.tick();
-    expect(decisions).toEqual([]);
-    await ui.destroy();
-  });
-});
+/** 三条 ASCII 文本的回退条目(帧内定位靠 indexOf,CJK 会让列号对不上)。 */
+const REWIND_ENTRIES = [
+  { index: 4, ordinal: 3, text: 'third message' },
+  { index: 2, ordinal: 2, text: 'second message' },
+  { index: 0, ordinal: 1, text: 'first message' },
+];
 
 describe('RewindPicker 点击', () => {
-  const entries = [
-    { index: 4, ordinal: 3, text: 'third message' },
-    { index: 2, ordinal: 2, text: 'second message' },
-    { index: 0, ordinal: 1, text: 'first message' },
-  ];
+  const entries = REWIND_ENTRIES;
 
   it('点击某一条即选中它', async () => {
     const picked: number[] = [];
@@ -129,6 +62,44 @@ describe('RewindPicker 点击', () => {
     );
     await clickOn(ui, 'first message');
     expect(picked).toEqual([1]);
+    await ui.destroy();
+  });
+
+  /**
+   * 这条是点击判定"零位移"标准的锁:<text> 上按下就进入拖选,横向划过一行
+   * 去复制文字时按下与抬起都落在这一行——判定一旦放宽到按元素比较,复制一段
+   * 文本就会顺手把这一行点了(在回退选择器里就是手滑截断历史)。
+   */
+  it('横向拖选不算点击;拖完再点仍然正常', async () => {
+    const picked: number[] = [];
+    const ui = await renderUi(
+      () => (
+        <RewindPicker entries={entries} onPick={(e) => picked.push(e.ordinal)} onCancel={() => {}} />
+      ),
+      { width: 60, height: 12 },
+    );
+    const row = locate(ui, 'first message');
+    await ui.mockMouse.drag(row.x, row.y, row.x + 8, row.y);
+    await ui.tick();
+    expect(picked).toEqual([]);
+
+    await ui.click(row.x, row.y);
+    expect(picked).toEqual([1]);
+    await ui.destroy();
+  });
+
+  it('右键不触发点击', async () => {
+    const picked: number[] = [];
+    const ui = await renderUi(
+      () => (
+        <RewindPicker entries={entries} onPick={(e) => picked.push(e.ordinal)} onCancel={() => {}} />
+      ),
+      { width: 60, height: 12 },
+    );
+    const row = locate(ui, 'first message');
+    await ui.mockMouse.click(row.x, row.y, 2 /* RIGHT */);
+    await ui.tick();
+    expect(picked).toEqual([]);
     await ui.destroy();
   });
 });
@@ -231,26 +202,32 @@ describe('点击判定的边界', () => {
   /**
    * 按下落在 A、拖走后在别处抬起——A 等不到自己的那次 up。按下坐标若是每个
    * 元素各存一份,A 就一直武装着,之后任何**结束**在同一格的拖动都会被它判成
-   * 点击(在授权框里 = 凭空放行一次)。坐标必须是模块级共享的一份。
+   * 点击(在回退选择器里 = 凭空截断一次历史)。坐标必须是模块级共享的一份。
    */
   it('按下后拖走,再反向拖回同一格不会补触发点击', async () => {
-    const decisions: PermissionDecision[] = [];
+    const picked: number[] = [];
     const ui = await renderUi(
-      () => <PermissionPrompt request={ruledRequest} onDecide={(d) => decisions.push(d)} />,
-      { width: 70, height: 14 },
+      () => (
+        <RewindPicker
+          entries={REWIND_ENTRIES}
+          onPick={(e) => picked.push(e.ordinal)}
+          onCancel={() => {}}
+        />
+      ),
+      { width: 60, height: 12 },
     );
-    const first = locate(ui, '1.');
-    const second = locate(ui, '2.');
+    const first = locate(ui, 'third message');
+    const second = locate(ui, 'second message');
 
     // 在第 1 项上按下,拖到第 2 项抬起(一次跨行选区)。
     await ui.mockMouse.drag(first.x, first.y, second.x, second.y);
     await ui.tick();
-    expect(decisions).toEqual([]);
+    expect(picked).toEqual([]);
 
     // 另起一次选区,反向拖动、正好停在第 1 项那一格上。
     await ui.mockMouse.drag(second.x + 6, second.y, first.x, first.y);
     await ui.tick();
-    expect(decisions).toEqual([]);
+    expect(picked).toEqual([]);
     await ui.destroy();
   });
 

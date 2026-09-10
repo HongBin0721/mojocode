@@ -69,14 +69,10 @@
   &::after {
     content: '✓';
     margin-left: auto;
-    /* ZCode 的当前项勾是前景白,不是绿色(与权限菜单的 menu-item-check 一致)。 */
+    /* ZCode 的当前项勾是前景白,不是绿色。 */
     color: var(--color-foreground);
   }
 }
-.menu-item-danger .menu-item-label {
-  color: var(--color-warning);
-}
-
 .menu-item-label {
   font-weight: 500;
 }
@@ -87,40 +83,6 @@
 .menu-item-note {
   color: var(--color-foreground-subtlest);
   font-size: 11px;
-}
-
-/* rich 变体(权限档菜单,ZCode 形态):左图标 + 标题行/描述两行,
- * 当前项的勾放在标题行右端——关掉单行条目的 ::after 勾,双勾会重影。 */
-.menu-item-rich {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-}
-.menu-item-rich.menu-item-current::after {
-  content: none;
-}
-.menu-item-icon {
-  display: inline-flex;
-  margin-top: 2px;
-  color: var(--color-foreground-subtle);
-  .menu-item-danger & {
-    color: var(--color-warning);
-  }
-}
-.menu-item-body {
-  .flex-fill();
-  .flex-col(2px);
-}
-.menu-item-title-row {
-  .flex-row(8px);
-}
-.menu-item-title-row .menu-item-label {
-  flex: 1;
-}
-.menu-item-check {
-  display: inline-flex;
-  color: var(--color-foreground);
 }
 
 /* ---- 级联菜单(CascadeMenu:分组平铺 + 悬停二级) ---- */
@@ -217,6 +179,18 @@
   color: var(--color-foreground-subtlest);
   font-size: 11px;
   flex: none;
+}
+
+/* 扩展命令选项层(OptionMenu)的标题与加载行,复用 .slash-menu 容器。 */
+.slash-menu-title {
+  color: var(--color-foreground-subtle);
+  font-size: 11px;
+  padding: 4px 8px 6px;
+}
+.slash-menu-note {
+  color: var(--color-foreground-subtlest);
+  font-size: 12px;
+  padding: 6px 8px;
 }
 
 /* ---- 通用按钮:只兜底无 class 的独立动作钮(评审评论的取消钮等);
@@ -649,13 +623,6 @@ button:disabled {
   font: inherit;
   text-decoration: underline;
   cursor: pointer;
-}
-
-/* 权限卡的来源标注(多任务) */
-.permission-source {
-  margin-left: auto;
-  font-size: var(--fs-10);
-  color: var(--color-foreground-subtle);
 }
 
 /* 任务行置顶指示 */

@@ -189,7 +189,6 @@ describe('axisSection / buildSimplifyApplyPrompt(阶段二:汇总应用)', () =>
     expect(prompt).toContain('Merge and de-duplicate');
     expect(prompt).toContain('working tree is the ground truth');
     expect(prompt).toContain('leave them uncommitted');
-    expect(prompt).toContain('exit_plan');
     expect(prompt).toContain('typecheck or test command');
     // 阶段一的"只报告不动手"不能带进应用轮——这一轮就是要改文件。
     expect(prompt).not.toContain('do not attempt fixes');

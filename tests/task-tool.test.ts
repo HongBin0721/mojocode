@@ -285,8 +285,6 @@ describe('子 agent 的 readFiles 与主 agent 隔离', () => {
 
     const base = {
       root,
-      gate: { assertCanMutate: () => {}, checkWrite: async () => {} },
-      rules: { denyPath: [] },
       readFiles: new Set<string>(),
       extraReadRoots: () => [],
     };

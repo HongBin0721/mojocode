@@ -30,7 +30,6 @@ const snapshot = {
   mcpStatuses: [],
   storeId: 's1',
   agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-  goal: { active: false, busy: false },
   todos: [],
   skills: [],
   sentAt: 1,

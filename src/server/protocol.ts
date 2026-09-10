@@ -8,24 +8,37 @@
  * 三类下行消息(SSE `/event` 流):
  *  - `event`:AgentEvent 原样转发(error 事件的 Error 拆成可序列化形态);
  *  - `state`:会话状态快照——client 端所有**同步读取**(isRunning、权限、
- *    provider、todos、goal…)都从这份镜像取,server 在任何可能改变它的时刻
+ *    provider、todos、扩展状态…)都从这份镜像取,server 在任何可能改变它的时刻
  *    重算并按需推送;
- *  - `call-result`:长任务(agent.run / goal.run / compact)的完成回执。
+ *  - `call-result`:长任务(agent.run / runSkill / compact)的完成回执。
  *    这些调用可能跑几分钟到几小时,POST 立即回执 ack,完成经 SSE 送达,
  *    避免长连接被各层 HTTP 超时(undici headersTimeout 等)拦腰斩断。
  *
- * 上行:`POST /call` 统一承载方法调用,`POST /permission` 回复授权决定。
+ * 上行:`POST /call` 统一承载方法调用。
  */
 
 import type { ModelMessage } from 'ai';
-import type { AgentEvent, ContextUsage, PermissionDecision, PermissionRequest } from '../core/events.js';
+import type { AgentEvent } from '../core/events.js';
 import type { Config } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
-import type { McpStatus } from '../mcp/client.js';
-import type { TodoItem } from '../tools/index.js';
-import type { GoalStatus } from '../agent/goal.js';
+import type {
+  ExtensionCommandInfo,
+  ExtensionStatusEntry,
+} from '../core/extension-types.js';
 import type { SkillCommandInfo } from '../skills/discovery.js';
 import type { ChangedFileEntry } from '../session/store.js';
+
+/**
+ * 扩展的过线类型原样透出。它们本来就是 wire 类型(extension-types.ts 零依赖,
+ * 正是为此从 extension.ts 拆出来的),而 GUI renderer 的 `@core` 白名单里
+ * protocol 是唯一的入口——从这里透出去,比为它们再开一条 alias 诚实。
+ */
+export type {
+  ExtensionCommandInfo,
+  ExtensionCommandOption,
+  ExtensionStatusEntry,
+} from '../core/extension-types.js';
+export { TODO_STATE_KEY } from '../core/extension-types.js';
 
 export interface WireError {
   name: string;
@@ -39,7 +52,6 @@ export interface StateSnapshot {
   provider: ResolvedProvider;
   /** 凭据已抹除:providers.*.apiKey、search.apiKey、mcpServers.*.env/.headers(见 redactConfig)。 */
   config: Config;
-  mcpStatuses: McpStatus[];
   storeId: string;
   agent: {
     isRunning: boolean;
@@ -52,15 +64,19 @@ export interface StateSnapshot {
      */
     contextUsage?: { used: number; window: number };
   };
-  goal: {
-    active: boolean;
-    busy: boolean;
-    /** goal.snapshot() 的即时值;client 按 sentAt 外推 elapsedMs。 */
-    status?: GoalStatus;
-    /** 恢复而来、尚未开跑(App 挂载时据此补一条提示)。 */
-    restored?: boolean;
+  /**
+   * 扩展的命令表与状态行(core/extension.ts)。可选:旧 server 没有该字段,
+   * client 回退为空表。status 的 since 是 server 时钟,client 按 sentAt 校时。
+   */
+  extensions?: {
+    commands: ExtensionCommandInfo[];
+    status: ExtensionStatusEntry[];
+    /**
+     * 扩展发布的结构化状态(key → 值)。客户端有专门的组件按 key 渲染
+     * (todo 清单),核心不解释内容。可选:旧 server 没有,client 回退空对象。
+     */
+    state?: Record<string, unknown>;
   };
-  todos: TodoItem[];
   /**
    * user-invocable 技能的元数据投影(name/description/argument-hint)。
    * 只有元数据:正文可能含工作区任何内容且体积不限,永不进快照——
@@ -73,7 +89,7 @@ export interface StateSnapshot {
    * git 真相仍以 workspaceStatus 为准(bash 造成的变更不在此列)。
    */
   changedFiles?: ChangedFileEntry[];
-  /** server 侧的取样时刻,client 外推 goal 计时用。 */
+  /** server 侧的取样时刻:client 据此把扩展状态行的 since 校到自己的时钟上。 */
   sentAt: number;
 }
 
@@ -99,28 +115,22 @@ export type CallResponse =
   | { ok: true; value?: unknown; deferred?: boolean }
   | { ok: false; error: WireError };
 
-export interface PermissionReply {
-  id: string;
-  decision: PermissionDecision;
-}
-
 /** 这些方法可能一跑几小时:POST 立即 ack,完成经 SSE call-result 送达。 */
 export const DEFERRED_METHODS = new Set([
   'run',
-  'goalRun',
   'compact',
   'runSkill',
-  'startReview',
   'startSimplify',
 ]);
 
 /**
  * deferred 里"本身就是一整轮 agent.run"的方法。客户端(remote.ts)据此点亮
  * 乐观 run 标志——漏一边就是"ack 迟到把标志置回、永远没人清"的卡死,所以
- * 与 DEFERRED_METHODS 放在一起:新增这类方法时两张表要一起动。goalRun 也
- * 占 run 标志但还额外点亮 goal,调用处单独判;compact 点亮的是 compact。
+ * 与 DEFERRED_METHODS 放在一起:新增这类方法时两张表要一起动。compact 点亮
+ * 的是 compact。扩展命令(runCommand)刻意**不在**这里:它是即时 RPC,处理器
+ * 要发起一轮就 followUp,忙碌状态由随后的 state 推送带回。
  */
-export const RUN_LIKE_METHODS = new Set(['run', 'runSkill', 'startReview', 'startSimplify']);
+export const RUN_LIKE_METHODS = new Set(['run', 'runSkill', 'startSimplify']);
 
 export function toWireError(error: unknown): WireError {
   if (error instanceof Error) return { name: error.name, message: error.message };
@@ -187,18 +197,11 @@ export function redactConfig(config: Config): Config {
 }
 
 /**
- * 快照的稳定键:用于变化检测。goal 的 elapsedMs 与 sentAt 每毫秒都在变,
- * 不剔除的话每条事件都会带一次全量推送。
+ * 快照的稳定键:用于变化检测。sentAt 每毫秒都在变,不剔除的话每条事件都会
+ * 带一次全量推送。扩展状态行的 since 是设定时刻的常量,不必剔除。
  */
 export function snapshotKey(state: StateSnapshot): string {
-  return JSON.stringify({
-    ...state,
-    sentAt: 0,
-    goal: {
-      ...state.goal,
-      status: state.goal.status ? { ...state.goal.status, elapsedMs: 0, tokens: 0 } : undefined,
-    },
-  });
+  return JSON.stringify({ ...state, sentAt: 0 });
 }
 
 export interface HistoryPayload {

@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { resolveReadable } from '../permissions/sandbox.js';
+import { resolvePath } from './paths.js';
 import { downscaleImage } from '../app/image.js';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES } from '../app/attachments.js';
 import { truncate, type ToolContext } from './context.js';
@@ -20,9 +20,9 @@ const DEFAULT_VIEW_PROMPT =
  * 读成文字描述。非视觉主力模型的图片因此降级为文件引用后仍可被消费——
  * 主力模型不浪费视觉 token,需要看图时才花视觉模型的钱。
  *
- * 仅在解析出视觉模型时注册(照 web_search 的降级模式);不过 checkNet:
- * 读文件的沙箱约束由 resolveReadable 全额承担,视觉模型调用与主循环/
- * task 子代理同信任级——打的是已配置的 provider 端点,不是任意互联网。
+ * 仅在解析出视觉模型时注册(照 web_search 的降级模式)。它打的是**已配置的
+ * provider 端点**,不是模型指定的任意 URL——与主循环、task 子代理同一条出网
+ * 路径,不是一件额外的联网能力。
  */
 export function createViewTools(ctx: ToolContext) {
   // 注册时机一次性求值:与 provider 工具同生命周期(/new 重建时再取)。
@@ -59,11 +59,7 @@ export function createViewImageTool(ctx: ToolContext) {
             'Ask the user to set visionModel (or MOJOCODE_VISION_MODEL) in the configuration.',
         );
       }
-      const resolved = await resolveReadable(imagePath, {
-        root: ctx.root,
-        denyPath: ctx.rules.denyPath,
-        extraReadRoots: ctx.extraReadRoots(),
-      });
+      const resolved = resolvePath(imagePath, ctx.root);
       const stat = await fs.stat(resolved.absolute);
       if (stat.isDirectory()) {
         throw new Error(`${resolved.relative} is a directory.`);

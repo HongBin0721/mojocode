@@ -163,7 +163,6 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
           providerLabel: 'Kimi',
           model: 'kimi-k3',
           root: '/tmp/x',
-          mode: 'ask',
         },
       ]),
       { width: 60, height: 16 },

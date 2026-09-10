@@ -58,16 +58,14 @@ export type TimelineItem =
   | {
       /**
        * 启动横幅。作为时间线的第一条条目固定在对话最顶部,随历史自然
-       * 滚动——与 Claude Code 一致。字段是创建时的快照,之后改 model/
-       * 权限档不回写(实时值在 Footer 常驻)。
+       * 滚动——与 Claude Code 一致。字段是创建时的快照,之后改 model 不
+       * 回写(实时值在 Footer 常驻)。
        */
       key: string;
       kind: 'banner';
       providerLabel: string;
       model: string;
       root: string;
-      mode: string;
-      mcpSummary?: string;
     };
 
 /** 普通 `Omit` 会把联合类型折叠成公共键;这个写法保留每个变体。 */

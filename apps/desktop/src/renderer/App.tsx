@@ -13,7 +13,6 @@
  */
 
 import React, { useEffect } from 'react';
-import type { PermissionDecision } from '@core/events';
 import { initBridge } from './bridge/client.js';
 import { useDesktopStore } from './state/desktopStore.js';
 import { useUiStore } from './state/uiStore.js';
@@ -29,36 +28,11 @@ import { Timeline } from './components/Timeline.js';
 import { TodoPanel } from './components/TodoPanel.js';
 import { StatusLine } from './components/StatusLine.js';
 import { Composer } from './components/Composer.js';
-import { PermissionCard } from './components/PermissionCard.js';
 import { RightPanel } from './components/RightPanel.js';
 import { SettingsPage } from './components/SettingsPage.js';
 import { HomeView } from './components/HomeView.js';
 import { ArchiveView } from './components/ArchiveView.js';
 import { NoticeHost } from './components/NoticeHost.js';
-
-/** 审批卡挂在 Composer 上方;决策经 RPC 回 main 侧的 asker。 */
-function PermissionSection() {
-  const permission = useDesktopStore((s) => s.permission);
-  const taskId = useDesktopStore((s) => s.focusedTaskId);
-  // 多任务下有多个任务可能同时挂起审批:决策定向到发起任务,来源写在卡上。
-  const sourceTask = useDesktopStore((s) =>
-    (s.tasks?.length ?? 0) > 1
-      ? s.tasks?.find((task) => task.id === s.focusedTaskId)?.title
-      : undefined,
-  );
-  if (!permission) return null;
-  const onDecide = (decision: PermissionDecision) => {
-    rpcFire(
-      { kind: 'permission', id: permission.id, decision },
-      { taskId, errorKey: 'notice.permissionFailed' },
-    );
-  };
-  return (
-    <div className="permission-wrap conv-col">
-      <PermissionCard request={permission} onDecide={onDecide} sourceTask={sourceTask} />
-    </div>
-  );
-}
 
 /** 连接断开提示条:单任务崩溃只影响它自己,给「重启任务」出口。 */
 function ConnectionBanner() {
@@ -141,7 +115,6 @@ function TaskView() {
         <Timeline />
         <TodoPanel />
         <StatusLine />
-        <PermissionSection />
         <Composer />
       </div>
       <RightPanel />

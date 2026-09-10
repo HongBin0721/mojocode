@@ -22,9 +22,14 @@ const snapshot = {
   mcpStatuses: [],
   storeId: 's1',
   agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-  goal: { active: false, busy: false },
   todos: [],
   skills: [{ name: 'release', description: 'ship it', argumentHint: '<version>' }],
+  extensions: {
+    commands: [
+      { name: 'review', description: '评审代码改动', hasOptions: true, selectorTitle: '选择审查预设' },
+    ],
+    status: [],
+  },
   sentAt: 1,
 } as unknown as StateSnapshot;
 
@@ -65,7 +70,12 @@ describe('useSlashCommands', () => {
     });
     expect(handled).toBe(true);
     expect(setText).toHaveBeenCalledWith('');
-    expect(rpcMock).toHaveBeenCalledWith({ kind: 'startReview', scope: 'src' });
+    // 打全了参数就直接执行,不再开选项层。
+    expect(rpcMock).toHaveBeenCalledWith({
+      kind: 'runCommand',
+      name: 'review',
+      args: 'src',
+    });
 
     const miss = setup('/unknown-cmd');
     let missHandled = true;
@@ -97,6 +107,97 @@ describe('useSlashCommands', () => {
     });
     expect(setText).toHaveBeenCalledWith('/release ');
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('扩展命令带取值:菜单选中先开选项层,不直接执行', async () => {
+    rpcMock.mockResolvedValue([
+      { value: 'base', title: '对比基准分支', expands: true },
+      { value: 'uncommitted', title: '审查未提交变更' },
+      { value: 'custom', title: '自定义审查说明', prefill: true },
+    ]);
+    const { view, setText } = setup('/rev');
+    const entry = view.result.current.entries.find((e) => e.name === 'review')!;
+    await act(async () => {
+      view.result.current.pickFromMenu(entry);
+    });
+    expect(rpcMock).toHaveBeenCalledWith({ kind: 'commandOptions', name: 'review', path: [] });
+    expect(setText).toHaveBeenCalledWith('');
+    expect(view.result.current.optionMenu?.options).toHaveLength(3);
+    expect(view.result.current.optionMenu?.path).toEqual([]);
+  });
+
+  it('expands 的选项再开一层;esc 逐层退回;末层提交拼接各层的值', async () => {
+    rpcMock.mockResolvedValue([{ value: 'base', title: '对比基准分支', expands: true }]);
+    const { view } = setup('/rev');
+    const entry = view.result.current.entries.find((e) => e.name === 'review')!;
+    await act(async () => {
+      view.result.current.pickFromMenu(entry);
+    });
+
+    // 第二层:分支列表。
+    rpcMock.mockResolvedValue([{ value: 'main', label: 'first commit' }]);
+    await act(async () => {
+      view.result.current.pickOption({ value: 'base', expands: true });
+    });
+    expect(rpcMock).toHaveBeenCalledWith({
+      kind: 'commandOptions',
+      name: 'review',
+      path: ['base'],
+    });
+    expect(view.result.current.optionMenu?.path).toEqual(['base']);
+
+    // esc 退回第一层(重新取值,不是关掉整个菜单)。
+    rpcMock.mockResolvedValue([{ value: 'base', title: '对比基准分支', expands: true }]);
+    await act(async () => {
+      view.result.current.backOption();
+    });
+    expect(view.result.current.optionMenu?.path).toEqual([]);
+
+    // 末层选中:各层的值以空格拼成 args。
+    rpcMock.mockResolvedValue([{ value: 'main', label: 'first commit' }]);
+    await act(async () => {
+      view.result.current.pickOption({ value: 'base', expands: true });
+    });
+    rpcMock.mockClear();
+    await act(async () => {
+      view.result.current.pickOption({ value: 'main' });
+    });
+    expect(rpcMock).toHaveBeenCalledWith({
+      kind: 'runCommand',
+      name: 'review',
+      args: 'base main',
+    });
+    expect(view.result.current.optionMenu).toBeUndefined();
+  });
+
+  it('prefill 的选项预填输入框(带尾随空格),不执行', async () => {
+    rpcMock.mockResolvedValue([{ value: 'custom', title: '自定义', prefill: true }]);
+    const { view, setText } = setup('/rev');
+    const entry = view.result.current.entries.find((e) => e.name === 'review')!;
+    await act(async () => {
+      view.result.current.pickFromMenu(entry);
+    });
+    rpcMock.mockClear();
+    await act(async () => {
+      view.result.current.pickOption({ value: 'custom', prefill: true });
+    });
+    expect(setText).toHaveBeenCalledWith('/review custom ');
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it('某一层取值为空:退回成提交已选的层,由命令自己解释为什么空', async () => {
+    rpcMock.mockResolvedValue([]);
+    const { view } = setup('/rev');
+    const entry = view.result.current.entries.find((e) => e.name === 'review')!;
+    await act(async () => {
+      view.result.current.pickFromMenu(entry);
+    });
+    expect(rpcMock).toHaveBeenCalledWith({
+      kind: 'runCommand',
+      name: 'review',
+      args: '',
+    });
+    expect(view.result.current.optionMenu).toBeUndefined();
   });
 
   it('Esc 压制菜单;查询词变化后解除', () => {

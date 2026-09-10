@@ -47,11 +47,11 @@ describe('timeline(/focus)配置分层', () => {
         path.join(home, '.mojocode', 'config.json'),
         JSON.stringify({ timeline: 'compact' }),
       );
-      // 项目层写点别的(比如 /approvals 落过盘),不含 timeline。
+      // 项目层写点别的,不含 timeline。
       await fs.mkdir(path.join(root, '.mojocode'), { recursive: true });
       await fs.writeFile(
         path.join(root, '.mojocode', 'config.json'),
-        JSON.stringify({ approval: 'on-request' }),
+        JSON.stringify({ cleanupPeriodDays: 7 }),
       );
 
       const { config } = await loadRawConfig({ root, env: {} });
@@ -67,11 +67,11 @@ describe('timeline(/focus)配置分层', () => {
           providers: { 'glm-coding': { model: 'GLM-5.3' } },
         }),
       );
-      // 项目层写点别的(比如 /approvals 落过盘),不含 provider/model。
+      // 项目层写点别的,不含 provider/model。
       await fs.mkdir(path.join(root, '.mojocode'), { recursive: true });
       await fs.writeFile(
         path.join(root, '.mojocode', 'config.json'),
-        JSON.stringify({ approval: 'on-request' }),
+        JSON.stringify({ cleanupPeriodDays: 7 }),
       );
 
       const { config } = await loadRawConfig({ root, env: {} });

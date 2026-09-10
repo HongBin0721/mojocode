@@ -1,14 +1,14 @@
-import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 /**
  * 提交链路的 @文件引用展开:发给模型的是附上文件内容的展开版,时间线与
@@ -75,12 +75,9 @@ async function setup(options?: { isRunning?: boolean }) {
       compact: async () => {},
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(run),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},
@@ -153,7 +150,7 @@ describe('提交时展开 @文件引用', () => {
         mediaType: 'image/png',
         data: PNG_BYTES.toString('base64'),
         filename: 'img.png',
-        absolutePath: await fs.realpath(path.join(root, 'img.png')),
+        absolutePath: path.join(root, 'img.png'),
       },
     ]);
     await ui.destroy();

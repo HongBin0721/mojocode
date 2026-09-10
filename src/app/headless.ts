@@ -1,5 +1,4 @@
-import type { AgentEvent, PermissionAsker, PermissionDecision } from '../core/events.js';
-import { permissionsLabel, type Permissions } from '../config/schema.js';
+import type { AgentEvent } from '../core/events.js';
 import type { Session } from './bootstrap.js';
 import { t } from '../i18n/index.js';
 import { formatCacheHit, formatToolInput, toolDisplayName, truncateWidth } from '../ui/theme.js';
@@ -71,31 +70,12 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
         break;
     }
   });
-}
 
-/**
- * 非交互运行的权限策略:没有人可以询问,所以任何需要确认的操作都会被
- * 拒绝,并附上模型可据此行动的解释。`--yolo` / `--accept-edits` 是逃生门。
- */
-export function headlessAsker(permissions: Permissions): PermissionAsker {
-  return async (request): Promise<PermissionDecision> => {
-    // 方案审批要单独说:让用户"重跑加 --accept-edits"是错误建议——`--plan -p`
-    // 要的正是"给我方案、别动手",自动批准反而背道而驰。
-    if (request.kind === 'plan') {
-      return {
-        type: 'deny',
-        reason:
-          'there is no interactive terminal to approve a plan. Do not implement anything. ' +
-          'Print the plan as your final answer and stop.',
-      };
-    }
-    return {
-      type: 'deny',
-      reason:
-        `no interactive terminal to approve "${request.title}" (permissions: ${permissionsLabel(permissions)}). ` +
-        'Re-run with --full-auto to allow workspace edits, or --dangerously-bypass-approvals-and-sandbox to allow everything.',
-    };
-  };
+  // 装配期攒下的提示(见 Session.startupNotices):bootstrap 里 emit 出去时
+  // 还没有人订阅,补在这里——`bus.on` 已经装好了。
+  for (const notice of session.startupNotices) {
+    session.bus.emit({ type: 'notice', level: notice.level, message: notice.message });
+  }
 }
 
 /** Error 默认无法 JSON 序列化;把有用的部分拆出来。 */

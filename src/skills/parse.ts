@@ -1,8 +1,9 @@
 /**
  * SKILL.md 解析(agentskills.io 标准)。
  *
- * frontmatter 手写解析而不引 YAML 依赖:项目的配置层是 JSON,沙箱的 glob
- * 也是手写的(sandbox.ts matchGlob)——技能头部只需要标量、引号串和列表,
+ * frontmatter 手写解析而不引 YAML 依赖:项目的配置层是 JSON,忽略规则的 glob
+ * 也是手写的(app/file-index.ts 的 matchGlob)——技能头部只需要标量、引号串和
+ * 列表,
  * 一个完整 YAML 解析器换来的只有依赖面。未知字段一律接受并忽略,这是
  * 标准的要求(宽容解析,别的实现的扩展字段不该让技能整个失效)。
  */
@@ -13,7 +14,6 @@ export interface SkillMetaFields {
   argumentHint?: string;
   disableModelInvocation: boolean;
   userInvocable: boolean;
-  allowedTools?: string[];
   context?: 'fork';
 }
 
@@ -129,40 +129,6 @@ function asBoolean(value: unknown): boolean | undefined {
 }
 
 /**
- * allowed-tools:标准写空格分隔的字符串,Claude Code 兼容逗号与 YAML 列表。
- * 规则值本身可以带空格(`Bash(git status:*)`),所以空格切分必须按括号
- * 深度合并——朴素 split 会把一条规则劈成两半,进 gate 后一半成了永远
- * 匹配不上的死规则,另一半可能意外放行别的命令。
- */
-export function parseAllowedTools(value: unknown): string[] | undefined {
-  if (Array.isArray(value)) {
-    const items = value.map(String).map((s) => s.trim()).filter(Boolean);
-    return items.length > 0 ? items : undefined;
-  }
-  if (typeof value !== 'string' || !value.trim()) return undefined;
-  const text = value.trim();
-  if (text.includes(',')) {
-    const items = text.split(',').map((s) => s.trim()).filter(Boolean);
-    return items.length > 0 ? items : undefined;
-  }
-  const items: string[] = [];
-  let current = '';
-  let depth = 0;
-  for (const ch of text) {
-    if (ch === '(') depth += 1;
-    else if (ch === ')') depth = Math.max(0, depth - 1);
-    if (/\s/.test(ch) && depth === 0) {
-      if (current) items.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  if (current) items.push(current);
-  return items.length > 0 ? items : undefined;
-}
-
-/**
  * 解析并校验一个 SKILL.md。`dirName` 是技能目录名:标准要求 name 与目录名
  * 一致,而生态里大量技能干脆省略 name(Claude Code 视其为可选)——所以
  * 缺失时回退目录名,写了但对不上目录名时以目录名为准之外直接拒绝,
@@ -199,9 +165,6 @@ export function parseSkillMd(text: string, dirName: string): ParsedSkill {
       ...(argumentHint ? { argumentHint } : {}),
       disableModelInvocation: asBoolean(fields['disable-model-invocation']) ?? false,
       userInvocable: asBoolean(fields['user-invocable']) ?? true,
-      ...(parseAllowedTools(fields['allowed-tools'])
-        ? { allowedTools: parseAllowedTools(fields['allowed-tools']) }
-        : {}),
       ...(context ? { context } : {}),
     },
     body: body.trim(),

@@ -4,7 +4,7 @@
  * 职责与通道见 src/shared/ipc.ts 的契约注释。两处合并是性能关键:
  *  - 事件:同一微任务内的 AgentEvent 合并成一次 send(text-delta 风暴下
  *    每帧可能几十条,逐条过 IPC 会卡 renderer 的 commit);
- *  - 状态:三源触发(每个 bus 事件 / todos.subscribe / skillsChanged)后
+ *  - 状态:三源触发(每个 bus 事件 / skillsChanged / stateChanged)后
  *    微任务合并,再经 snapshotKey 去重——语义对齐 serve.ts 的 pushState
  *    (server 侧靠 STATE_NEUTRAL_EVENTS 跳过重算;客户端拿到的事件流相同,
  *    每事件后重算一次 key 的代价远低于整份快照过 IPC)。
@@ -15,7 +15,7 @@
  * 通过注入的 target 下发推送,测试无需 mock electron。
  */
 
-import type { AgentEvent, PermissionDecision, PermissionRequest } from '@core/events';
+import type { AgentEvent } from '@core/events';
 import type { RemoteSession } from '@core/remote';
 import { serializeEvent, snapshotKey, type StateSnapshot } from '@core/protocol';
 import type { TimelineItem } from '@core/types';
@@ -60,8 +60,6 @@ export interface Bridge {
   }>;
   /** RPC 白名单(显式方法表,不做字符串透传)。 */
   dispatchRpc(request: RpcRequest): Promise<unknown>;
-  /** 当前挂起的审批请求(TaskSummary.hasPendingPermission 的数据源)。 */
-  pendingPermissionRequest(): PermissionRequest | undefined;
   /** 当前连接态(TaskManager 组装 subscribe 的 live 条目用)。 */
   connectionState(): ConnectionState;
   dispose(): void;
@@ -145,11 +143,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
     });
   };
 
-  // ---- 待决权限:asker 的 resolver 挂起,等 renderer 决策 ----
-  let pendingPermission:
-    | { request: PermissionRequest; resolve: (decision: PermissionDecision) => void }
-    | undefined;
-
   const setConnection = (state: ConnectionState): void => {
     currentConnection = state;
     if (!disposed) send(IPC_CHANNELS.connection, state);
@@ -163,20 +156,10 @@ export function createBridge(deps: BridgeDeps): Bridge {
     scheduleStatePush();
     if (event.type === 'error' && !event.recoverable) setConnection('lost');
   });
-  const offTodos = session.todos.subscribe(() => scheduleStatePush());
   const offSkills = session.skillsChanged(() => scheduleStatePush());
   // SSE 的 state 帧不产生 bus 事件(saveProvider/switch/别的客户端的操作),
   // 不订阅镜像自身的更新,这些"纯状态"变更要等下一个 agent 事件才被转发。
   const offState = session.stateChanged(() => scheduleStatePush());
-
-  // asker 要尽早注册:remote 的 askerQueue 会把注册前到达的请求补发过来,
-  // 不注册的话 server 侧 gate 会一直 await(--attach 半路接上时整轮挂死)。
-  session.gate.setAsker((request) => {
-    send(IPC_CHANNELS.permission, request);
-    return new Promise((resolve) => {
-      pendingPermission = { request, resolve };
-    });
-  });
 
   // 建桥即同步一次状态:空闲会话不产生任何 bus 事件,不主动推的话 renderer
   // 会一直停在「没有 snapshot」的空态(侧栏/Composer/设置页全部降级)。
@@ -188,7 +171,7 @@ export function createBridge(deps: BridgeDeps): Bridge {
   };
 
   // ---- 上行:订阅的 per-task 部分(幂等——renderer 重载/HMR 后重订阅) ----
-  // 任务列表(tasks 通道)归 TaskManager,这里只管本任务的回放/审批/连接/快照。
+  // 任务列表(tasks 通道)归 TaskManager,这里只管本任务的回放/连接/快照。
   const subscribe = async (): Promise<{
     state: StateSnapshot;
     replayItems: TimelineItem[];
@@ -197,7 +180,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
     const replayItems = await deps.replay();
     if (disposed) throw new Error('bridge 已关闭');
     send(IPC_CHANNELS.replay, replayItems);
-    if (pendingPermission) send(IPC_CHANNELS.permission, pendingPermission.request);
     send(IPC_CHANNELS.connection, currentConnection);
     scheduleStatePush(); // lastStateKey 初值为空串,首次订阅必发一次。
     return { state: session.snapshot, replayItems, connection: currentConnection };
@@ -222,10 +204,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return session.saveProvider(request.id, request.config);
       case 'deleteProvider':
         return session.deleteProvider(request.id);
-      case 'setPermissions':
-        return session.setPermissions(request.permissions);
-      case 'setPlan':
-        return session.setPlan(request.active);
       case 'setReasoningEffort':
         return session.setReasoningEffort(request.level);
       case 'listProviderModels':
@@ -241,8 +219,12 @@ export function createBridge(deps: BridgeDeps): Bridge {
           request.args,
           request.display !== undefined ? { display: request.display } : undefined,
         );
-      case 'startReview':
-        return session.startReview(request.scope);
+      // 扩展命令:即时 RPC(处理器要开轮就 followUp)。取值每次现取——
+      // 档位要标出当前生效的那一档、分支列表要跑 git,静态快照会过期。
+      case 'runCommand':
+        return session.runCommand(request.name, request.args);
+      case 'commandOptions':
+        return session.commandOptions(request.name, request.path);
       case 'startSimplify':
         return session.startSimplify(request.target);
       case 'workspaceStatus':
@@ -277,13 +259,6 @@ export function createBridge(deps: BridgeDeps): Bridge {
         return session.discardAll();
       case 'reviewTargets':
         return session.reviewTargets();
-      case 'permission': {
-        if (!pendingPermission || pendingPermission.request.id !== request.id) return false;
-        const entry = pendingPermission;
-        pendingPermission = undefined;
-        entry.resolve(request.decision);
-        return true;
-      }
       default:
         // wire 载荷不受信(renderer 可能被劫持),防御联合之外的未知 kind。
         throw new Error(`未实现的 RPC:${(request as { kind: string }).kind}`);
@@ -313,18 +288,12 @@ export function createBridge(deps: BridgeDeps): Bridge {
         ]);
       }
     },
-    pendingPermissionRequest: () => pendingPermission?.request,
     connectionState: () => currentConnection,
     dispose: () => {
       disposed = true;
       offBus();
-      offTodos();
       offSkills();
       offState();
-      // attach 模式下 server 不随 GUI 退出:挂起的审批必须收尾,否则 server
-      // 侧 gate 永远等不到决定。
-      pendingPermission?.resolve({ type: 'deny', reason: 'client closed' });
-      pendingPermission = undefined;
       pendingEvents = [];
     },
   };

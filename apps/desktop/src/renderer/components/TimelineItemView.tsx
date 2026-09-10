@@ -1,11 +1,11 @@
 /**
  * 单条时间线条目:按 kind 分发。用户消息是右对齐气泡(ZCode 形态),助手
- * 消息平铺 markdown,工具折叠卡,diff/plan/todo 各有专门渲染。
+ * 消息平铺 markdown,工具折叠卡,diff/todo 各有专门渲染。
  */
 
 import React, { memo, useState } from 'react';
 import type { TimelineImage, TimelineItem } from '@core/types';
-import { extractPlan, extractTodos } from '@core/timeline-data';
+import { extractTodos } from '@core/timeline-data';
 import { imageDataUri } from '../utils/image.js';
 import { ImagePreview } from './overlays/ImagePreview.js';
 import { Markdown } from './Markdown.js';
@@ -13,40 +13,10 @@ import { ReasoningBlock } from './ReasoningBlock.js';
 import { ToolCard } from './ToolCard.js';
 import { TurnLine } from './TurnLine.js';
 import { TodoList } from './TodoList.js';
-import { localizeMode } from '../utils/mode-label.js';
-import { parsePlanSteps } from '../utils/plan-steps.js';
 import { t, useLocale } from '../i18n/index.js';
-import { CheckCircleIcon, CircleDashedIcon, SparkleIcon } from './icons.js';
+import { SparkleIcon } from './icons.js';
 
-/** 计划卡:解析出步骤列表按设计稿渲染(勾/虚线圈);解析不出回退 Markdown。 */
-function PlanCard({ plan }: { plan: string }) {
-  useLocale();
-  const steps = parsePlanSteps(plan);
-  return (
-    <div className="plan-card">
-      <div className="plan-title">{t('plan.title')}</div>
-      {steps ? (
-        <div className="plan-steps">
-          {steps.map((step, index) => (
-            <div key={index} className={`plan-step ${step.done ? 'plan-step-done' : ''}`}>
-              {step.done ? (
-                <CheckCircleIcon size={14} weight="fill" />
-              ) : (
-                <CircleDashedIcon size={14} />
-              )}
-              <span>{step.text}</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <Markdown text={plan} />
-      )}
-    </div>
-  );
-}
-
-/** banner 单独成组件:它是唯一要跟随语言重渲染的分支(模式 pill 走
- * localizeMode),locale 订阅只挂在这里——挂在外层会让长会话的每一条
+/** banner 单独成组件,locale 订阅只挂在这里——挂在外层会让长会话的每一条
  * 时间线项都进 i18n 的 listener 集合,memo 形同虚设。 */
 function BannerItem({ item }: { item: Extract<TimelineItem, { kind: 'banner' }> }) {
   useLocale();
@@ -57,8 +27,6 @@ function BannerItem({ item }: { item: Extract<TimelineItem, { kind: 'banner' }> 
       <span className="banner-root" title={item.root}>
         {item.root}
       </span>
-      <span className="banner-mode">{localizeMode(item.mode)}</span>
-      {item.mcpSummary ? <span className="banner-mcp">MCP {item.mcpSummary}</span> : null}
     </div>
   );
 }
@@ -145,8 +113,6 @@ export const TimelineItemView = memo(function TimelineItemView({
     case 'reasoning':
       return <ReasoningBlock durationMs={item.durationMs} text={item.text} />;
     case 'tool': {
-      const plan = extractPlan(item);
-      if (plan) return <PlanCard plan={plan} />;
       const todos = extractTodos(item);
       if (todos) return <TodoList todos={todos} />;
       return (

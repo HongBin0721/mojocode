@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { setLocale } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 beforeEach(() => {
   setLocale('en');
@@ -31,12 +31,9 @@ async function setup(overrides: { forkSession?: () => Promise<unknown>; isRunnin
       compact: async () => {},
     },
     bus: new EventBus(),
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'source-session-id', messages: [] },
     forkSession,
     switch: () => provider,

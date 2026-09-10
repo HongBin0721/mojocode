@@ -4,7 +4,7 @@ import fg from 'fast-glob';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
-import { resolveReadable } from '../permissions/sandbox.js';
+import { resolvePath } from './paths.js';
 import { truncate, type ToolContext } from './context.js';
 
 /** 搜索与文件列举共用的忽略清单(fast-glob 不解析 .gitignore,以此代替)。 */
@@ -113,8 +113,6 @@ async function grepWithJs(
 }
 
 export function createSearchTools(ctx: ToolContext) {
-  const sandbox = { root: ctx.root, denyPath: ctx.rules.denyPath };
-
   const glob = tool({
     description:
       'Find files by glob pattern, newest first. Use this to explore the layout of the project ' +
@@ -125,10 +123,7 @@ export function createSearchTools(ctx: ToolContext) {
       limit: z.number().int().min(1).max(500).default(100),
     }),
     execute: async ({ pattern, cwd, limit }) => {
-      // cwd 允许指到已激活技能的目录(列 L3 资源);grep 仍然只搜工作区。
-      const base = cwd
-        ? (await resolveReadable(cwd, { ...sandbox, extraReadRoots: ctx.extraReadRoots() })).absolute
-        : ctx.root;
+      const base = cwd ? resolvePath(cwd, ctx.root).absolute : ctx.root;
       const entries = await fg(pattern, {
         cwd: base,
         ignore: DEFAULT_IGNORE,

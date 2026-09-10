@@ -5,7 +5,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { configSchema } from '../../src/config/schema.js';
 import { setLocale } from '../../src/i18n/index.js';
@@ -13,6 +12,7 @@ import type { Session } from '../../src/app/bootstrap.js';
 import { runDoctor } from '../../src/app/doctor.js';
 import type { McpStatus } from '../../src/mcp/client.js';
 import { renderUi, type UiHandle } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 // 这一组比别的 UI 测试重:每次 /doctor 都真的去读文件系统(配置、会话目录、
 // 工作区),再渲染整份三十来行的报告。默认的 5s 在全量并行时不够。
@@ -56,12 +56,10 @@ async function setup(overrides: { config?: Record<string, unknown>; mcpStatuses?
       compact: async () => {},
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(run),
     mcpStatuses,
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},
@@ -135,12 +133,4 @@ describe('/doctor 命令', () => {
     await ui.destroy();
   });
 
-  it('报告反映会话此刻的权限档位,而不是磁盘上的配置', async () => {
-    const { ui } = await setup({ config: { sandbox: 'danger-full-access' } });
-    await submit(ui, '/doctor offline');
-    await waitFor(ui, /\d+ ok/);
-
-    expect(ui.frame()).toContain('danger-full-access');
-    await ui.destroy();
-  });
 });

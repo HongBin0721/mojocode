@@ -24,8 +24,6 @@ describe('write 工具结果携带 unified diff', () => {
   function makeCtx(): ToolContext {
     return {
       root,
-      gate: { assertCanMutate: () => {}, checkWrite: async () => {} },
-      rules: { denyPath: [] },
       readFiles: new Set<string>(),
     } as unknown as ToolContext;
   }

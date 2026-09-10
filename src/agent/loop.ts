@@ -8,6 +8,8 @@ import {
   type UserContent,
 } from 'ai';
 import type { ContextUsage, EventBus, UsageSnapshot } from '../core/events.js';
+import type { HookRegistry } from '../core/hooks.js';
+import { hookTools } from './hooked-tools.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import { deferImagesForModel } from '../app/image-defer.js';
 import type { ResolvedProvider } from '../config/load.js';
@@ -16,7 +18,7 @@ import { providerModelIsVision } from '../config/providers.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { mergeProviderOptions, providerOptionsKey, reasoningMapping } from '../model/reasoning.js';
 import { compactMessages, estimateTokens, shouldCompact, stripImageParts } from './compact.js';
-import { PermissionDeniedError } from '../permissions/gate.js';
+import { errorMessage, toError } from '../core/errors.js';
 import { t } from '../i18n/index.js';
 
 export interface AgentOptions {
@@ -26,14 +28,15 @@ export interface AgentOptions {
   systemPrompt: string;
   tools: ToolSet;
   bus: EventBus;
-  /**
-   * 每轮开流前的门:bootstrap 用它等非阻塞的 MCP 连接收尾,保证首轮的工具集
-   * 与旧的阻塞式启动一致。reject 会被 run() 吞掉(门失败不该炸掉整轮);
-   * 轮中注入(inject)不经过它。
-   */
-  beforeTurn?: () => Promise<void>;
   /** 每轮结束后以完整历史调用,用于会话持久化。 */
   onHistoryChange?: (messages: ModelMessage[]) => void;
+  /**
+   * 扩展钩子(见 core/hooks.ts)。缺省 = 没有扩展:工具原样交给 SDK、系统
+   * 提示词原样发送,零开销。
+   */
+  hooks?: HookRegistry;
+  /** 这是子 agent(task 工具 / fork 技能)。只进钩子输入的 subagent 标记。 */
+  subagent?: boolean;
 }
 
 /**
@@ -104,6 +107,26 @@ interface TurnFinish {
   finishReason: string;
 }
 
+/** 排队的轮后消息(followUp):一条完整的新一轮,有 turn-start、进时间线,不是引导。 */
+interface FollowUpEntry {
+  text: string;
+  display?: string;
+  images?: ImageAttachment[];
+}
+
+/**
+ * 「只跑引导」的一轮:两轮之间(turn_end 钩子期间)注入的引导没有轮后消息
+ * 可搭时,单独续跑一次。不发 turn-start、不推用户消息——它已经作为引导在
+ * 时间线上回显过,再起一轮会把同一条话显示两遍。
+ */
+const GUIDANCE_ONLY = Symbol('guidance-only');
+
+/** 一轮的结局,原样进 turn_end 钩子。 */
+type TurnResult =
+  | { outcome: 'completed'; finishReason?: string; usage?: UsageSnapshot }
+  | { outcome: 'aborted' }
+  | { outcome: 'error'; error: Error };
+
 export class Agent {
   private messages: ModelMessage[] = [];
   private cumulativeTokens = 0;
@@ -148,8 +171,26 @@ export class Agent {
    * 被丢弃的对话整体写回内存,并存进那个全新的会话文件。
    */
   private historyGeneration = 0;
+  /** 经 followUp 排队、等当前这一轮收尾后开跑的消息。 */
+  private followUps: FollowUpEntry[] = [];
+  /**
+   * 一次 run() 的整个链条(首轮 + 全部续跑)进行中。两轮之间 controller
+   * 为空,靠它撑住 isRunning——否则那段窗口里提交的消息会并发起第二个链条。
+   */
+  private chainActive = false;
+  /** 两轮之间收到的 abort():下一轮不开,链条以中断收尾。 */
+  private chainAbortRequested = false;
 
-  constructor(private readonly options: AgentOptions) {}
+  /**
+   * 这一份 Agent 是不是子 agent。每个钩子输入都带它(扩展自己决定要不要区别
+   * 对待),而 `options.subagent` 是可选的——四处各写一遍 `?? false` 只要漏
+   * 一个,那个钩子就会收到 undefined,而 HookInput 的类型是 boolean。
+   */
+  private readonly subagent: boolean;
+
+  constructor(private readonly options: AgentOptions) {
+    this.subagent = options.subagent ?? false;
+  }
 
   get history(): ModelMessage[] {
     return this.messages;
@@ -215,9 +256,23 @@ export class Agent {
     };
   }
 
-  /** 取消进行中的一轮。没有任务在跑时调用也是安全的。 */
+  /**
+   * 取消进行中的一轮。没有任务在跑时调用也是安全的。落在两轮之间(turn_end
+   * 钩子期间,controller 已清)时记一个标记,链条不再开下一轮。
+   */
   abort(): void {
-    this.controller?.abort();
+    if (this.controller) {
+      this.controller.abort();
+      return;
+    }
+    if (this.chainActive) {
+      this.chainAbortRequested = true;
+      // 两轮之间也要**立刻**播报:此刻 run() 正 await 在 turn_end 钩子里
+      // (扩展可能在跑一次评估调用),不发的话 esc 到链条真的停下来之间
+      // 完全没有反馈,而扩展也没有别的信号可以据此掐掉自己在飞的请求。
+      // run() 收尾时的那次 emitAborted 由 abortEmitted 去重。
+      this.emitAborted();
+    }
   }
 
   /** 一轮至多播报一次中断,详见 abortEmitted。 */
@@ -245,7 +300,25 @@ export class Agent {
   }
 
   get isRunning(): boolean {
-    return this.controller !== undefined;
+    return this.controller !== undefined || this.chainActive;
+  }
+
+  /**
+   * 排队一条轮后消息:当前这一轮完全收尾(finally 已跑完、turn_end 钩子已
+   * 跑完)后作为**新的一轮**开跑——有自己的 turn-start / turn-end,进时间线
+   * 与历史。与 inject 的区别:inject 把消息塞进正在跑的这一轮里。空闲时
+   * 立即开一轮(fire-and-forget;run 从不 reject)。
+   *
+   * 中断(esc)或出错会丢掉整个队列(agent_end 报 followUpsDropped):用户刚
+   * 停下,agent 绝不能自己接着跑——这是 `/goal` 一直坚持的边界,搬到这里
+   * 成为所有扩展的边界。
+   */
+  followUp(text: string, options?: { display?: string; images?: ImageAttachment[] }): void {
+    if (this.isRunning) {
+      this.followUps.push({ text, display: options?.display, images: options?.images });
+      return;
+    }
+    void this.run(text, options);
   }
 
   /** 手动触发压缩,例如来自 `/compact` 命令。并发调用共享同一次压缩。 */
@@ -335,6 +408,17 @@ export class Agent {
     }
   }
 
+  /**
+   * 跑一个链条:首轮,加上 turn_end 钩子期间经 followUp 排进来的每一轮。
+   * 整个链条内 isRunning 保持为 true(两轮之间 controller 为空,由 chainActive
+   * 撑着),期间提交的消息一律走 inject 排队,绝不并发起第二个链条;RPC 的
+   * 一次 run 调用也因此覆盖整个链条,客户端的忙碌标记不会中途熄灭。
+   *
+   * 为什么续跑由 run() 自己排水,而不是让扩展在 turn_end 里再调 run():
+   * 那正是 goal.ts 曾经踩过的坑——bus 的 turn-end 在 try 里就发出,此刻
+   * finally 还没跑、controller 还在,处理器里的 run() 会被重入兜底转成
+   * inject,混进上一轮的历史。这里 turn_end 钩子在 runTurn 完全返回之后才跑。
+   */
   async run(
     userText: string,
     options?: { display?: string; images?: ImageAttachment[] },
@@ -344,36 +428,90 @@ export class Agent {
     // 写盘期间轮可能收尾而入队失败——此时 isRunning 必已为 false,顺势
     // 落到下方的正常开轮路径,消息绝不静默丢弃。
     if (this.isRunning && (await this.inject(userText, options?.images))) return;
-    const { bus } = this.options;
-    bus.emit({
-      type: 'turn-start',
-      userText,
-      display: options?.display,
-      ...(options?.images?.length ? { imageCount: options.images.length } : {}),
-    });
+    const { hooks } = this.options;
+    const subagent = this.subagent;
+
+    // 链条状态在任何 await 之前就位,理由同 runTurn 里的 controller。
+    this.chainActive = true;
+    this.chainAbortRequested = false;
+    this.followUps = [];
+    this.pendingGuidance = [];
+    let aborted = false;
+    let dropped = 0;
+    try {
+      let next: FollowUpEntry | typeof GUIDANCE_ONLY | undefined = {
+        text: userText,
+        display: options?.display,
+        images: options?.images,
+      };
+      while (next) {
+        const result = await this.runTurn(next);
+        await hooks?.turnEnd({ ...result, subagent });
+        if (result.outcome !== 'completed' || this.chainAbortRequested) {
+          aborted = result.outcome === 'aborted' || this.chainAbortRequested;
+          // 两轮之间的 esc:上一轮已正常收尾,补一条 aborted 让时间线知道
+          // 链条是被停下的(去重靠 abortEmitted,本轮真被中断时已发过)。
+          if (this.chainAbortRequested) this.emitAborted();
+          dropped = this.followUps.length;
+          this.followUps = [];
+          break;
+        }
+        next = this.followUps.shift();
+        if (!next && this.pendingGuidance.length > 0) next = GUIDANCE_ONLY;
+      }
+    } finally {
+      this.chainActive = false;
+      // 链条被中断时,两轮之间注入的引导没搭上任何一轮:并入历史,与
+      // runTurn 的 finally 同理(时间线上有、历史里没有是最坏的结局)。
+      if (this.pendingGuidance.length > 0) {
+        this.messages.push(...this.pendingGuidance.splice(0).map(guidanceMessage));
+        this.options.onHistoryChange?.(this.messages);
+      }
+    }
+    // 链条的 bus 信号先于 agent_end 钩子:钩子里若有扩展在空闲时又 followUp
+    // 开了新链条,那是下一个链条的 turn-start,不能被这条 run-end 盖掉。
+    this.options.bus.emit({ type: 'run-end' });
+    await hooks?.agentEnd({ aborted, followUpsDropped: dropped, subagent });
+  }
+
+  /** 一轮:用户消息 + 主流 + 引导续跑的流,以 turn-end / aborted / error 收尾。 */
+  private async runTurn(entry: FollowUpEntry | typeof GUIDANCE_ONLY): Promise<TurnResult> {
+    const { bus, hooks } = this.options;
+    const guidanceOnly = entry === GUIDANCE_ONLY;
+    if (!guidanceOnly) {
+      bus.emit({
+        type: 'turn-start',
+        userText: entry.text,
+        display: entry.display,
+        ...(entry.images?.length ? { imageCount: entry.images.length } : {}),
+      });
+    }
 
     // controller 在任何 await 之前就位:压缩等待期间 isRunning 已为 true,
     // 此时提交的消息走 inject 排队,而不是再起一轮。
-    this.pendingGuidance = [];
     this.injectedThisTurn = [];
     this.contextNoticeSent = false;
     this.abortEmitted = false;
     this.controller = new AbortController();
+    let result: TurnResult = { outcome: 'completed' };
 
     try {
-      // MCP 非阻塞启动的补偿门(通常早已 resolve):controller 已就位,等待
-      // 期间提交的消息照常走 inject 排队。吞错在此兜底,门失败不炸整轮。
-      await this.options.beforeTurn?.().catch(() => {});
+      if (!guidanceOnly) {
+        await hooks?.turnStart({ userText: entry.text, subagent: this.subagent });
+      }
       // `/compact` 进行中时等它收尾:它完成时会整体替换 this.messages,
       // 先 push 的用户消息会被无声覆盖掉。压缩失败也必须继续走完这一轮——
       // 用户的消息已经回显在时间线上,吞掉它比压不掉严重得多;错误由
       // `/compact` 的调用方自己呈现。
       if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
       await this.maybeCompact();
-      const prepared = await this.prepareUserMessage(userText, options?.images);
-      this.messages.push({ role: 'user', content: buildUserContent(prepared.text, prepared.images) });
-      this.emitImageNotices(prepared, options?.images?.length ?? 0);
-      let finish = await this.stream();
+      let finish: TurnFinish | undefined;
+      if (!guidanceOnly) {
+        const prepared = await this.prepareUserMessage(entry.text, entry.images);
+        this.messages.push({ role: 'user', content: buildUserContent(prepared.text, prepared.images) });
+        this.emitImageNotices(prepared, entry.images?.length ?? 0);
+        finish = await this.stream();
+      }
 
       // 末步开始之后注入的引导等不到下一个 prepareStep——立即作为新的
       // 用户消息续跑,否则 UI 已回显"引导已排队"而消息被静默丢弃。
@@ -413,16 +551,20 @@ export class Agent {
           });
         }
         bus.emit({ type: 'turn-end', usage: finish.usage, finishReason: finish.finishReason });
+        result = { outcome: 'completed', finishReason: finish.finishReason, usage: finish.usage };
+      } else if (this.controller.signal.aborted) {
+        // 完成过至少一步的流被中断:SDK 正常兑现、不 reject,aborted 已由流的
+        // abort 部件发出,这里只把结局记对。
+        result = { outcome: 'aborted' };
       }
     } catch (error) {
       if (this.controller.signal.aborted) {
         this.emitAborted();
+        result = { outcome: 'aborted' };
       } else {
-        bus.emit({
-          type: 'error',
-          error: normalizeError(error, this.options.provider),
-          recoverable: true,
-        });
+        const normalized = normalizeError(error, this.options.provider);
+        bus.emit({ type: 'error', error: normalized, recoverable: true });
+        result = { outcome: 'error', error: normalized };
       }
     } finally {
       // 中断/出错时 stream() 到不了轮末合并——已注入(模型已看过)和仍在
@@ -436,6 +578,7 @@ export class Agent {
       this.controller = undefined;
       this.options.onHistoryChange?.(this.messages);
     }
+    return result;
   }
 
   private async maybeCompact(): Promise<void> {
@@ -465,14 +608,33 @@ export class Agent {
   }
 
   /** 返回这个流的收尾信息(若正常收尾),由 run() 汇总成一次 turn-end。 */
+  /** 系统提示词过一遍 before_agent_start 钩子;没人听就原样返回。 */
+  private async resolveSystemPrompt(base: string): Promise<string> {
+    const { hooks } = this.options;
+    if (!hooks?.has('before_agent_start')) return base;
+    return hooks.beforeAgentStart({ systemPrompt: base, subagent: this.subagent });
+  }
+
+  /**
+   * 交给 SDK 的工具集:有工具钩子时每次开流现包(tools 会被就地改键,见
+   * hooked-tools.ts);没有就是原对象,零开销。
+   */
+  private hookedTools(): ToolSet {
+    const { tools, hooks } = this.options;
+    if (!hooks || (!hooks.has('tool_call') && !hooks.has('tool_result'))) return tools;
+    return hookTools(tools, hooks, { subagent: this.subagent });
+  }
+
   private async stream(): Promise<TurnFinish | undefined> {
-    const { bus, model, config, tools, systemPrompt, provider } = this.options;
+    const { bus, model, config, provider } = this.options;
     const signal = this.controller!.signal;
     let finish: TurnFinish | undefined;
     // streamText 的 system 只在开流时读一次。轮中途换了系统提示词(计划获批
     // → setMode)时,要靠 prepareStep 的 instructions 在下一步补下去,否则整条
     // 流会一直用计划模式那份提示词跑完——模型明明已经能改文件,却还在拒绝动手。
-    const systemAtStart = systemPrompt;
+    // 比对的是核心组装的那份(options.systemPrompt),钩子的产物不参与比对。
+    const systemAtStart = this.options.systemPrompt;
+    const systemPrompt = await this.resolveSystemPrompt(systemAtStart);
 
     // 组装 providerOptions:parallel_tool_calls 与思考强度参数都要写进同一个
     // provider 键,分开展开会整体覆盖,必须先合并再传入。provider 按引用持有,
@@ -509,7 +671,7 @@ export class Agent {
       model,
       system: systemPrompt,
       messages: outbound,
-      tools,
+      tools: this.hookedTools(),
       // maxSteps 未设 = 无步数上限(Claude Code 同款:交互场景的刹车是 esc,
       // 上下文失控由 prepareStep 的轮内压缩兜底)。注意"无上限"必须显式传
       // 空数组,不能传 undefined:AI SDK 对省略的 stopWhen 自带缺省
@@ -554,7 +716,9 @@ export class Agent {
         if (next === messages && !changedSystem) return {};
         return {
           ...(next === messages ? {} : { messages: next }),
-          ...(changedSystem ? { instructions: this.options.systemPrompt } : {}),
+          ...(changedSystem
+            ? { instructions: await this.resolveSystemPrompt(this.options.systemPrompt) }
+            : {}),
         };
       },
       abortSignal: signal,
@@ -723,19 +887,12 @@ function mergeUsage(a: UsageSnapshot, b: UsageSnapshot): UsageSnapshot {
   };
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof PermissionDeniedError) return error.message;
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
-  return JSON.stringify(error);
-}
-
 /**
  * 把 provider 的错误转成用户能据此采取行动的信息。三个平台返回的都是
  * OpenAI 形状的错误,但措辞各不相同,原始消息本身通常没什么帮助。
  */
 function normalizeError(error: unknown, provider: ResolvedProvider): Error {
-  const base = error instanceof Error ? error : new Error(errorMessage(error));
+  const base = toError(error);
   const text = base.message;
 
   const params = {

@@ -27,7 +27,6 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
   messageCount: 2,
   status: 'dormant',
   isRunning: false,
-  hasPendingPermission: false,
   unseen: false,
   ...over,
 });
@@ -40,7 +39,6 @@ const snapshot = (root: string, storeId: string): StateSnapshot =>
     config: {},
     mcpStatuses: [],
     agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-    goal: { active: false, busy: false },
     todos: [],
     skills: [],
     sentAt: 0,
@@ -72,7 +70,7 @@ beforeEach(() => {
       task({ id: 's-4', title: '别的项目', root: '/other' }),
     ],
     focusedTaskId: 's-1',
-    runtimes: { 's-1': { snapshot: snapshot('/w', 's-1'), connection: 'connected', permission: undefined, unread: false } },
+    runtimes: { 's-1': { snapshot: snapshot('/w', 's-1'), connection: 'connected', unread: false } },
     snapshot: snapshot('/w', 's-1'),
     connection: 'connected',
   });

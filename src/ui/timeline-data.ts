@@ -1,5 +1,25 @@
 import type { TimelineItem } from './types.js';
-import type { TodoItem } from '../tools/todo.js';
+
+/**
+ * todo 清单的一项。类型住在这里而不是 todo 扩展里:扩展模块带 ai/zod 的
+ * 运行时依赖,而本文件是 GUI renderer 的 @core 白名单入口,必须保持 Node-free
+ * (扩展反过来从这里 import)。
+ */
+export interface TodoItem {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+/** 从任意来源(会话记录、线上快照)认出一份清单;形状不对返回 undefined。 */
+export function parseTodos(data: unknown): TodoItem[] | undefined {
+  if (!Array.isArray(data)) return undefined;
+  const valid = data.filter(
+    (item): item is TodoItem =>
+      typeof (item as TodoItem | undefined)?.content === 'string' &&
+      ['pending', 'in_progress', 'completed'].includes((item as TodoItem).status),
+  );
+  return valid.length === data.length ? valid : undefined;
+}
 
 /**
  * tool 条目的纯数据提取,Timeline(渲染)与 transcript(退出 dump)共用。
@@ -20,7 +40,6 @@ const TOOL_LABELS: Record<string, string> = {
   web_fetch: 'Fetch',
   // 名字里就带上动作:它不带参数,紧随其后的是整份清单。
   todo: 'Update Todos',
-  exit_plan: 'Plan',
   task: 'Task',
   skill: 'Skill',
 };
@@ -89,18 +108,6 @@ export function extractDiff(item: Extract<TimelineItem, { kind: 'tool' }>): stri
   return typeof output?.diff === 'string' ? output.diff : undefined;
 }
 
-/**
- * exit_plan 调用里的方案正文。方案在**输入**里而不是结果里,所以无论批准
- * 与否都取得到——被打回的那版也留在时间线上,能看清模型改了什么。
- */
-export function extractPlan(item: Extract<TimelineItem, { kind: 'tool' }>): string | undefined {
-  if (item.toolName !== 'exit_plan' || item.isError) return undefined;
-  // 非计划模式下的误调没有走过审批,把正文摊开会让它看起来像是提交过。
-  if ((item.output as { notApplicable?: unknown } | undefined)?.notApplicable) return undefined;
-  const plan = (item.input as { plan?: unknown } | undefined)?.plan;
-  return typeof plan === 'string' && plan.trim() ? plan : undefined;
-}
-
 /** 成功的 todo 调用返回其输入里的完整任务列表,用于渲染清单。 */
 export function extractTodos(
   item: Extract<TimelineItem, { kind: 'tool' }>,
@@ -114,4 +121,20 @@ export function extractTodos(
       typeof (todo as TodoItem | undefined)?.status === 'string',
   );
   return valid.length > 0 ? valid : undefined;
+}
+
+/**
+ * 走时用的时长:整秒,不带小数(`12s` / `1m04s`)。
+ *
+ * 与两个前端各自的 `formatDuration`(工具耗时,一分钟内带一位小数 `4.2s`)
+ * 是**两种东西**:那是一段已经结束的耗时,小数是精度;而这个挂在扩展状态行
+ * 上每秒跳一次,尾数只是噪音。放在这里而不是 TUI 里,是因为 GUI 的
+ * `StatusLine` 渲染的是同一批 `ExtensionStatusEntry.since`,两边必须同形——
+ * 之前 GUI 复用 `formatDuration` 于是同一条目在 TUI 显示 `12s`、在 GUI 显示
+ * `12.3s`。timeline-data 是 renderer 的 `@core` 白名单入口,零 Node 依赖。
+ */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, '0')}s`;
 }

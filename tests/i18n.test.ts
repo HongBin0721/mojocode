@@ -64,6 +64,6 @@ describe('t', () => {
     setLocale('zh-CN');
     expect(getLocale()).toBe('zh-CN');
     expect(t('status.thinking')).toBe('思考中');
-    expect(t('notice.modeSet', { mode: 'yolo' })).toBe('权限模式已设为 yolo。');
+    expect(t('notice.busyCommand', { name: 'goal' })).toBe('任务运行中不能使用 /goal（可先 esc 中断）。');
   });
 });

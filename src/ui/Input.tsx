@@ -1,6 +1,6 @@
 import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
 import { Box, Text, useInput, useTerminalSize, type JSX, type ScrollDirection } from './kit.js';
-import { theme, glyphs, inputModeStyle } from './theme.js';
+import { theme, glyphs } from './theme.js';
 import { IdleRule, StatusLine, phaseColor, type WorkState } from './StatusLine.js';
 import { t } from '../i18n/index.js';
 import { centeredWindowStart } from './picker-utils.js';
@@ -21,6 +21,10 @@ export interface CommandOption {
   label?: string;
   /** 当前生效的值——打开选择器时预选,并带 ✓ 标记。 */
   current?: boolean;
+  /** 选中它是再开一层(带着 [...path, value] 重新取值),不是提交。 */
+  expands?: boolean;
+  /** 选中它是预填输入框(`/name <path...> `),让用户接着补自由文本。 */
+  prefill?: boolean;
 }
 
 export interface SlashCommand {
@@ -36,8 +40,12 @@ export interface SlashCommand {
   /**
    * 枚举参数的取值来源。提供了它的命令,在菜单上回车会进入二级选择器
    * 而不是直接执行;异步形式用于要请求线上数据的命令(如 /resume)。
+   *
+   * `path` 是已经选过的层(第一层为空数组):标了 `expands` 的选项会带着
+   * `[...path, value]` 再问一次。单层命令写 `() => ...` 即可(形参少是
+   * 兼容的),不必为了这个能力去动签名。
    */
-  options?: () => CommandOption[] | Promise<CommandOption[]>;
+  options?: (path: string[]) => CommandOption[] | Promise<CommandOption[]>;
   /**
    * 多选模式:空格切换选中,回车把所有选中值(按选项顺序)作为参数提交;
    * 全部取消时提交 `none`。`current` 标记初始选中集合。
@@ -60,13 +68,8 @@ interface Props {
   disabled: boolean;
   placeholder: string;
   /**
-   * 当前权限模式标签(plan / full-access / read-only / ask…)。边框与提示符
-   * 的颜色、字形据此变化,见 theme.inputModeStyle;不传则用默认样式。
-   */
-  mode?: string;
-  /**
    * 任务运行中。输入仍然可用(引导消息);没有 work 阶段可显示的空当里
-   * (轮与轮之间)边框退为弱化色,提示符保持模式色,示意"这里还能打字"。
+   * (轮与轮之间)边框退为弱化色,提示符保持强调色,示意"这里还能打字"。
    */
   busy?: boolean;
   /**
@@ -94,19 +97,10 @@ interface Props {
   /**
    * 预填已写入输入框,调用方应把 prefill 置空。
    *
-   * 去重不能只靠组件内的标记:权限确认框出现时 Input 会整个卸载,重新挂载
-   * 后标记归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
+   * 去重不能只靠组件内的标记:覆盖层出现时 Input 会整个卸载,重新挂载后
+   * 标记归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
    */
   onPrefillConsumed?: () => void;
-  /**
-   * 外部请求打开某命令的二级选择器(/review 从第二级选择器 esc 返回预设层
-   * 用)。index 可选,指定初始光标(预设层的"回到刚才那项")。每次传入新
-   * 的对象,处理后必须由 `onSelectorConsumed` 清掉——语义与 prefill 相同
-   * (去重靠对象标识;Input 卸载重挂后组件内标记会归零)。
-   */
-  requestSelector?: { command: string; index?: number };
-  /** 选择器已打开(命令不存在或无枚举时放弃),调用方应清空请求。 */
-  onSelectorConsumed?: () => void;
   /**
    * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
    * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
@@ -129,6 +123,12 @@ interface SelectorState {
   loading: boolean;
   /** 多选模式下当前选中的值集合。 */
   selected: Set<string>;
+  /**
+   * 已经选过的层:value 用来拼最终参数,cursor 是选中它时的光标位置——
+   * esc 逐层退回要回到原来那一行,而不是回到列表头(上一层可能有几十个
+   * 分支,退回时丢掉位置等于让用户重找一次)。
+   */
+  trail: { value: string; cursor: number }[];
 }
 
 /** 粘贴图片的上限:单张字节数、待发送总字节数与张数(与 @ 引用图片一致)。 */
@@ -197,19 +197,6 @@ export function Input(props: Props): JSX.Element {
         setCursor(prefill.text.length);
         setHistoryIndex(undefined);
         props.onPrefillConsumed?.();
-      },
-    ),
-  );
-
-  // 外部请求打开某命令的二级选择器:消费语义与 prefill 相同。
-  createEffect(
-    on(
-      () => props.requestSelector,
-      (request) => {
-        if (!request) return;
-        const command = props.commands.find((c) => c.name === request.command);
-        if (command?.options) openSelector(command, request.index);
-        props.onSelectorConsumed?.();
       },
     ),
   );
@@ -413,15 +400,35 @@ export function Input(props: Props): JSX.Element {
     );
   }
 
-  function openSelector(command: SlashCommand, initialCursor?: number) {
+  /**
+   * 打开(或深入/退回一层)取值选择器。`trail` 是已选过的层;取值失败或
+   * 某层为空表时退回成提交 `/name <已选层...>`——由命令自己解释这一层为什么
+   * 空(是没有分支,还是根本不是 git 仓库),客户端不替它猜。
+   */
+  function openSelector(
+    command: SlashCommand,
+    initialCursor?: number,
+    trail: { value: string; cursor: number }[] = [],
+  ) {
     const gen = ++selectorGen;
-    setSelector({ command, options: [], cursor: 0, loading: true, selected: new Set<string>() });
-    void Promise.resolve(command.options!()).then(
+    const path = trail.map((step) => step.value);
+    const fallback = () => {
+      setSelector(undefined);
+      submit(path.length > 0 ? `/${command.name} ${path.join(' ')}` : `/${command.name}`);
+    };
+    setSelector({
+      command,
+      options: [],
+      cursor: 0,
+      loading: true,
+      selected: new Set<string>(),
+      trail,
+    });
+    void Promise.resolve(command.options!(path)).then(
       (options) => {
         if (selectorGen !== gen) return;
         if (options.length === 0) {
-          setSelector(undefined);
-          submit(`/${command.name}`);
+          fallback();
           return;
         }
         const current = options.findIndex((o) => o.current);
@@ -429,21 +436,21 @@ export function Input(props: Props): JSX.Element {
         setSelector({
           command,
           options,
-          // initialCursor 是外部点名(如 esc 返回预设层时"回到刚才那项"),
+          // initialCursor 是外部点名(如 esc 返回上一层时"回到刚才那项"),
           // 优先于 current 标记;都钳在合法区间。
           cursor: command.multi
             ? 0
             : Math.max(0, Math.min(initialCursor ?? current, options.length - 1)),
           loading: false,
           selected,
+          trail,
         });
       },
       () => {
         if (selectorGen !== gen) return;
-        // 选项加载失败(如 /resume 读会话列表出错)——回退为提交无参
-        // 命令,让命令自身把错误报告到时间线上。
-        setSelector(undefined);
-        submit(`/${command.name}`);
+        // 选项加载失败(如 /resume 读会话列表出错)——回退为提交命令,
+        // 让命令自身把错误报告到时间线上。
+        fallback();
       },
     );
   }
@@ -484,6 +491,13 @@ export function Input(props: Props): JSX.Element {
       const sel = selector();
       if (sel) {
         if (key.escape) {
+          // 深层里 esc 是"退回上一层",不是关掉整个选择器:选错了基准
+          // 分支不该把人踢回输入框重打一遍命令。
+          const back = sel.trail[sel.trail.length - 1];
+          if (back) {
+            openSelector(sel.command, back.cursor, sel.trail.slice(0, -1));
+            return;
+          }
           selectorGen++;
           setSelector(undefined);
           return;
@@ -522,11 +536,29 @@ export function Input(props: Props): JSX.Element {
             return;
           }
           const option = sel.options[sel.cursor];
-          if (option) {
-            selectorGen++;
-            setSelector(undefined);
-            submit(`/${sel.command.name} ${option.value}`);
+          if (!option) return;
+          // 再开一层:记下这一层的 value 与光标(esc 要按原位退回来)。
+          if (option.expands) {
+            openSelector(sel.command, undefined, [
+              ...sel.trail,
+              { value: option.value, cursor: sel.cursor },
+            ]);
+            return;
           }
+          const path = [...sel.trail.map((step) => step.value), option.value];
+          selectorGen++;
+          setSelector(undefined);
+          // 预填:留尾随空格,菜单保持关闭(slashState 遇空格即收起),
+          // 用户接着补自由文本再自己回车。
+          if (option.prefill) {
+            const text = `/${sel.command.name} ${path.join(' ')} `;
+            batch(() => {
+              setValue(text);
+              setCursor(text.length);
+            });
+            return;
+          }
+          submit(`/${sel.command.name} ${path.join(' ')}`);
           return;
         }
         return;
@@ -714,15 +746,14 @@ export function Input(props: Props): JSX.Element {
   const lines = () => value().split('\n');
   const cursorRow = () => countLines(value().slice(0, cursor())) - 1;
   const cursorCol = () => cursor() - (value().lastIndexOf('\n', cursor() - 1) + 1);
-  const modeStyle = () => inputModeStyle(props.mode);
   // 工作中整个框取阶段色(与顶边标题同色):框就是那条随阶段变色的状态带。
   // disabled 排在最前:它同时关掉 useInput,框亮着而键盘不收会像"能打字"。
   const borderColor = () => {
     if (props.disabled) return theme.dim;
     if (props.work) return phaseColor(props.work.phase);
-    return props.busy ? theme.dim : modeStyle().color;
+    return props.busy ? theme.dim : theme.accent;
   };
-  const promptColor = () => (props.disabled ? theme.dim : modeStyle().color);
+  const promptColor = () => (props.disabled ? theme.dim : theme.accent);
 
   /**
    * 顶边线的公共参数。文本行与二级选择器共用同一条边(选择器顶掉的只是输入
@@ -834,7 +865,7 @@ export function Input(props: Props): JSX.Element {
           {(work: () => WorkState) => <StatusLine work={work()} {...edgeProps()} />}
         </Show>
         <Box borderStyle="round" borderSides={['bottom']} borderColor={borderColor()}>
-          <Text color={promptColor()}>{modeStyle().glyph} </Text>
+          <Text color={promptColor()}>{glyphs.prompt} </Text>
           <Show
             when={value().length > 0}
             fallback={
@@ -913,6 +944,9 @@ function SelectorView(props: {
       <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1}>
         <Text bold color={theme.accent}>
           {props.state.command.selectorTitle ?? `/${props.state.command.name}`}
+          {props.state.trail.length > 0
+            ? ` ${glyphs.pointer} ${props.state.trail.map((step) => step.value).join(` ${glyphs.pointer} `)}`
+            : ''}
         </Text>
         {loading ? (
           <Text color={theme.dim}>
@@ -933,6 +967,7 @@ function SelectorView(props: {
                       <Text color={active ? theme.accent : undefined} wrap="truncate-end">
                         {active ? `${glyphs.pointer} ` : '  '}
                         {index + 1}. {option.title ?? option.value}
+                        {option.expands ? ' ▸' : ''}
                       </Text>
                       {option.label ? (
                         <Box paddingLeft={5}>
@@ -960,6 +995,7 @@ function SelectorView(props: {
                       </Text>
                     ) : null}
                     {option.label ? <Text color={theme.dim}> — {option.label}</Text> : null}
+                    {option.expands ? <Text color={theme.dim}> ▸</Text> : null}
                   </Text>
                 );
               }}

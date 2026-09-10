@@ -157,9 +157,8 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `ctrl+c` 两次 | 退出（时间线自动 dump 回终端历史） |
 | `滚轮` / `PageUp` / `PageDown` | 回看时间线;滚到底部恢复自动跟随。滚轮停在 `/` 命令菜单、`@` 文件菜单或二级选择器上时滚的是那份列表（等同 `↑`/`↓`，同样首尾环绕），不会连带滚动时间线 |
 | `ctrl+o` | 循环时间线密度：`full` → `compact` → `result`（`/focus` 可落盘,见下） |
-| `ctrl+r` | 展开/收起详情：思考正文与工具输出默认折叠成一行 `+ N 行输出`，按一次全部摊开（diff、方案正文、任务清单是结果，从不折叠） |
-| `shift+tab` | 循环切权限档位：`read-only` → `ask` → `auto` → `full-access` → `plan` → `read-only`（只改本会话，不落盘） |
-| `鼠标点击` | 点底栏的权限档位弹出档位选项框（四个预设 + `plan` 全列出，键盘同样可用，`esc` 取消；点名指定的这一档会落盘到本工作区配置）；授权确认框、回退选择器、`/setting` 面板的列表行点一下即选中。按下与抬起要落在同一格才算点击，所以拖选复制不会误触发 |
+| `ctrl+r` | 展开/收起详情：思考正文与工具输出默认折叠成一行 `+ N 行输出`，按一次全部摊开（diff、任务清单是结果，从不折叠） |
+| `鼠标点击` | 回退选择器、`/setting` 面板的列表行点一下即选中。按下与抬起要落在同一格才算点击，所以拖选复制不会误触发 |
 | `shift+enter` | 输入框内换行（需终端支持 kitty 键盘协议：iTerm2 3.5+ / kitty / WezTerm / Ghostty 等） |
 | `option+enter` / `ctrl+j` / 行尾 `\` + 回车 | 换行的兜底按键，任何终端可用 |
 | `↑`/`↓` | 翻历史输入；多行草稿内为上下移动光标 |
@@ -168,7 +167,7 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `ctrl+v` | 粘贴剪贴板中的图片：输入框出现 `[image #N]` 占位符，提交时图片随消息发给模型（macOS 为主平台，Linux 需 `xclip`/`wl-paste`）。注意 DeepSeek 官方 SDK 不支持图片，会被忽略并提示 |
 
 图片长边超过 1568px 时会自动等比降采样（PNG 用 `node:zlib` 手写编解码，JPEG 走纯 JS 的 `jpeg-js`，缩放统一用盒式滤波）——服务商本身就会缩到这个尺寸，多传的像素只会白白撑大会话文件并在后续每一步重传。格式保持不变，重编码后反而更大时保留原图；GIF/WebP 不处理。所有图片另受 5MB/张、10MB/条的上限约束。
-| 命令菜单回车 | 带枚举参数的命令（`/provider` `/approvals` `/think` `/focus` `/review`）会进入二级选择器；`/models` 不带参数回车则打开按厂商分组的模型选择器 |
+| 命令菜单回车 | 带枚举参数的命令（`/provider` `/think` `/focus` `/review`）会进入二级选择器；`/models` 不带参数回车则打开按厂商分组的模型选择器 |
 
 **斜杠命令**：
 
@@ -177,12 +176,10 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 | `/help` | 列出所有命令 |
 | `/init` | 分析代码库并生成/改进项目根目录的 AGENTS.md（会注入后续会话的系统提示词） |
 | `/review [范围]` | 让 agent 评审 git 改动并输出按严重度排序的发现清单（只读，不改任何文件）。不带参数弹出 Codex 式预设菜单四选一：对比基准分支（PR 式，再选分支）、未提交变更、审查某个提交（再从最近提交列表挑一个）、自定义审查说明（补充关注点后评审未提交变更）；也可直打 `/review uncommitted`、`/review base main`、`/review commit <sha>`、`/review custom <焦点>`。评审以一轮对话呈现，之后可直接追问 |
-| `/simplify [目标]` | 对齐 Claude Code：审查变更代码的清理机会并**直接应用修复**（保持未提交，留给你检查）。与 Claude Code 同款的两阶段编排：四个**并行只读审查子代理**各领一个维度（复用仓库里已有的实现、化简冗余逻辑、效率、抽象层级，各自独立上下文与步数预算、只报告不动手），报告汇总去重后由一轮应用轮对照当前工作区核实并**直接应用修复**；正确性 bug 不在这一轮的职责内（那是 `/review` 的事）。裸命令默认清理未提交改动；也可沿用 `/review` 的范围语法（`/simplify base main`、`/simplify commit <sha>`、`/simplify custom <焦点>`），或传一个路径/焦点作为清理目标（`/simplify src/foo.ts`）。计划模式与 read-only 档位会提前拦下 |
-| `/plan [任务]` | 进入计划模式：只读调研、产出方案交你批准，批准后自动开工。带参数则顺带以该任务开跑 |
+| `/simplify [目标]` | 对齐 Claude Code：审查变更代码的清理机会并**直接应用修复**（保持未提交，留给你检查）。与 Claude Code 同款的两阶段编排：四个**并行只读审查子代理**各领一个维度（复用仓库里已有的实现、化简冗余逻辑、效率、抽象层级，各自独立上下文与步数预算、只报告不动手），报告汇总去重后由一轮应用轮对照当前工作区核实并**直接应用修复**；正确性 bug 不在这一轮的职责内（那是 `/review` 的事）。裸命令默认清理未提交改动；也可沿用 `/review` 的范围语法（`/simplify base main`、`/simplify commit <sha>`、`/simplify custom <焦点>`），或传一个路径/焦点作为清理目标（`/simplify src/foo.ts`） |
 | `/goal [条件\|clear]` | 目标模式：给一个完成条件，每轮结束后自动检查、没达成就接着干。不带参数看状态，`clear` 取消 |
 | `/models [id]` | 切换模型。不带参数打开分组选择器：按已配置厂商分支展示全部可用模型，输入即搜索（匹配模型 id 或厂商名），`←`/`→` 折叠/展开分组；`/model` 仍是它的别名 |
 | `/provider <id>` | 切换服务商（kimi / deepseek / glm / …） |
-| `/approvals <预设>` | 切换沙箱与确认策略预设 |
 | `/setting` | 打开设置面板：界面语言、状态栏显示项。`↑`/`↓` 选择、回车进入、`esc` 逐级返回；状态栏是多选，空格勾选、回车生效。改动即时生效并写入 `~/.mojocode/config.json` |
 | `/focus <full\|compact\|result>` | 时间线密度并落盘:`full` 全量、`compact` 折叠成段的工具调用为「⋯ N 个工具调用已折叠」、`result` 只看问答。`ctrl+o` 会话内循环切换,随时双向可逆;回答、报错与各类提示在任何档位都不隐藏 |
 | `/compact` | 手动压缩上下文 |
@@ -195,7 +192,6 @@ footer 回显「已复制 N 个字符」;SSH 场景经 OSC 52 送达本机,iTerm
 
 **esc esc 回退**：空闲时连按两次 `esc` 打开回退选择器，选中一条历史消息即把对话截断到它之前，原文回到输入框，编辑后重发——相当于从那一点分叉重来。
 
-**权限确认框**：`y` 允许一次 · `n` 拒绝 · `a` 本会话始终允许 · `A` 永久保存规则到项目配置。
 
 ### 非交互模式（脚本 / 管道 / CI）
 
@@ -204,10 +200,8 @@ mojocode -p "找出所有 TODO 注释并汇总"          # 单次执行，结果
 mojocode -p "分析这段报错" --provider deepseek  # 指定服务商
 mojocode -p "..." --json                        # stderr 输出 NDJSON 事件流
 cat error.log | mojocode -p "分析这个日志"       # 配合管道
-mojocode -p "/init" --full-auto                 # 生成 AGENTS.md
+mojocode -p "/init"                             # 生成 AGENTS.md
 ```
-
-`-p` 模式下没人可确认，需要授权的操作会被拒绝——脚本场景加 `--full-auto` 或 `--dangerously-bypass-approvals-and-sandbox`。
 
 单轮步数默认**不设上限**（对齐 Claude Code 的取向：交互场景有人盯着，`esc` 就是刹车，上下文失控由轮内自动压缩兜底）。无人值守想加保险丝就用 `--max-steps <n>`（或配置 `maxSteps`）：撞上会截停当前轮并提示，续发一条消息即从断点接着干（新轮重新计步）。
 
@@ -222,9 +216,8 @@ mojocode sessions            # 列出本目录的历史会话
 mojocode sessions --all      # 所有目录的
 ```
 
-恢复会话时会完整回放时间线,并还原当时的两轴权限、任务列表与本会话批准过
-的规则(CLI 参数可覆盖);模型不还原,始终沿用当前配置的 provider/model。
-会话完整记录(未压缩)保存
+恢复会话时会完整回放时间线,并还原任务列表;模型不还原,始终沿用当前配置的
+provider/model。会话完整记录(未压缩)保存
 在 `~/.mojocode/sessions/*.jsonl`,超过 `cleanupPeriodDays`(默认 30 天)未活动的
 会话在启动时自动清理。
 
@@ -232,10 +225,6 @@ mojocode sessions --all      # 所有目录的
 
 ```bash
 mojocode --provider kimi -m kimi-k2.6   # 本次指定服务商和模型
-mojocode -s read-only                   # 只读沙箱，写入逐次升级确认
-mojocode --plan                         # 计划模式启动：先给方案，批准后再动手
-mojocode --full-auto                    # auto 预设：编辑免确认，命令仍确认
-mojocode --dangerously-bypass-approvals-and-sandbox   # 全部免确认（谨慎）
 mojocode --no-mcp                       # 跳过 MCP 连接，启动更快
 mojocode -C ~/另一个项目                # 指定工作区目录
 ```
@@ -267,13 +256,6 @@ server 只绑定 127.0.0.1，所有请求都要 Bearer token 鉴权（它能执�
   "provider": "glm",
   "model": "GLM-5.3",
   "language": "zh-CN",
-  "sandbox": "workspace-write",
-  "approval": "untrusted",
-  "permissions": {
-    "allowBash": ["Bash(npm test:*)", "Bash(git diff:*)"],
-    "allowWrite": ["src/**"],
-    "allowNet": ["WebSearch", "WebFetch(domain:*.github.com)"]
-  },
   "search": { "backend": "glm" },
   "mcpServers": {
     "filesystem": {
@@ -432,17 +414,11 @@ frontmatter 可选字段：`name`（缺省取目录名，写了必须与目录�
 （补全菜单里的参数提示）、`disable-model-invocation: true`（只允许用户斜杠触发，适合
 发版、部署这类有副作用的流程）、`user-invocable: false`（只允许模型加载，适合背景知识）、
 `context: fork`（正文交给子 agent 在独立上下文里执行，只把报告带回主对话，走 task 工具
-同一条通道）、`allowed-tools`（见下）。未知字段一律忽略。
+同一条通道）。未知字段一律忽略（Claude Code 的 `allowed-tools` 也在其列——mojocode 没有
+权限系统,没有东西可以预授权）。
 
-技能目录里可以放 `references/`、`scripts/` 等附属文件,激活后该目录自动成为**只读**
-扩展根——`read`/`glob` 够得着技能自带的资料,但任何写入仍然只限工作区,`.env`、密钥
-等拒绝规则在技能目录里同样生效。
-
-`allowed-tools: Bash(git tag:*) Bash(npm publish:*)` 声明技能希望预先放行的规则。
-**首次激活时会弹一次确认框**,列出全部规则,批准后进本会话的临时授权(等价于确认框里
-的「本次会话始终允许」),拒绝则技能照常加载、后续操作回到逐条确认。规则永远不会
-被技能自动写进配置文件——frontmatter 是随仓库来的内容,落盘授权只能由用户在确认框里
-逐条选择。
+技能目录里可以放 `references/`、`scripts/` 等附属文件,`read`/`glob` 直接够得着——工具
+没有路径围栏,技能目录在哪都读得到。
 
 **安全提示**:技能正文是喂给模型的指令,与随仓库而来的任何可执行内容一样,存在提示
 注入面——只使用你自己写的或审阅过的技能,`/skills` 与 `mojocode doctor` 都会列出当前
@@ -450,88 +426,79 @@ frontmatter 可选字段：`name`（缺省取目录名，写了必须与目录�
 
 ---
 
-## 四、权限模型
+## 四、扩展
 
-权限是两根正交的轴，对齐 Codex：
+与 [pi](https://github.com/badlogic/pi-mono) 同一套形状：一个扩展就是一个 TypeScript / JavaScript
+模块，默认导出一个函数，拿到 `api` 后注册钩子、命令、工具：
 
-- **sandbox**（能做什么）：`read-only` / `workspace-write` / `danger-full-access`
-- **approval**（什么时候问）：`untrusted` / `on-request` / `never`
+```ts
+// ~/.mojocode/extensions/no-rm.ts
+export default (api) => {
+  // 每次工具执行前被调用;返回 { reason } 即否决,错误喂回模型,整轮不终结。
+  api.on('tool_call', ({ toolName, input }) => {
+    if (toolName === 'bash' && /\brm\s+-rf\b/.test(String(input.command))) {
+      return { reason: 'rm -rf is blocked by the no-rm extension' };
+    }
+    return undefined;
+  });
+  api.registerCommand('hello', {
+    description: 'say hi',
+    handler: (args) => api.notify('info', `hi ${args}`),
+  });
+};
+```
 
-平时不用直接摆弄两根轴，`/approvals` 提供四档预设：
+也接受 `export default { id, setup(api) {…} }`；id 缺省从文件名推（`foo.ts` → `foo`，
+`foo/index.ts` → `foo`）。钩子有 `session_start` / `session_shutdown` /
+`before_agent_start`（改系统提示词）/ `tool_call`（否决）/ `tool_result`（改写结果）/
+`turn_start` / `turn_end` / `agent_end`；API 面见 `src/core/extension.ts`。
 
-| 预设 | = sandbox + approval | 文件编辑 | shell 命令 |
-|---|---|---|---|
-| `read-only` | read-only + on-request | 逐次升级确认 | 只读白名单放行，其余升级确认 |
-| `ask`（默认） | workspace-write + untrusted | 确认 | 确认（白名单除外） |
-| `auto` | workspace-write + on-request | 自动放行 | 确认（白名单除外） |
-| `full-access` | danger-full-access + never | 自动放行 | 自动放行，含硬拒名单 |
+**装载三层，按这个顺序（后装的同名命令/工具覆盖先装的；内置的一方扩展永远最先）：**
 
-配置写 `sandbox` / `approval` 两个键（自由组合也行，比如 `read-only`+`never` 表示
-「彻底只读、连问都别问」）；启动参数 `-s/--sandbox`、`-a/--ask-for-approval`，快捷方式
-`--full-auto`（= auto）与 `--dangerously-bypass-approvals-and-sandbox`（= full-access）。
-环境变量 `MOJOCODE_SANDBOX` / `MOJOCODE_APPROVAL`。旧的单轴 `permissionMode`（配置、
-环境变量、会话记录里的）启动时自动映射到两轴并提示一次。
+| 来源 | 位置 | 说明 |
+|---|---|---|
+| 扩展包 | `mojocode install …` 记在配置 `packages` 里 | 见下 |
+| 全局目录 | `~/.mojocode/extensions/` | `*.ts` / `*.js` / `*.mjs`，或 `<name>/index.ts` |
+| 项目目录 | `<项目>/.mojocode/extensions/` | 可随仓库提交 |
+| 命令行 | `mojocode -e <文件或目录>`（可重复） | 临时试一个扩展 |
 
-命令白名单分两级：纯只读命令（`ls`/`grep`/`git status` 等）任何环境免确认；
-**执行项目自带代码**的命令（`npm test`/`npm run`/各家测试运行器）只在可写沙箱下免确认——
-package.json 的脚本可以写文件连网，「只读」的承诺不能取决于仓库自觉，所以 `read-only`
-沙箱与计划模式下这类命令（以及可写语境下授权的 allow 规则）一律回到逐次确认。
-`find -exec`、`fd -x`、`git branch <名字>`、`git remote add` 这类「前缀只读、参数写盘」
-的形态同样不免检。
+TypeScript 直接放就行：单二进制（Bun）原生认 `.ts`，npm 安装的 Node 版本经
+[jiti](https://github.com/unjs/jiti) 转译（与 pi 相同）。装不上的扩展（语法错、setup 抛错、
+id 撞车）会在启动时给一条提示然后跳过，不影响会话。`mojocode extensions` 列出本工作区会
+加载的全部扩展与来源。
 
-**联网是独立的权限维度**：`web_search`/`web_fetch` 首次访问一个目标会弹确认，
-「本会话总是允许」记为规则——搜索一条总闸 `WebSearch`，抓取按域名
-`WebFetch(domain:example.com)`（`*.example.com` 匹配任意深度子域，不含裸域）。规则可
-持久化进 `permissions.allowNet`，headless/`never` 档靠预先配置的 allowNet 无人值守联网。
-两条硬线不受任何档位影响：私网/链路本地/云元数据地址（`192.168.*`、`169.254.169.254`
-之类）一律拒绝，`danger-full-access` 也不豁免；跨域名重定向会对落点重新走一遍确认。
-计划模式允许联网——调研本来就常要查文档。
+**扩展包**（`mojocode install` / `remove`）：
 
-**与 Codex 的一处刻意差异**：Codex 的 sandbox 是 OS 内核强制（Seatbelt/Landlock），
-命令真的跑在沙箱里，所以 workspace-write 下任意命令都能放行。mojocode 的约束在权限门
-这一层，无法把一条 bash 命令圈在工作区里，所以 workspace-write 下非白名单命令仍视为
-「沙箱外」（要确认，`never` 下直接拒）；Codex 的 `on-failure` 策略也因此不存在。
+```bash
+mojocode install npm:@someone/mojocode-ext        # 装进 ~/.mojocode/packages/npm/
+mojocode install git:https://github.com/x/y.git   # 克隆到 ~/.mojocode/packages/git/y
+mojocode install ./my-ext                         # 本地目录:原地加载,不拷贝
+mojocode install … --local                        # 装进 <项目>/.mojocode,记进项目配置
+mojocode remove y                                 # 按名字卸载(npm 包名 / 仓库名 / 目录名)
+mojocode extensions                               # 列出扩展与包
+```
 
-运行中 `shift+tab` 按放宽递增循环 `read-only` → `ask` → `auto` → `full-access` → `plan`，
-再回到 `read-only`。当前档位是自由组合（不在四个预设里）时，按下落到 `plan`——它写不了
-任何东西，误触只可能收紧权限。底栏最左边那枚档位徽章可以直接点，弹出的选项框把四个预设和
-`plan` 一并列出、标出当前档，点或回车选定、`esc` 取消——差别只是由你指定落在哪一档，
-而不是盲切下一档，也正因为是点名指定的，只有它会落盘。
+一个包就是一个目录，`package.json` 里可选一段 manifest：
 
-在选项框里选定的档位（以及 `/approvals`）会写进**本工作区**的 `.mojocode/config.json`
-（不碰全局配置：放宽是对某个工作区的信任声明，不该泄漏到别的目录），所以选一次就管到
-下次在这个目录启动，落盘后时间线上会说明写到了哪个文件。`shift+tab` 只改本会话不落盘：
-按下之前并不知道会落在哪一档，一次误触不该改写可提交的项目配置——尤其是从 `plan` 出来
-那一步循环规定落到 `read-only`，那是退出计划模式的附带结果，不是你对档位的表态。
-`plan` 任何路径都不落盘——它是一次协作方式的选择，不是档位。
+```json
+{ "mojocode": { "extensions": ["extensions", "index.ts"], "skills": ["skills"] } }
+```
 
-`full-access` 绕过硬拒名单，是唯一能让模型在工作区外动手、跑 `rm -rf`/`sudo` 这类命令
-的一档。它同样会被留存，所以每次切到它都会在时间线上留一条警告：底栏那两秒的回显翻不
-出来，事后看记录得能认出这一段跑在无沙箱下。要收回，切回别的档位即可（照样落盘）。
+`extensions` 列文件或目录（目录按扩展目录的规则扫），`skills` 列技能目录（里面的每个
+`<name>/SKILL.md` 都进技能表，优先级低于本地技能）。没写 manifest 时按约定找：
+`extensions/`、根目录的 `index.ts`、`skills/`。
 
-### 计划模式
+## 五、权限:没有权限系统
 
-`plan` 不在轴上——它是协作方式，激活时压过两轴（等同只读且不可升级），出口是方案获批：
+与 [pi](https://github.com/badlogic/pi-mono) 一致,mojocode **没有权限系统**:没有沙箱档位、
+没有确认框、没有允许/拒绝规则、没有计划模式。`read`/`write`/`edit`/`bash` 能碰到进程能碰到
+的任何路径,`web_fetch` 能访问任何地址。这不是省事——是把"边界在哪"这件事交还给运行环境:
+把 mojocode 放进容器、沙箱账户或一次性的工作副本里跑,那才是真正靠得住的围栏;进程内的
+权限门只能拦住"客气"的模型,拦不住一条 `bash` 里的任何东西。
 
-1. `/plan` 或 `/plan <任务>` 进入（也可以 `mojocode --plan` 直接启动）。
-2. 模型只读调研——`read`/`glob`/`grep` 与白名单只读命令照常，写入一律被拒，
-   拒绝理由会引导它去提交方案而不是叫你重启。
-3. 调研完模型调用 `exit_plan` 工具呈交 Markdown 方案，界面弹出批准框。
-4. 选「同意」→ 自动还原进入 `/plan` 之前的两轴组合，**同一轮内**接着落地实现；
-   选「不同意，继续完善方案」→ 留在计划模式，模型据反馈修订后重新提交。
-
-`exit_plan` 是离开计划模式的唯一出口：即使模型认为「不需要改代码」，也要通过它把这个
-结论交给你，而不是自己认定后直接作答收尾。万一它没这么做，时间线会明确提示「本轮没有
-提交方案」——门禁保证了那一轮什么都没改，但「我用了 /plan 它却没问我」必须看得见。
-
-批准后忠实还原进入 `/plan` 之前的组合：进入前是 `full-access`，批准后就回到
-`full-access`，后续不再有任何确认。唯一的例外是 `read-only`+`never`——那套组合批准
-不了任何写入，「批准」就没有意义了，所以提升到 `ask`（且这次提升只在本会话有效）。
-`read-only`+`on-request` 忠实还原：实现阶段的每次写入走升级确认。
-
-非交互场景（`mojocode --plan -p "…"`）没有人可以批准，`exit_plan` 会被自动拒绝
-并告知模型「把方案作为最终答复输出即可」——即 `--plan -p` 的语义就是「只要方案，
-别动手」。
+想要拦截,写一个扩展:`tool_call` 钩子在每次工具执行前被调用,返回 `{ reason }` 即否决
+(错误喂回模型,整轮不终结)。策略完全由你定——按路径、按命令前缀、按域名、或干脆弹一个
+确认。见「扩展」一节。
 
 ### 目标模式
 
@@ -549,16 +516,11 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 为 0」这种能在记录里看见输出的条件，远比「代码质量变好」可靠。它也被明确要求：记录里
 没有出现证据就一律判未达成，模型嘴上说的「应该能过」不算数。
 
-刹车有四道，任何一道触发都会解除目标（而不是留着等你下次发言时又自己跑起来）：
+刹车有三道，任何一道触发都会解除目标（而不是留着等你下次发言时又自己跑起来）：
 
 - `goalMaxTurns`（默认 10 轮）——无人看管的循环必须有上限，想跑长任务就把它调高；
 - esc 中断，或那一轮以错误收尾——不对着一个被掐掉或 401 的会话反复重试；
-- 判定器连续两次给不出能读懂的判词——评估器坏了和确实没做完不能混为一谈；
-- 切进计划模式——它的要义是停下来等批准，与自动续跑正相反，因此 `/goal` 也拒绝在
-  计划模式下启动。
-
-`/goal` **不改权限档位**：`ask` 档下每一轮照样逐次弹确认框。想要真正无人值守，
-自己配合 `/approvals auto`。
+- 判定器连续两次给不出能读懂的判词——评估器坏了和确实没做完不能混为一谈。
 
 两轮之间的判定窗口里 agent 是空闲的，但这段时间同样算「忙」：`/clear`、`/models`、
 `/resume` 会被拦下，esc 停的是整个循环；这时候发消息则会成为下一轮的指令，取代判定器
@@ -570,8 +532,8 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 ### 子任务（task 工具）
 
 主 agent 可以用内置的 `task` 工具把一个独立子任务委托给**子 agent**：它在全新的上下文
-里跑同一套循环，拥有同样的工具（去掉 `task` 自身、`todo` 与 `exit_plan`——递归只放
-一层，会话状态归主 agent 管），最终只把一份报告带回主对话。价值在于上下文隔离：
+里跑同一套循环，拥有同样的工具（去掉 `task` 自身与 `todo`——递归只放一层，会话状态归
+主 agent 管），最终只把一份报告带回主对话。价值在于上下文隔离：
 「把这 40 个文件翻一遍、总结调用关系」这类调研的中间过程不再挤占主上下文，主对话
 只收到结论。
 
@@ -609,10 +571,10 @@ package.json 的脚本可以写文件连网，「只读」的承诺不能取决�
 
 ---
 
-## 五、架构
+## 六、架构
 
-核心原则：agent core 不 import UI 框架（SolidJS）。core 通过事件总线发事件、通过回调
-等待授权决定，同一套循环同时驱动 TUI 和 headless 渲染器。
+核心原则：agent core 不 import UI 框架（SolidJS）。core 通过事件总线发事件，同一套循环
+同时驱动 TUI 和 headless 渲染器。
 
 进程模型与 opencode 一致：TUI 是瘦客户端，默认自动拉起受管的 `mojocode serve` 子进程
 （agent 核心与所有工具都在 server 侧），经 REST + SSE 通信；`-p` headless 保持单进程。
@@ -622,9 +584,9 @@ src/
   config/      分层配置、服务商预设、密钥保存
   model/       AI SDK 模型构造、实时 /models 列表
   agent/       streamText 循环、系统提示、上下文压缩
-  tools/       read write edit glob grep bash todo
-  permissions/ sandbox（路径）、bash-rules（命令）、gate（策略）
-  mcp/         MCP 客户端 + AI SDK 工具桥接
+  tools/       read write edit glob grep bash task（无路径围栏，Pi 式）
+  extensions/  一方扩展：goal / lsp / mcp / review / todo / web
+  mcp/         MCP 客户端（桥接在 extensions/mcp）
   session/     追加式 JSONL 会话记录
   core/        事件总线契约
   server/      HTTP + SSE server（serve.ts）与线上协议（protocol.ts）
@@ -669,7 +631,7 @@ OpenTUI:组件层不直接触碰上游 0.x API,破坏性变更只改 kit 一处�
 
 ---
 
-## 六、开发
+## 七、开发
 
 ```bash
 npm run typecheck   # tsc --noEmit
@@ -721,5 +683,6 @@ npm login && npm publish              # prepublishOnly 跑 typecheck + test + te
 **Q：上下文满了怎么办**
 超过窗口 80% 会自动压缩成摘要继续；也可随时 `/compact`。磁盘上的会话记录始终是完整的。
 
-**Q：想让某条命令不再每次确认**
-确认框按 `a`（本会话）或 `A`（写入项目配置），也可以直接编辑配置里的 `permissions.allowBash`。
+**Q：能不能限制它只在某个目录里动手？**
+mojocode 自己不设围栏（见「五、权限」）。把它放进容器或一次性的工作副本里跑；要在进程内拦，
+写一个 `tool_call` 钩子扩展。

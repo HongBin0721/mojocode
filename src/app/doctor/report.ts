@@ -6,7 +6,6 @@ import { t } from '../../i18n/index.js';
 import type { DoctorInput, DoctorOptions, DoctorReport, DoctorSection } from './types.js';
 import { envChecks } from './env.js';
 import { configChecks } from './config.js';
-import { permissionChecks } from './permissions.js';
 import { providerChecks } from './provider.js';
 import { searchChecks } from './search.js';
 import { lspChecks } from './lsp.js';
@@ -49,7 +48,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
     config ? providerChecks(config, env, offline, input.fetchImpl) : undefined,
     config ? searchChecks(config, env, offline, input.fetchImpl) : undefined,
     config ? lspChecks(config, env, input.root, offline, input.lspStatuses) : undefined,
-    config ? mcpChecks(config, offline, input.mcpStatuses) : undefined,
+    config ? mcpChecks(config, offline, input.mcpStatuses, input.mcpOff === true) : undefined,
     sessionChecks(input.sessionsDir ?? defaultSessionsDir(), config),
     workspaceChecks(input.root),
     skillsChecks(input.root),
@@ -64,7 +63,6 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorReport> {
       { id: 'provider', title: t('doctor.section.provider'), checks: providerC },
       { id: 'search', title: t('doctor.section.search'), checks: searchC },
       { id: 'lsp', title: t('doctor.section.lsp'), checks: lspC },
-      { id: 'permissions', title: t('doctor.section.permissions'), checks: permissionChecks(config) },
       { id: 'mcp', title: t('doctor.section.mcp'), checks: mcpC },
     );
   }

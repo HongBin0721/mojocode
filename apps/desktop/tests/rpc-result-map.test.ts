@@ -80,7 +80,6 @@ type _r3 = Assert<RpcResult<'archiveSession'>, SessionMetaSummary>;
 type _r4 = Assert<RpcResult<'testModel'>, ModelTestSummary>;
 type _r5 = Assert<RpcResult<'reviewTargets'>, ReviewTargetsSummary>;
 type _r6 = Assert<RpcResult<'listProviderModels'>, ProviderModelsSummary[]>;
-type _r7 = Assert<RpcResult<'permission'>, boolean>;
 
 // ---- 完整性:RpcRequest 的每个 kind 都在映射里(漏写在此处红) ----
 type _complete = Assert<RpcKind, keyof RpcResultMap>;

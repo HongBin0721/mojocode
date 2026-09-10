@@ -7,7 +7,6 @@
  *  - `GET  /state`      当前状态快照(client 连接时的初始拉取)
  *  - `GET  /history`    当前内存历史(回退选择器 / 恢复回放的数据源)
  *  - `POST /call`       方法调用(见 protocol.ts;长任务 ack + SSE 回执)
- *  - `POST /permission` 授权决定回执
  *
  * 安全边界:只绑 127.0.0.1,所有请求校验 Bearer token——server 能执行任意
  * bash,不设 token 的话浏览器页面可以对 localhost 盲发 POST(表单编码不触发
@@ -24,7 +23,6 @@ import type { AddressInfo } from 'node:net';
 import type { Session } from '../app/bootstrap.js';
 import { SessionStore } from '../session/store.js';
 import { collectFileDiff, collectWorkspaceStatus } from '../agent/workspace.js';
-import type { PermissionAsker, PermissionDecision, PermissionRequest } from '../core/events.js';
 import {
   DEFERRED_METHODS,
   redactConfig,
@@ -34,7 +32,6 @@ import {
   toWireError,
   type CallRequest,
   type CallResponse,
-  type PermissionReply,
   type ServerMessage,
   type StateSnapshot,
 } from './protocol.js';
@@ -49,9 +46,9 @@ const REPLAY_MAX_BYTES = 4 * 1024 * 1024;
 /**
  * 不可能改变状态快照的事件类型——收到它们时跳过 computeState/snapshotKey。
  * 判据是「快照里的字段会不会变」:isRunning/isCompacting/historyLength、
- * 两轴权限与 plan、provider、mcpStatuses、storeId、todos、goal 统计。
+ * provider、storeId、扩展的命令表/状态行/结构化状态。
  * 纯文本/思考的流式增量与起止标记一概不沾这些,而它们恰恰占了事件总量的
- * 绝大部分。step-end 刻意不在此列:它会推进 goal 的 token 统计。
+ * 绝大部分。step-end 刻意不在此列:它会推进 contextUsage。
  */
 const STATE_NEUTRAL_EVENTS = new Set([
   'text-start',
@@ -75,49 +72,8 @@ const STATE_NEUTRAL_EVENTS = new Set([
  */
 const TRANSIENT_EVENTS = new Set(['tool-output-delta']);
 
-/**
- * 授权中介:gate 的 ask 回调落在这里,请求本身经 bus 的 permission-request
- * 事件(SSE)到达 client,决定经 `POST /permission` 回来。必须在 bootstrap
- * **之前**创建——bootstrap 构造 gate 时就要拿到 ask。
- */
-export interface PermissionBroker {
-  ask: PermissionAsker;
-  /** 回执一个决定;id 无人等待时返回 false(重复回执 / 已被取消)。 */
-  resolve(id: string, decision: PermissionDecision): boolean;
-  /**
-   * 尚未回执的请求(发起顺序)。新 SSE 连接接上来时要**重放**它们:
-   * 请求只经一次广播送达,没有客户端在场的那一刻(client 崩了、
-   * `--attach` 连上一个正跑到一半的 server、重连窗口)事件就永远丢了,
-   * 而 gate 那边还在 await——工具调用连同整个轮次就此挂死,重连上来的
-   * 客户端只看到 isRunning 为真却没有任何确认框。
-   */
-  pending(): PermissionRequest[];
-}
-
-export function createPermissionBroker(): PermissionBroker {
-  const waiting = new Map<
-    string,
-    { request: PermissionRequest; resolve: (decision: PermissionDecision) => void }
-  >();
-  return {
-    ask: (request) =>
-      new Promise<PermissionDecision>((resolve) => {
-        waiting.set(request.id, { request, resolve });
-      }),
-    resolve: (id, decision) => {
-      const entry = waiting.get(id);
-      if (!entry) return false;
-      waiting.delete(id);
-      entry.resolve(decision);
-      return true;
-    },
-    pending: () => [...waiting.values()].map((entry) => entry.request),
-  };
-}
-
 export interface ServeOptions {
   session: Session;
-  broker: PermissionBroker;
   host?: string;
   /** 0(默认)= 系统分配临时端口。 */
   port?: number;
@@ -139,7 +95,7 @@ export interface RunningServer {
 }
 
 export async function startServer(options: ServeOptions): Promise<RunningServer> {
-  const { session, broker } = options;
+  const { session } = options;
   const host = options.host ?? '127.0.0.1';
   const token = options.token ?? randomBytes(24).toString('hex');
   const tokenBuf = Buffer.from(token);
@@ -154,12 +110,10 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
   const sseClients = new Set<ServerResponse>();
 
   const computeState = (): StateSnapshot => {
-    const goalStatus = session.goal.snapshot();
     return {
       root: session.root,
       provider: redactProvider(session.provider),
       config: redactConfig(session.config),
-      mcpStatuses: session.mcpStatuses,
       storeId: session.store.id,
       agent: {
         isRunning: session.agent.isRunning,
@@ -167,13 +121,11 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         historyLength: session.agent.history.length,
         contextUsage: session.agent.contextUsage,
       },
-      goal: {
-        active: session.goal.active,
-        busy: session.goal.busy,
-        ...(goalStatus ? { status: goalStatus } : {}),
-        ...(session.goal.state?.restored ? { restored: true } : {}),
+      extensions: {
+        commands: session.extensionCommands,
+        status: session.extensionStatus,
+        state: session.extensionState,
       },
-      todos: session.todos.get(),
       skills: session.skills,
       changedFiles: session.changedFiles,
       sentAt: Date.now(),
@@ -235,7 +187,7 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
   };
 
   // 事件先行、状态随后:client 先看到事件(时间线落条目),再看到它引起的
-  // 状态变化(isRunning、goal 计数等)。
+  // 状态变化(isRunning、上下文占用等)。
   const offBus = session.bus.on((event) => {
     broadcast({ kind: 'event', event: serializeEvent(event) });
     // 流式增量不改变快照里的任何字段,直接跳过重算。变化检测省掉的只是
@@ -243,12 +195,10 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
     // JSON.stringify——挂在 text-delta 上就是每轮几千次全量序列化。
     if (!STATE_NEUTRAL_EVENTS.has(event.type)) pushState();
   });
-  const offTodos = session.todos.subscribe(() => pushState());
-  // 技能与 todos 同理:非总线驱动的快照字段,变化各自订阅推送。
+  // 技能与扩展状态同理:非总线驱动的快照字段,变化各自订阅推送。
   const offSkills = session.skillsChanged(() => pushState());
-  // MCP 非阻塞连接:状态逐个落地时没有伴随的 bus 事件,不主动推的话客户端
-  // 的 mcpStatuses 要等下一个 agent 事件才更新。
-  const offMcp = session.mcpStatusChanged(() => pushState());
+  // 扩展的命令表/状态行是纯状态变化(setStatus 没有伴随的 bus 事件),同 MCP。
+  const offExtensions = session.extensionsChanged(() => pushState());
 
   /**
    * 立即返回结果的方法。抛错原样上抛,由调用处包成 WireError。
@@ -269,19 +219,11 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       case 'saveHistory':
         await session.store.save(args['messages'] as never);
         return undefined;
-      case 'goalSet':
-        session.goal.set(args['condition'] as string);
-        return undefined;
-      case 'goalClear':
-        session.goal.clear(args['reason'] as never);
-        return undefined;
-      case 'goalSteer':
-        return session.goal.steer(args['text'] as string, args['options'] as never);
-      case 'setPermissions':
-        session.setPermissions(args['permissions'] as never);
-        return undefined;
-      case 'setPlan':
-        session.setPlan(args['active'] === true);
+      case 'commandOptions':
+        return session.commandOptions(args['name'] as string, args['path'] as string[] | undefined);
+      case 'runCommand':
+        // 即时:处理器要发起一轮就 followUp,不在这里等整轮(见 ExtensionCommand)。
+        await session.runCommand(args['name'] as string, (args['args'] as string | undefined) ?? '');
         return undefined;
       case 'setReasoningEffort':
         await session.setReasoningEffort(args['level'] as never);
@@ -355,11 +297,9 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return undefined;
       case 'refreshSkills':
         return session.refreshSkills();
-      // /review 的二级选择器数据源:快、不跑 agent,普通即时 RPC。
+      // 分支列表(GUI 顶栏的分支切换器):快、不跑 agent,普通即时 RPC。
       case 'reviewTargets':
         return session.reviewTargets();
-      case 'reviewCommits':
-        return session.reviewCommits();
       case 'listProviderModels':
         return session.listProviderModels();
       // 「测试模型」:单次最小补全,内部 10s 兜底超时,普通即时 RPC。
@@ -394,18 +334,12 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
       case 'run':
         promise = session.agent.run(args['text'] as string, args['options'] as never);
         break;
-      case 'goalRun':
-        promise = session.goal.run(args['text'] as string, args['options'] as never);
-        break;
       case 'runSkill':
         promise = session.runSkill(
           args['name'] as string,
           args['args'] as string,
           args['options'] as never,
         );
-        break;
-      case 'startReview':
-        promise = session.startReview(args['scope'] as string, args['options'] as never);
         break;
       case 'startSimplify':
         promise = session.startSimplify(args['target'] as string, args['options'] as never);
@@ -483,14 +417,17 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         } else if (Number.isFinite(lastEventId)) {
           res.write(frameOf({ kind: 'gap' }));
         }
-        // 待决授权请求的重放只在**非无缝**路径需要(全新连接 / gap):无缝
-        // 重放时确认框仍在 client 屏幕上,或已随缓冲帧补达;这里再发一遍
-        // 会让 asker 被问两次。broker 是待决集的权威,与序号缓冲互为兜底
-        // ——缓冲滚过头时授权请求也在丢失之列,靠这里救回来。
+        // 装配期的提示只在**非无缝**路径补发(全新连接 / gap):它们发生在
+        // 任何 client 连上之前,而重放缓冲对全新连接不重放。攒在 session 上、
+        // 每个非无缝连接补发一次——磁盘扩展加载失败这类警告不该因为没人在
+        // 听就消失。无缝重放时 client 早已见过。
         if (!seamless) {
-          for (const request of broker.pending()) {
+          for (const notice of session.startupNotices) {
             res.write(
-              frameOf({ kind: 'event', event: serializeEvent({ type: 'permission-request', request }) }),
+              frameOf({
+                kind: 'event',
+                event: serializeEvent({ type: 'notice', level: notice.level, message: notice.message }),
+              }),
             );
           }
         }
@@ -547,13 +484,6 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
         return;
       }
 
-      if (route === 'POST /permission') {
-        const reply = (await readBody(req)) as PermissionReply;
-        const accepted = broker.resolve(reply.id, reply.decision);
-        json(res, 200, { ok: accepted });
-        return;
-      }
-
       json(res, 404, { ok: false, error: { name: 'NotFound', message: route } });
     })().catch((error: unknown) => {
       if (!res.headersSent) {
@@ -579,9 +509,8 @@ export async function startServer(options: ServeOptions): Promise<RunningServer>
     },
     close: async () => {
       offBus();
-      offTodos();
       offSkills();
-      offMcp();
+      offExtensions();
       for (const client of sseClients) client.end();
       sseClients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));

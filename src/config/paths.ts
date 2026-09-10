@@ -30,8 +30,8 @@ export function sessionsDir(): string {
 
 /**
  * `~/.mojocode/images`——非视觉模型下粘贴图片的落盘目录(消息里引用路径,
- * view_image 工具按需读取)。经 extraReadRoots 成为只读扩根:图片不属于
- * 工作区,写进项目目录会污染仓库。
+ * view_image 工具按需读取)。放在家目录而不是工作区:粘一张图不该在用户的
+ * 仓库里留下一个未跟踪文件。
  */
 export function imagesDir(): string {
   return path.join(globalDir(), 'images');
@@ -48,6 +48,32 @@ export function projectDir(root: string): string {
 
 export function projectConfigPath(root: string): string {
   return path.join(projectDir(root), 'config.json');
+}
+
+/**
+ * `~/.mojocode/extensions`——全局磁盘扩展目录(Pi 的 `~/.pi/agent/extensions`)。
+ * 直接放 `*.ts` / `*.js`,或 `<name>/index.ts`;启动时逐个加载。
+ */
+export function globalExtensionsDir(): string {
+  return path.join(globalDir(), 'extensions');
+}
+
+/** `<workspace>/.mojocode/extensions`——项目扩展目录,可随仓库提交。 */
+export function projectExtensionsDir(root: string): string {
+  return path.join(projectDir(root), 'extensions');
+}
+
+/**
+ * `~/.mojocode/packages`——`mojocode install` 装进来的包:`npm/`(一个私有
+ * package.json,包在 `npm/node_modules/<name>`)与 `git/<name>`(克隆)。
+ */
+export function globalPackagesDir(): string {
+  return path.join(globalDir(), 'packages');
+}
+
+/** `<workspace>/.mojocode/packages`——`mojocode install --local` 的落点。 */
+export function projectPackagesDir(root: string): string {
+  return path.join(projectDir(root), 'packages');
 }
 
 /** `~/.mojocode/skills`——全局技能目录。 */

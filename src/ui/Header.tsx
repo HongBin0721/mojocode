@@ -1,6 +1,6 @@
 import { For, Show } from 'solid-js';
 import { Box, Text, type JSX } from './kit.js';
-import { theme, modeColor, shortenHome } from './theme.js';
+import { theme, shortenHome } from './theme.js';
 import { logoGradient, pixelLogoWidth, renderPixelLogo } from './logo.js';
 import { APP_NAME } from '../config/paths.js';
 import { packageVersion } from '../config/version.js';
@@ -10,8 +10,6 @@ interface Props {
   providerLabel: string;
   model: string;
   root: string;
-  mode: string;
-  mcpSummary?: string;
   /** 终端列宽。放不下像素字时退回纯文字标题(见 fitsLogo)。 */
   columns?: number;
 }
@@ -35,13 +33,8 @@ export function Header(props: Props): JSX.Element {
   // (Footer.fitParts 防的同一问题),所以放不下就整段不显示,标题行保持原样。
   const showVersion = (): boolean => {
     const inner = (props.columns ?? Infinity) - FRAME_COLS;
-    const modeCols = props.mode !== 'ask' ? 3 + props.mode.length : 0;
     const base =
-      (fitsLogo() ? 0 : APP_NAME.length + 3) +
-      props.providerLabel.length +
-      3 +
-      props.model.length +
-      modeCols;
+      (fitsLogo() ? 0 : APP_NAME.length + 3) + props.providerLabel.length + 3 + props.model.length;
     // logo 模式下版本号自带 " · " 分隔;纯文字模式复用名字后原有的分隔,只多出一个空格。
     const versionCols = VERSION.length + (fitsLogo() ? 3 : 1);
     return inner >= base + versionCols;
@@ -80,16 +73,9 @@ export function Header(props: Props): JSX.Element {
         <Text>{props.providerLabel}</Text>
         <Text color={theme.dim}> · </Text>
         <Text color={theme.accent}>{props.model}</Text>
-        <Show when={props.mode !== 'ask'}>
-          <Text color={theme.dim}> · </Text>
-          <Text color={modeColor(props.mode)}>{props.mode}</Text>
-        </Show>
       </Box>
       <Box>
         <Text color={theme.dim}>{shortenHome(props.root)}</Text>
-        <Show when={props.mcpSummary}>
-          <Text color={theme.dim}> · mcp: {props.mcpSummary}</Text>
-        </Show>
       </Box>
       <Box marginTop={1}>
         <Text color={theme.dim}>{t('header.hints')}</Text>

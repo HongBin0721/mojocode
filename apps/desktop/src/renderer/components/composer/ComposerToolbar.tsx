@@ -1,36 +1,26 @@
 /**
- * Composer 底部工具栏(自 Composer.tsx 拆出):左组附件钮 + 权限档 chip,
- * 右组上下文环 → 模型 → 思考强度 → 发送钮。chips 自读 store,宿主只传
+ * Composer 底部工具栏(自 Composer.tsx 拆出):左组附件钮,右组上下文环 →
+ * 模型 → 思考强度 → 发送钮。chips 自读 store,宿主只传
  * 提交/附件回调与发送可用性。
  */
 
 import React, { useRef } from 'react';
-import { presetById } from '@core/schema';
 import { useModelCapabilities } from '../../utils/use-model-capabilities.js';
 import { useDesktopStore } from '../../state/desktopStore.js';
 import { rpcFire } from '../../bridge/invoke.js';
 import { t, useLocale } from '../../i18n/index.js';
-import {
-  cyclePermissionsRpc,
-  isDangerousMode,
-  permissionBadgeLabel,
-  permissionMenuEntries,
-} from '../../commands/permissions.js';
 import { reasoningMenuEntries, setReasoningRpc } from '../../commands/reasoning.js';
-import { localizeEffort, localizeMode } from '../../utils/mode-label.js';
+import { localizeEffort } from '../../utils/effort-label.js';
 import { MenuPopover } from '../Menu.js';
 import { ModelMenuList } from '../ModelMenu.js';
-import { PermissionMenuList } from '../PermissionMenu.js';
 import { ReasoningMenuList } from '../ReasoningMenu.js';
 import { ContextRing } from './ContextRing.js';
-import { useFlash } from './use-flash.js';
 import {
   ArrowUpIcon,
   BrainIcon,
   CaretUpDownIcon,
   CpuIcon,
   PaperclipIcon,
-  ShieldCheckIcon,
 } from '../icons.js';
 
 export function ComposerToolbar({
@@ -50,11 +40,6 @@ export function ComposerToolbar({
   const modelMenuRequest = useDesktopStore((s) => s.modelMenuRequest);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const mode = snapshot?.config;
-  const badge = mode ? permissionBadgeLabel(mode) : undefined;
-  const flash = useFlash(badge);
-  const dangerous = mode ? isDangerousMode(mode) : false;
-  const permissionEntries = mode ? permissionMenuEntries(mode) : [];
   const effort = snapshot?.provider.reasoningEffort;
   // 模型条目配了自定义思考参数时档位映射(含 /think)不再生效——chip 显示
   // 「自定义」且不再展开档位菜单,避免选了也没用的假交互。
@@ -66,7 +51,7 @@ export function ComposerToolbar({
 
   return (
     <div className="composer-toolbar">
-      {/* 左组:+ 附件、盾牌权限档(ZCode 左下角布局) */}
+      {/* 左组:+ 附件(ZCode 左下角布局) */}
       <div className="composer-tools">
         <button
           type="button"
@@ -88,33 +73,6 @@ export function ComposerToolbar({
             e.target.value = '';
           }}
         />
-        {mode ? (
-          <MenuPopover
-            label={
-              <span
-                className={`composer-tool composer-mode ${dangerous ? 'composer-tool-danger' : ''} ${
-                  flash ? 'composer-tool-flash' : ''
-                }`}
-              >
-                <ShieldCheckIcon size={13} />
-                {badge && localizeMode(badge)}
-                <span className="composer-caret">
-                  <CaretUpDownIcon size={11} />
-                </span>
-              </span>
-            }
-            width={320}
-            placement="top"
-          >
-            <PermissionMenuList
-              entries={permissionEntries}
-              onPick={(id) => {
-                if (id === 'plan') rpcFire({ kind: 'setPlan', active: true });
-                else rpcFire({ kind: 'setPermissions', permissions: presetById(id) });
-              }}
-            />
-          </MenuPopover>
-        ) : null}
       </div>
       {/* 右组:上下文环 → 模型 → 思考强度 → 发送(设计稿构成) */}
       <ContextRing />

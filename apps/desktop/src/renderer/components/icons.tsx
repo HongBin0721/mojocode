@@ -51,10 +51,6 @@ export {
   Check as CheckIcon,
   Eye as EyeIcon,
   EyeSlash as EyeOffIcon,
-  Hand as HandIcon,
-  ShieldCheck as ShieldCheckIcon,
-  ClipboardText as ClipboardIcon,
-  LockSimpleOpen as UnlockIcon,
   Gear as GearIcon,
 } from '@phosphor-icons/react';
 

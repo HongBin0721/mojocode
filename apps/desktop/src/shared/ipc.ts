@@ -7,21 +7,23 @@
  *  - `bridge:event`     AgentEvent[](微任务内合并成批,serializeEvent 后的形态)
  *  - `bridge:replay`    TimelineItem[](订阅时与换会话后整体重推)
  *  - `bridge:connection` ConnectionState
- *  - `bridge:permission` PermissionRequest(待决审批,重载后 renderer 侧靠重订阅恢复)
  *
  * 上行(renderer → main,ipcRenderer.invoke):
  *  - `bridge:subscribe` 幂等:返回当前快照 + 回放条目,此后开始推送
  *  - `bridge:rpc`       RpcRequest 判别联合,main 侧白名单方法表分发
  */
 
-import type { serializeEvent, StateSnapshot } from '@core/protocol';
-import type { AgentEvent, PermissionDecision, PermissionRequest } from '@core/events';
-import type { Permissions, ProviderConfig, ReasoningEffort } from '@core/schema';
+import type {
+  ExtensionCommandOption,
+  serializeEvent,
+  StateSnapshot,
+} from '@core/protocol';
+import type { ProviderConfig, ReasoningEffort } from '@core/schema';
 import type { ImageAttachment } from '@core/attachments';
 import type { TimelineItem } from '@core/types';
 
 /**
- * 多任务信封:所有 per-task 下行通道(state/event/replay/connection/permission)
+ * 多任务信封:所有 per-task 下行通道(state/event/replay/connection)
  * 的载荷都包一层 taskId,renderer 侧按 id 分桶。通道拓扑保持静态——preload 的
  * 白名单映射不随任务数变化(动态通道名会让收窄失效且无法枚举测试)。
  */
@@ -60,8 +62,6 @@ export interface SessionMetaSummary {
 export interface TaskSummary extends SessionMetaSummary {
   status: TaskStatus;
   isRunning: boolean;
-  /** 有待决审批(后台任务行的角标数据源)。 */
-  hasPendingPermission: boolean;
   lastActivityAt?: number;
   /**
    * 当前状态还没被用户看过(侧栏状态点的数据源)。main 的 TaskManager 计算:
@@ -193,7 +193,6 @@ export const IPC_CHANNELS = {
   event: 'bridge:event',
   replay: 'bridge:replay',
   connection: 'bridge:connection',
-  permission: 'bridge:permission',
   /** 任务列表(TaskSummary[] 全量推),TaskManager 拥有;替代旧 sessions 通道。 */
   tasks: 'bridge:tasks',
   /* 下面这些是 main 本地能力(Electron dialog / TaskManager 生命周期),不进
@@ -226,8 +225,6 @@ export type RpcRequest =
    * 用空值覆盖真 key。 */
   | { kind: 'saveProvider'; id: string; config: ProviderConfig }
   | { kind: 'deleteProvider'; id: string }
-  | { kind: 'setPermissions'; permissions: Permissions }
-  | { kind: 'setPlan'; active: boolean }
   | { kind: 'setReasoningEffort'; level: ReasoningEffort }
   | { kind: 'listProviderModels' }
   /* 设置页·模型行的「测试模型」:server 侧发一次最小补全验证连通性。 */
@@ -235,7 +232,10 @@ export type RpcRequest =
   /* 逐模型能力(models.dev 目录):思考档位与窗口/输出上限,查不到返回 undefined。 */
   | { kind: 'modelCapabilities'; id: string; model: string }
   | { kind: 'runSkill'; name: string; args: string; display?: string }
-  | { kind: 'startReview'; scope: string }
+  /* 扩展命令(/review、/goal、/mcp…):即时 RPC,处理器要开轮就 followUp。 */
+  | { kind: 'runCommand'; name: string; args: string }
+  /* 扩展命令的取值选择器,每次现取;path 是已经选过的层(多级选择器)。 */
+  | { kind: 'commandOptions'; name: string; path?: string[] }
   | { kind: 'startSimplify'; target: string }
   | { kind: 'workspaceStatus' }
   | { kind: 'fileDiff'; path: string }
@@ -252,8 +252,7 @@ export type RpcRequest =
   | { kind: 'undoCommit' }
   | { kind: 'discardAll' }
   /* 分支菜单数据源(核心 reviewTargets:当前分支 + 本地分支列表)。 */
-  | { kind: 'reviewTargets' }
-  | { kind: 'permission'; id: string; decision: PermissionDecision };
+  | { kind: 'reviewTargets' };
 
 export type RpcKind = RpcRequest['kind'];
 
@@ -271,14 +270,13 @@ export interface RpcResultMap {
   switch: unknown; // wire 上是 ResolvedProvider,GUI 不消费
   saveProvider: void;
   deleteProvider: void;
-  setPermissions: void;
-  setPlan: void;
   setReasoningEffort: void;
   listProviderModels: ProviderModelsSummary[];
   testModel: ModelTestSummary;
   modelCapabilities: ModelCapabilitiesSummary | undefined;
   runSkill: void;
-  startReview: unknown; // deferred 整轮结果,GUI fire-and-forget
+  runCommand: void;
+  commandOptions: ExtensionCommandOption[];
   startSimplify: unknown;
   workspaceStatus: WorkspaceStatusSummary;
   fileDiff: FileDiffSummary;
@@ -292,8 +290,6 @@ export interface RpcResultMap {
   undoCommit: GitOpSummary;
   discardAll: GitOpSummary;
   reviewTargets: ReviewTargetsSummary;
-  /** false = 请求 id 已过期(bridge 侧 pendingPermission 不匹配)。 */
-  permission: boolean;
 }
 
 export type RpcResult<K extends RpcKind> = RpcResultMap[K];
@@ -304,7 +300,6 @@ export const PUSH_CHANNELS = [
   'event',
   'replay',
   'connection',
-  'permission',
   'tasks',
 ] as const;
 
@@ -327,7 +322,6 @@ export interface LiveTaskState {
   taskId: string;
   state: StateSnapshot;
   connection: ConnectionState;
-  permission?: PermissionRequest;
   replayItems?: TimelineItem[];
 }
 

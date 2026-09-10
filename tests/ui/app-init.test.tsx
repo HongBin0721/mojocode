@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { INIT_PROMPT } from '../../src/agent/init.js';
 import { t } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 /**
  * 覆盖 /init 命令:它是唯一发起完整 agent 轮的斜杠命令——完整指令喂给
@@ -16,9 +16,6 @@ import { renderUi } from '../support/otui.js';
 async function setup(
   agentOverrides: Record<string, unknown> = {},
   sessionOverrides: {
-    sandbox?: string;
-    approval?: string;
-    plan?: boolean;
     refreshEnvironment?: () => Promise<void>;
   } = {},
 ) {
@@ -28,12 +25,7 @@ async function setup(
   const refreshEnvironment = vi.fn(sessionOverrides.refreshEnvironment ?? (async () => {}));
   const session = {
     root: '/tmp/project',
-    config: {
-      sandbox: sessionOverrides.sandbox ?? 'workspace-write',
-      approval: sessionOverrides.approval ?? 'untrusted',
-      plan: sessionOverrides.plan ?? false,
-      statusBar: [],
-    },
+    config: { statusBar: [] },
     provider,
     agent: {
       isRunning: false,
@@ -46,12 +38,9 @@ async function setup(
       ...agentOverrides,
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(run),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},
@@ -105,28 +94,7 @@ describe('/init 命令', () => {
     await ui.destroy();
   });
 
-  // 提示语按框宽折行,断言取不会被折断的片段,而不是整条消息。
-  it('readonly 模式提前拦下,不白烧一轮', async () => {
-    const { submit, run, ui } = await setup({}, { sandbox: 'read-only', approval: 'never' });
 
-    await submit('/init');
-
-    expect(run).not.toHaveBeenCalled();
-    expect(ui.frame()).toContain('/init needs to write AGENTS.md');
-    expect(ui.frame()).toContain('refuses every write');
-    await ui.destroy();
-  });
-
-  // plan 与 readonly 一样硬拒写入,这一轮同样注定写不出 AGENTS.md。
-  it('plan 模式同样提前拦下', async () => {
-    const { submit, run, ui } = await setup({}, { plan: true });
-
-    await submit('/init');
-
-    expect(run).not.toHaveBeenCalled();
-    expect(ui.frame()).toContain('refuses every write');
-    await ui.destroy();
-  });
 
   it('refreshEnvironment 失败只提示,不产生未捕获的 rejection', async () => {
     const rejections: unknown[] = [];

@@ -10,6 +10,9 @@ import { createFileTools } from '../src/tools/files.js';
 import { summarizeToolResult } from '../src/tools/index.js';
 import { setLocale } from '../src/i18n/index.js';
 import type { ToolContext } from '../src/tools/context.js';
+import { hookTools } from '../src/agent/hooked-tools.js';
+import { lspExtension } from '../src/extensions/lsp/index.js';
+import { recordingExtensionApi } from './support/extension-api.js';
 
 const FAKE_SERVER = fileURLToPath(new URL('./support/fake-lsp.mjs', import.meta.url));
 
@@ -216,7 +219,13 @@ describe('LspManager 端到端(fake server)', () => {
   });
 });
 
-describe('write/edit 工具回喂诊断', () => {
+/**
+ * 诊断经 lsp 扩展的 `tool_result` 钩子并进 write/edit 的结果:工具本身不再
+ * 认识 LSP。跑的是**真实的工具 + 真实的钩子注册表 + fake LSP 服务器**,
+ * 只有 ExtensionAPI 是假的——这条链路(写盘 → 钩子读盘 → 诊断改写结果)
+ * 正是搬家时最容易接错的地方。
+ */
+describe('write/edit 经扩展回喂诊断', () => {
   let root: string;
   beforeAll(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-lsp-tools-'));
@@ -228,48 +237,81 @@ describe('write/edit 工具回喂诊断', () => {
   type Execute = (input: Record<string, unknown>, options: unknown) => Promise<Record<string, unknown>>;
   const executeOf = (tool: unknown): Execute => (tool as { execute: Execute }).execute;
 
-  function makeCtx(check: (p: string, c: string) => Promise<LspCheckResult | undefined>) {
-    return {
+  /** 真工具 + 真 HookRegistry + lsp 扩展;工具经 hookTools 包装,与 loop 同款。 */
+  function makeHost(config: Record<string, unknown> = {}) {
+    const { api, hooks } = recordingExtensionApi({
+      id: 'lsp',
       root,
-      gate: { assertCanMutate: () => {}, checkWrite: async () => {} },
-      rules: { denyPath: [] },
-      readFiles: new Set<string>(),
-      lsp: { check },
-    } as unknown as ToolContext;
-  }
-
-  it('write 结果携带诊断;edit 基于新内容检查', async () => {
-    const seen: string[] = [];
-    const ctx = makeCtx(async (_p, content) => {
-      seen.push(content);
-      return content.includes('BUG')
-        ? { errors: 1, warnings: 0, items: ['1:1 error: boom'] }
-        : undefined;
+      config: { lsp: fakeConfig(config) } as never,
     });
-    const { write, edit } = createFileTools(ctx);
-
-    const wrote = await executeOf(write)({ path: 'a.ts', content: 'ok BUG' }, {});
-    expect(wrote.diagnostics).toEqual({ errors: 1, warnings: 0, items: ['1:1 error: boom'] });
-
-    // 修好之后:diagnostics 字段整个不出现,且 check 拿到的是 edit 后的内容。
-    const edited = await executeOf(edit)(
-      { path: 'a.ts', oldString: 'BUG', newString: 'fixed', replaceAll: false },
-      {},
-    );
-    expect(edited.diagnostics).toBeUndefined();
-    expect(seen).toEqual(['ok BUG', 'ok fixed']);
-  });
-
-  it('没有 lsp(禁用)时结果与从前完全一致', async () => {
+    lspExtension.setup(api);
     const ctx = {
       root,
-      gate: { assertCanMutate: () => {}, checkWrite: async () => {} },
-      rules: { denyPath: [] },
       readFiles: new Set<string>(),
     } as unknown as ToolContext;
-    const { write } = createFileTools(ctx);
-    const wrote = await executeOf(write)({ path: 'plain.ts', content: 'x' }, {});
+    const tools = hookTools(createFileTools(ctx) as never, hooks, { subagent: false });
+    let calls = 0;
+    const call = (name: 'write' | 'edit', input: Record<string, unknown>) =>
+      executeOf(tools[name])(input, { toolCallId: `c${(calls += 1)}` });
+    return { hooks, call };
+  }
+
+  it('write 结果携带诊断;edit 基于写盘后的新内容重查,修好后字段整个消失', async () => {
+    const { call } = makeHost();
+    const wrote = await call('write', { path: 'a.zz', content: 'line one BUG' });
+    expect(wrote.diagnostics).toMatchObject({ errors: 1, warnings: 0 });
+    expect((wrote.diagnostics as { items: string[] }).items[0]).toContain('BUG');
+    // 工具自己的字段一个不少(钩子是改写,不是替换)。
+    expect(wrote).toMatchObject({ path: 'a.zz', changed: true, created: true });
+
+    const edited = await call('edit', {
+      path: 'a.zz',
+      oldString: 'BUG',
+      newString: 'fixed',
+      replaceAll: false,
+    });
+    expect(edited.replacements).toBe(1);
+    // 干净时不加字段:结果的 JSON 要和没装 LSP 时一字不差。
+    expect('diagnostics' in edited).toBe(false);
+  });
+
+  it('lsp.enabled: false 时结果与从前完全一致', async () => {
+    const { call } = makeHost({ enabled: false });
+    const wrote = await call('write', { path: 'plain.zz', content: 'line one BUG' });
     expect('diagnostics' in wrote).toBe(false);
+  });
+
+  it('内容没变的 write 提前返回,不白跑一次诊断', async () => {
+    const { call } = makeHost();
+    await call('write', { path: 'same.zz', content: 'line one BUG' });
+    const again = await call('write', { path: 'same.zz', content: 'line one BUG' });
+    expect(again.changed).toBe(false);
+    expect('diagnostics' in again).toBe(false);
+  });
+
+  it('工具报错时不查诊断(没有落地的内容可查)', async () => {
+    const { call } = makeHost();
+    await expect(
+      call('edit', { path: 'missing.zz', oldString: 'x', newString: 'y', replaceAll: false }),
+    ).rejects.toThrow();
+  });
+
+  it('非 write/edit 的工具结果原样通过', async () => {
+    const { api, hooks } = recordingExtensionApi({
+      id: 'lsp',
+      root,
+      config: { lsp: fakeConfig() } as never,
+    });
+    lspExtension.setup(api);
+    const output = await hooks.toolResult({
+      callId: 'c1',
+      toolName: 'read',
+      input: {},
+      output: { path: 'a.zz', content: 'x' },
+      isError: false,
+      subagent: false,
+    });
+    expect(output).toEqual({ path: 'a.zz', content: 'x' });
   });
 });
 

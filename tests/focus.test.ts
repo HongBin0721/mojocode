@@ -116,12 +116,12 @@ describe('collapseItems 各档语义', () => {
     expect((out[3] as { count: number }).count).toBe(2);
   });
 
-  it('compact/result:exit_plan 与 todo 是结果,保留', () => {
-    const items = [user(), tool('exit_plan'), tool('todo'), tool('bash'), assistant()];
+  it('compact/result:todo 是结果,保留', () => {
+    const items = [user(), tool('todo'), tool('bash'), assistant()];
     const compact = collapseItems(items, 'compact');
-    expect(compact.filter((i) => i.kind === 'tool')).toHaveLength(2);
+    expect(compact.filter((i) => i.kind === 'tool')).toHaveLength(1);
     const result = collapseItems(items, 'result');
-    expect(result.filter((i) => i.kind === 'tool')).toHaveLength(2);
+    expect(result.filter((i) => i.kind === 'tool')).toHaveLength(1);
     expect(kinds(result)).not.toContain('collapsed');
   });
 

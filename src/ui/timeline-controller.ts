@@ -1,12 +1,9 @@
 import { batch, createSignal, onCleanup, type Setter } from 'solid-js';
 import type { ActiveToolCall, NewTimelineItem, TimelineItem } from './types.js';
 import type { WorkPhase, WorkState } from './StatusLine.js';
-import type { AgentEvent, PermissionRequest } from '../core/events.js';
+import type { AgentEvent } from '../core/events.js';
 import type { SessionHandle } from '../app/session-handle.js';
-import type { Permissions } from '../config/schema.js';
-import { permissionsLabel } from '../config/schema.js';
-import { COMPACT_EXPECTED_SUMMARY_CHARS, GOAL_STOP_MESSAGES } from './commands/registry.js';
-import { formatDuration, formatTokens } from './theme.js';
+import { COMPACT_EXPECTED_SUMMARY_CHARS } from './commands/registry.js';
 import { splitCommitted } from './preview.js';
 import { replayTimeline } from '../session/replay.js';
 import { t } from '../i18n/index.js';
@@ -28,22 +25,16 @@ let itemCounter = 0;
 export const nextKey = () => `item-${itemCounter++}`;
 
 /**
- * 启动横幅条目:字段取自 session 的当前值。会话中途 /models、shift+tab
- * 改掉的值走 App 内的 bannerItem(那边读的是 state 镜像)。
+ * 启动横幅条目:字段取自 session 的当前值。会话中途 /models 改掉的值走
+ * App 内的 bannerItem(那边读的是 state 镜像)。
  */
 export function sessionBanner(session: SessionHandle): TimelineItem {
-  const mode = session.config.plan
-    ? 'plan'
-    : permissionsLabel({ sandbox: session.config.sandbox, approval: session.config.approval });
-  const connected = session.mcpStatuses.filter((s) => s.connected).length;
   return {
     key: nextKey(),
     kind: 'banner',
     providerLabel: session.provider.label,
     model: session.provider.model,
     root: session.root,
-    mode,
-    mcpSummary: session.mcpStatuses.length > 0 ? `${connected}/${session.mcpStatuses.length}` : undefined,
   };
 }
 
@@ -84,14 +75,8 @@ export interface UsageMirror {
 }
 
 export interface TimelineControllerOptions {
-  /** 权限询问到达:App 弹确认框(并关掉被抢占据的覆盖层)。 */
-  onPermissionRequest: (request: PermissionRequest) => void;
-  /** 权限两轴 + plan 被 exit_plan 等工具侧切换:App 同步自己的镜像信号。 */
-  onPermissionChange: (permissions: Permissions, plan: boolean) => void;
   /** turn-end 收尾行里显示的模型名(App 的镜像信号)。 */
   getModel: () => string;
-  /** goal-start/goal-stop:目标行要不要渲染(App 的 goalActive 信号)。 */
-  onGoalActiveChange: (active: boolean) => void;
 }
 
 export interface TimelineController {
@@ -160,12 +145,6 @@ export function createTimelineController(
   // `tool-end` 不携带调用的输入,所以在 `tool-start` 时先记下来。
   const toolInputs = new Map<string, unknown>();
 
-  // 本轮是否调用过 exit_plan。计划模式下收尾时没调过就要出声,见 turn-end。
-  let planSubmitted = false;
-  // 本轮**开始时**是否就在计划模式。轮中途 shift+tab 切进计划模式的那一轮
-  // 不该被追问方案——用户压根没让它规划,警告只会莫名其妙。
-  let planAtTurnStart = false;
-
   const push = (item: NewTimelineItem) => {
     setItems((prev) => [...prev, { ...item, key: nextKey() } as TimelineItem]);
   };
@@ -216,8 +195,6 @@ export function createTimelineController(
         switch (event.type) {
           case 'turn-start':
             push({ kind: 'user', text: event.display ?? event.userText });
-            planSubmitted = false;
-            planAtTurnStart = session.config.plan;
             turnStartedAt = Date.now();
             setTurnStartTokens(usage().total);
             // 新一轮从零开始计时,不沿用上一轮残留的 since。
@@ -257,7 +234,6 @@ export function createTimelineController(
             break;
 
           case 'tool-start':
-            if (event.toolName === 'exit_plan') planSubmitted = true;
             toolInputs.set(event.callId, event.input);
             setActiveTools((prev) => [
               ...prev,
@@ -305,17 +281,6 @@ export function createTimelineController(
             }));
             break;
 
-          case 'permission-request':
-            opts.onPermissionRequest(event.request);
-            beginWork('waiting');
-            break;
-
-          // 权限也可能由 exit_plan 在工具侧切换(方案获批),不订阅的话顶栏/
-          // 底栏会一直停在 plan。命令侧的手动同步是同值 setState,留着不碍事。
-          case 'permission-change':
-            opts.onPermissionChange(event.permissions, event.plan);
-            break;
-
           case 'step-end':
             setUsage({
               used: event.usage.inputTokens,
@@ -326,12 +291,6 @@ export function createTimelineController(
 
           case 'turn-end':
             setUsage((prev) => ({ ...prev, total: event.usage.cumulativeTotalTokens }));
-            // 计划模式下这一轮没提交过方案:提示词要求模型必须走 exit_plan,但那
-            // 只是提示词——模型仍可能调研完直接作答就收尾。门禁保证了这一轮什么
-            // 都没改动,但"我明明用了 /plan,它却没问我"必须看得见,不能静悄悄。
-            if (planAtTurnStart && session.config.plan && !planSubmitted) {
-              push({ kind: 'notice', level: 'warn', message: t('notice.planNoSubmission') });
-            }
             // 一轮的收尾行。底栏给的是"此刻"的累计值,回看历史时无从知道
             // 某一轮花了多久、烧了多少——这一行补的正是这个。中断与出错各自
             // 走 aborted/error 分支(那里没有可信的用量),不画这一行。
@@ -355,66 +314,14 @@ export function createTimelineController(
               // 不该借用上一轮的起点。
               turnStartedAt = 0;
             }
-            // 目标循环**还会接着跑**时才留着状态行,交给紧随其后的 goal-evaluating
-            // 接手;在这里熄灯的话,自动循环会每两轮闪一次"已空闲",像卡住了。
-            //
-            // 必须同时看 active:轮子还在流的时候 `/goal clear`(或 shift+tab 切进
-            // 计划模式)已经把目标解除了,此刻 goal-stop 因为 isRunning 为真没敢
-            // 熄灯,而这里 busy 仍是真(循环正停在 `await agent.run` 上),两处
-            // 都放过去就再没人熄灯,状态行会一直转到用户开下一轮为止。
-            if (!(session.goal.busy && session.goal.active)) endWork();
+            // 不在这里熄灯:一轮结束不等于链条结束——两轮之间扩展可能正在评估、
+            // 排下一轮(/goal),agent 仍是 isRunning。状态行退回「思考中」等
+            // run-end 来熄,否则自动续跑会每两轮闪一次"已空闲",像卡住了。
+            setWork((prev) => (prev ? { ...prev, phase: 'thinking', detail: undefined } : prev));
             break;
 
-          case 'goal-start':
-            opts.onGoalActiveChange(true);
-            push({
-              kind: 'notice',
-              level: 'info',
-              message: event.restored
-                ? t('notice.goalRestored', { condition: event.condition })
-                : t('notice.goalSet', {
-                    condition: event.condition,
-                    max: session.config.goalMaxTurns,
-                  }),
-            });
-            break;
-
-          case 'goal-evaluating':
-            beginWork('evaluating');
-            break;
-
-          case 'goal-verdict':
-            // 达成时的收尾文案由 goal-stop 给,这里不重复推第二条。
-            if (!event.met) {
-              push({
-                kind: 'notice',
-                level: 'info',
-                message: t('notice.goalNotMet', {
-                  reason: event.reason,
-                  turn: event.turn,
-                  max: event.maxTurns,
-                }),
-              });
-            }
-            break;
-
-          case 'goal-stop':
-            // replaced 后面紧跟着新目标的 goal-start,顺序保证了不会误熄。
-            opts.onGoalActiveChange(false);
-            push({
-              kind: 'notice',
-              level: event.reason === 'met' ? 'info' : 'warn',
-              // 八条文案共用一个参数袋:t() 忽略多余参数,各条只取自己关心的。
-              message: t(GOAL_STOP_MESSAGES[event.reason], {
-                condition: event.condition,
-                detail: event.detail,
-                turns: event.turns,
-                elapsed: formatDuration(event.elapsedMs),
-                tokens: formatTokens(event.tokens),
-              }),
-            });
-            // `/goal clear` 可能是在一轮进行中发出的:那一轮还在流,别把状态行掐了。
-            if (!session.agent.isRunning) endWork();
+          case 'run-end':
+            endWork();
             break;
 
           // 压缩摘要流式生成中:状态行切到「压缩中」并推进进度条。手动
@@ -474,20 +381,6 @@ export function createTimelineController(
       }),
     );
     onCleanup(off);
-  }
-
-  // 启动时就带着目标(`mojocode -c` 恢复的会话):bootstrap 在 App 挂载之前
-  // 就 restore 过了,那条 goal-start 没人听见。这里补一次提示。只在挂载时跑
-  // 一次,所以 TUI 内 /resume 恢复的目标仍由实时事件呈现,不会重复两条。
-  {
-    const restored = session.goal.state;
-    if (restored?.restored) {
-      push({
-        kind: 'notice',
-        level: 'info',
-        message: t('notice.goalRestored', { condition: restored.condition }),
-      });
-    }
   }
 
   return {

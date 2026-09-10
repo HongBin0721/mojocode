@@ -1,6 +1,6 @@
 /**
  * bash 工具的流式输出(tool-output-delta):节流聚合、总量封顶、tool-end
- * 全量兜底。gate 全放行的 stub ToolContext,真实跑 node 子进程。
+ * 全量兜底。stub ToolContext,真实跑 node 子进程。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -20,8 +20,6 @@ function makeCtx(): { ctx: ToolContext; deltas: Array<{ callId: string; chunk: s
   const ctx = {
     root: process.cwd(),
     bus,
-    gate: { checkBash: async () => {} },
-    rules: { denyPath: [] },
   } as unknown as ToolContext;
   return { ctx, deltas };
 }

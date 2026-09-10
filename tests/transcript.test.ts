@@ -19,16 +19,6 @@ const tool = (over: Partial<Extract<TimelineItem, { kind: 'tool' }>>): TimelineI
 });
 
 describe('formatTranscript 保真度(退出 dump 是唯一留档)', () => {
-  it('exit_plan 的方案正文完整落盘', () => {
-    const out = plain(
-      formatTranscript(
-        [tool({ toolName: 'exit_plan', input: { plan: '# 方案\n\n第一步做 A,第二步做 B。' }, summary: '已批准' })],
-        80,
-      ),
-    );
-    expect(out).toContain('第一步做 A');
-    expect(out).toContain('已批准');
-  });
 
   it('write 的 diff 逐行落盘', () => {
     const patch = '--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-旧行\n+新行\n';

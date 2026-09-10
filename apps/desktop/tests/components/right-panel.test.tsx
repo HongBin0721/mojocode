@@ -28,7 +28,6 @@ const snapshot = (): StateSnapshot =>
     config: {},
     mcpStatuses: [],
     agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-    goal: { active: false, busy: false },
     todos: [],
     skills: [],
     changedFiles: [{ path: 'src/a.ts', kind: 'modified', count: 2 }],

@@ -1,25 +1,18 @@
 import { Command } from 'commander';
+import path from 'node:path';
 import process from 'node:process';
 import { bootstrap } from './app/bootstrap.js';
-import { headlessAsker, renderHeadless } from './app/headless.js';
+import { renderHeadless } from './app/headless.js';
 import { detectTuiRuntime, reexecWithFfi } from './app/runtime.js';
 import { spawnManagedServer, type ServerExitInfo, type SpawnedServer } from './app/server-launch.js';
 import type { SessionHandle } from './app/session-handle.js';
 import { connectRemote } from './client/remote.js';
-import { createPermissionBroker, startServer } from './server/serve.js';
+import { startServer } from './server/serve.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, providerModelIsVision } from './config/providers.js';
-import {
-  approvalPolicySchema,
-  presetById,
-  sandboxModeSchema,
-  searchBackendSchema,
-  type PartialConfig,
-  type Permissions,
-} from './config/schema.js';
+import { searchBackendSchema, type PartialConfig } from './config/schema.js';
 import { listModels } from './model/registry.js';
 import { AmbiguousSessionError, SessionNotFoundError, SessionStore } from './session/store.js';
-import { resumeOverrides } from './app/resume.js';
 import { APP_NAME } from './config/paths.js';
 import { packageVersion } from './config/version.js';
 import { formatDoctor, runDoctor } from './app/doctor.js';
@@ -27,6 +20,8 @@ import { detectLocale, setLocale, t } from './i18n/index.js';
 import { INIT_PROMPT } from './agent/init.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
 import { parseSlashInvocation } from './skills/invocation.js';
+import { discoverExtensions } from './extensions/loader.js';
+import { installPackage, nameOf, removePackage, resolvePackages } from './extensions/packages.js';
 
 type TuiModule = typeof import('./ui/tui.js');
 
@@ -55,11 +50,6 @@ interface GlobalFlags {
   provider?: string;
   model?: string;
   cwd?: string;
-  plan?: boolean;
-  sandbox?: string;
-  askForApproval?: string;
-  fullAuto?: boolean;
-  dangerouslyBypassApprovalsAndSandbox?: boolean;
   maxContext?: string;
   maxSteps?: string;
   /**
@@ -69,6 +59,8 @@ interface GlobalFlags {
    */
   mcp?: boolean;
   searchBackend?: string;
+  /** `-e <path>`(可重复):磁盘扩展的文件或目录。 */
+  extension?: string[];
 }
 
 /** 根命令特有的 flags(`-p`、会话恢复相关)。 */
@@ -82,44 +74,10 @@ interface MainFlags extends GlobalFlags {
   attach?: string;
 }
 
-/**
- * 两轴 flags 的合成:预设 flag 先落底,显式的 -s / -a 单独覆盖对应的轴。
- * 与 Codex 同名同义:--full-auto = auto 预设,--dangerously-bypass-approvals-and-sandbox
- * = full-access 预设。取值非法时直接报错退出,而不是静默落回默认。
- */
-function permissionsFromFlags(flags: GlobalFlags): Partial<Permissions> {
-  const out: Partial<Permissions> = {};
-  if (flags.fullAuto) Object.assign(out, presetById('auto'));
-  if (flags.dangerouslyBypassApprovalsAndSandbox) Object.assign(out, presetById('full-access'));
-  if (flags.sandbox) {
-    const parsed = sandboxModeSchema.safeParse(flags.sandbox);
-    if (!parsed.success) {
-      throw new ConfigError(
-        `Invalid --sandbox "${flags.sandbox}". Valid: ${sandboxModeSchema.options.join(', ')}`,
-      );
-    }
-    out.sandbox = parsed.data;
-  }
-  if (flags.askForApproval) {
-    const parsed = approvalPolicySchema.safeParse(flags.askForApproval);
-    if (!parsed.success) {
-      throw new ConfigError(
-        `Invalid --ask-for-approval "${flags.askForApproval}". Valid: ${approvalPolicySchema.options.join(', ')}`,
-      );
-    }
-    out.approval = parsed.data;
-  }
-  return out;
-}
-
 function overridesFromFlags(flags: GlobalFlags): PartialConfig {
   const overrides: PartialConfig = {};
   if (flags.provider) overrides.provider = flags.provider;
   if (flags.model) overrides.model = flags.model;
-  const perms = permissionsFromFlags(flags);
-  if (perms.sandbox) overrides.sandbox = perms.sandbox;
-  if (perms.approval) overrides.approval = perms.approval;
-  if (flags.plan) overrides.plan = true;
   if (flags.maxContext) overrides.maxContext = Number(flags.maxContext);
   if (flags.maxSteps) overrides.maxSteps = Number(flags.maxSteps);
   if (flags.searchBackend) {
@@ -132,6 +90,23 @@ function overridesFromFlags(flags: GlobalFlags): PartialConfig {
     overrides.search = { backend: parsed.data };
   }
   return overrides;
+}
+
+/** commander 的可重复选项收集器:`-e a -e b` → ['a', 'b']。 */
+function collectRepeatable(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+/**
+ * 子命令的工作区根。
+ *
+ * 根命令上已有 `-C`,commander 会让父级抢先接住同名选项的值,子命令自己
+ * 声明的那个只会拿到 undefined。所以一律回落读父级,`mojocode -C dir doctor`
+ * 与 `mojocode doctor -C dir` 两种写法都生效。每个子命令都要这一句。
+ */
+function workspaceRoot(): string {
+  const globals = program.opts() as MainFlags;
+  return globals.cwd ? path.resolve(globals.cwd) : process.cwd();
 }
 
 /**
@@ -164,14 +139,10 @@ program
   .option('--provider <id>', t('cli.opt.provider', { list: BUILTIN_PROVIDER_IDS.join(', ') }))
   .option('-m, --model <id>', t('cli.opt.model'))
   .option('-C, --cwd <dir>', t('cli.opt.cwd'))
-  .option('--plan', t('cli.opt.plan'))
-  .option('-s, --sandbox <mode>', t('cli.opt.sandbox'))
-  .option('-a, --ask-for-approval <policy>', t('cli.opt.approval'))
-  .option('--full-auto', t('cli.opt.fullAuto'))
-  .option('--dangerously-bypass-approvals-and-sandbox', t('cli.opt.dangerous'))
   .option('--max-context <tokens>', t('cli.opt.maxContext'))
   .option('--max-steps <n>', t('cli.opt.maxSteps'))
   .option('--no-mcp', t('cli.opt.noMcp'))
+  .option('-e, --extension <path>', t('cli.opt.extension'), collectRepeatable, [])
   .option('--search-backend <id>', t('cli.opt.searchBackend'))
   .option('-r, --resume [sessionId]', t('cli.opt.resume'))
   .option('-c, --continue', t('cli.opt.continue'))
@@ -281,11 +252,9 @@ program
   .option('--json', t('cli.opt.doctorJson'))
   .option('--offline', t('cli.opt.doctorOffline'))
   .action(async (opts: { json?: boolean; offline?: boolean }) => {
-    // 根命令上已有 -C 和 --json,commander 会让父级抢先接住同名选项的值,
-    // 子命令自己声明的那个只会拿到 undefined。所以一律回落读父级,
-    // `mojocode -C dir doctor` 与 `mojocode doctor -C dir` 两种写法都能生效。
+    // `--json` 与 `-C` 同理(见 workspaceRoot):父级抢先,一律回落读它。
     const globals = program.opts() as MainFlags;
-    const root = globals.cwd ? (await import('node:path')).resolve(globals.cwd) : process.cwd();
+    const root = workspaceRoot();
     const json = opts.json === true || globals.json === true;
     await applyConfigLocale(root);
     try {
@@ -310,8 +279,89 @@ program
   .option('--host <host>', t('cli.opt.serveHost'), '127.0.0.1')
   .option('--port <port>', t('cli.opt.servePort'), '0')
   .option('--managed', t('cli.opt.serveManaged'))
+  // 刻意不再声明 `-e`:根命令上已有,commander 会让父级抢先接住(与 `-C`
+  // 同一个行为,见 workspaceRoot),子命令这份**恒为空表**——留着只会让人
+  // 以为 serve 有自己的一路来源。`mojocode serve -e x` 照样生效,值在父级。
   .action(async (opts: { host: string; port: string; managed?: boolean }) => {
     await runServe(opts);
+  });
+
+program
+  .command('install <source>')
+  .description(t('cli.cmd.install'))
+  .option('--local', t('cli.opt.packageLocal'))
+  .action(async (source: string, opts: { local?: boolean }) => {
+    const root = workspaceRoot();
+    try {
+      const result = await installPackage(source, { root, scope: opts.local ? 'project' : 'global' });
+      process.stdout.write(
+        `${t('cli.installed', { name: nameOf(result.source), dir: result.dir, file: result.configFile })}\n`,
+      );
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  // 刻意没有 `--local`:卸载两层都清(见 removePackage),用户不必记得当初
+  // 是从哪一层装的。
+  .command('remove <name>')
+  .description(t('cli.cmd.remove'))
+  .action(async (name: string) => {
+    const root = workspaceRoot();
+    try {
+      const { config } = await loadRawConfig({ root });
+      const result = await removePackage(name, { root, configured: config.packages });
+      if (!result.removed) {
+        process.stderr.write(`${t('cli.removeNotFound', { name })}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stdout.write(`${t('cli.removed', { name, file: result.configFiles.join(', ') })}\n`);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  .command('extensions')
+  .description(t('cli.cmd.extensions'))
+  .action(async () => {
+    const root = workspaceRoot();
+    const globals = program.opts() as MainFlags;
+    try {
+      const { config } = await loadRawConfig({ root });
+      const resolved = await resolvePackages(config.packages, { root });
+      const { extensions: found, notFound } = await discoverExtensions({
+        root,
+        extraPaths: globals.extension ?? [],
+        packages: resolved.packages,
+      });
+      for (const file of notFound) {
+        process.stderr.write(`! ${t('notice.extensionPathMissing', { file })}\n`);
+      }
+      if (found.length === 0 && config.packages.length === 0) {
+        process.stdout.write(`${t('cli.noExtensions')}\n`);
+        return;
+      }
+      if (found.length > 0) {
+        process.stdout.write(`${t('cli.extensionsHeader')}\n`);
+        for (const ext of found) {
+          process.stdout.write(`  ${ext.id.padEnd(28)} ${ext.origin.padEnd(8)} ${ext.file}\n`);
+        }
+      }
+      if (config.packages.length > 0) {
+        process.stdout.write(`${t('cli.packagesHeader')}\n`);
+        for (const pkg of resolved.packages) {
+          process.stdout.write(`  ✓ ${nameOf(pkg.source).padEnd(26)} ${pkg.dir}\n`);
+        }
+        for (const spec of resolved.missing) {
+          process.stdout.write(`${t('cli.packageMissingRow', { spec })}\n`);
+        }
+      }
+    } catch (error) {
+      fail(error);
+    }
   });
 
 program
@@ -319,7 +369,7 @@ program
   .description(t('cli.cmd.config'))
   .action(async () => {
     const root = process.cwd();
-    // 加载期提示(旧版 permissionMode 的一次性转换等)最该出现在这里:
+    // 加载期提示最该出现在这里:
     // 想搞清楚"我的配置到底生效成什么样"的人就是来跑这条命令的。
     const showWarnings = (warnings: string[]): void => {
       for (const warning of warnings) process.stderr.write(`! ${warning}\n`);
@@ -406,14 +456,10 @@ function serveArgsFrom(flags: MainFlags, root: string, resumeId?: string): strin
   const args: string[] = ['--cwd', root];
   if (flags.provider) args.push('--provider', flags.provider);
   if (flags.model) args.push('--model', flags.model);
-  if (flags.plan) args.push('--plan');
-  if (flags.sandbox) args.push('--sandbox', flags.sandbox);
-  if (flags.askForApproval) args.push('--ask-for-approval', flags.askForApproval);
-  if (flags.fullAuto) args.push('--full-auto');
-  if (flags.dangerouslyBypassApprovalsAndSandbox) args.push('--dangerously-bypass-approvals-and-sandbox');
   if (flags.maxContext) args.push('--max-context', flags.maxContext);
   if (flags.maxSteps) args.push('--max-steps', flags.maxSteps);
   if (flags.mcp === false) args.push('--no-mcp');
+  for (const ext of flags.extension ?? []) args.push('--extension', ext);
   if (flags.searchBackend) args.push('--search-backend', flags.searchBackend);
   if (resumeId) args.push('--resume', resumeId);
   if (flags.forkSession) args.push('--fork-session');
@@ -443,10 +489,8 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
     process.exit(1);
   });
 
-  // 与 doctor 同一手法:共享 flags 声明在根命令上,从 program.opts() 读,
-  // `mojocode -C dir serve` 与 `mojocode serve -C dir` 都生效。
   const globals = program.opts() as MainFlags;
-  const root = globals.cwd ? (await import('node:path')).resolve(globals.cwd) : process.cwd();
+  const root = workspaceRoot();
   await applyConfigLocale(root);
 
   // serve 是非交互进程:`-r <id>` 接受显式 id(受管模式下父进程已把选择器
@@ -469,16 +513,7 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
     return fail(error);
   }
 
-  const flagPerms = permissionsFromFlags(globals);
-  const overrides: PartialConfig = {
-    ...(resume
-      ? resumeOverrides(resume.state, {
-          permissions:
-            flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
-        })
-      : {}),
-    ...overridesFromFlags(globals),
-  };
+  const overrides: PartialConfig = overridesFromFlags(globals);
 
   let loaded;
   try {
@@ -492,16 +527,16 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
     setLocale(detectLocale(loaded.config.language));
   }
 
-  const broker = createPermissionBroker();
   const session = await bootstrap({
     root,
     loaded,
-    ask: broker.ask,
     resume,
     fork: globals.forkSession === true,
-    skipMcp: globals.mcp === false,
-    // 连接失败不再写 stderr:MCP 连接非阻塞后状态在 TUI 挂载之后才落地,
-    // 裸写会糊进全屏画面。bootstrap 已把失败作为 notice 发上总线。
+    // `--no-mcp` = 不加载 mcp 扩展。连接失败不写 stderr:连接非阻塞,状态在
+    // TUI 挂载之后才落地,裸写会糊进全屏画面;扩展已把失败作为 notice 发上总线。
+    ...(globals.mcp === false ? { disabledExtensions: ['mcp'] } : {}),
+    // 受管子进程从父进程原样收到 `-e`(serveArgsFrom),独立 serve 由用户直接给。
+    extensionPaths: globals.extension ?? [],
   });
   for (const warning of loaded.warnings) {
     process.stderr.write(`! ${warning}\n`);
@@ -522,7 +557,6 @@ async function runServe(opts: { host: string; port: string; managed?: boolean })
   };
   const server = await startServer({
     session,
-    broker,
     host: opts.host,
     port: Number(opts.port),
     token: process.env.MOJOCODE_SERVER_TOKEN,
@@ -574,9 +608,9 @@ async function runMain(flags: MainFlags): Promise<void> {
     if (!tui) return;
   }
 
-  // 恢复要在 loadConfig 之前解析:会话 state 的两轴权限会并入配置层
-  //(优先级:CLI flags > 会话 state > env/配置文件)。provider/model 不还原,
-  // 始终用当前配置解析出的模型。
+  // 恢复要在 loadConfig 之前解析:`-r` 裸用时要开选择器,而选择器是 TUI 的
+  // 一部分,得在配置定稿、会话建起来之前问完。恢复的只有对话内容——
+  // provider/model 不还原,始终用当前配置解析出的模型。
   let resume: SessionStore | undefined;
   try {
     resume = await resolveResume(flags, root, tui);
@@ -590,17 +624,7 @@ async function runMain(flags: MainFlags): Promise<void> {
     return fail(error);
   }
 
-  // 只有两轴都被 flags 显式定死时,会话记录的权限才被完全压过。
-  const flagPerms = permissionsFromFlags(flags);
-  const overrides: PartialConfig = {
-    ...(resume
-      ? resumeOverrides(resume.state, {
-          permissions:
-            flagPerms.sandbox && flagPerms.approval ? (flagPerms as Permissions) : undefined,
-        })
-      : {}),
-    ...overridesFromFlags(flags),
-  };
+  const overrides: PartialConfig = overridesFromFlags(flags);
 
   let loaded;
   try {
@@ -681,15 +705,15 @@ async function runMain(flags: MainFlags): Promise<void> {
   const session = await bootstrap({
     root,
     loaded,
-    ask: headlessAsker({ sandbox: loaded.config.sandbox, approval: loaded.config.approval }),
     resume,
     fork: flags.forkSession === true,
-    skipMcp: flags.mcp === false,
+    ...(flags.mcp === false ? { disabledExtensions: ['mcp'] } : {}),
+    extensionPaths: flags.extension ?? [],
     // 同上:失败经 bus notice 呈现(headless 渲染器也认 notice 事件),
     // 裸 stderr 在进程内 TUI 下会写进 alt-screen。
   });
 
-  // 加载期提示(旧版 permissionMode 的一次性转换等)。`--json` 下不打:
+  // 加载期提示。`--json` 下不打:
   // stderr 是纯 NDJSON 流,掺普通文本会让逐行 JSON.parse 的消费方在第一行就炸。
   if (!(headless && flags.json === true)) {
     for (const warning of loaded.warnings) {
@@ -709,20 +733,8 @@ async function runMain(flags: MainFlags): Promise<void> {
       stream: process.stdout,
       errStream: process.stderr,
     });
-    // `-p "/init"` 与 TUI 的 /init 对齐:替换为完整指令。headless 默认拒绝
-    // 写入,提示用户带上放行 flag;仍照常运行,写入被拒时模型自会转述。
-    // 走事件总线而不是直接写 stderr:`--json` 下 stderr 是纯 NDJSON 流,
-    // 掺一行普通文本会让逐行 JSON.parse 的消费方在第一行就炸。
+    // `-p "/init"` 与 TUI 的 /init 对齐:替换为完整指令。
     const isInit = flags.print!.trim() === '/init';
-    // /init 要写 AGENTS.md:headless 下确认一律被拒,所以除非写入本就免确认
-    // (workspace-write 且非 untrusted),这一轮注定写不出文件,提前提示。
-    const writesFree =
-      loaded.config.sandbox !== 'read-only' &&
-      loaded.config.approval !== 'untrusted' &&
-      !loaded.config.plan;
-    if (isInit && !writesFree) {
-      session.bus.emit({ type: 'notice', level: 'warn', message: t('cli.initNeedsWrite') });
-    }
     // `-p "/技能名 args"` 与 TUI 的斜杠技能调用对齐:runSkill 负责激活、
     // 展开、跑轮次(参数不做 @ 展开——技能参数是字面值)。不认识的斜杠
     // 文本照旧当普通 prompt 发出,与引入技能之前的行为一字不差。
@@ -745,7 +757,6 @@ async function runMain(flags: MainFlags): Promise<void> {
     if (!isInit) {
       const result = await expandAtReferences(prompt, {
         root: session.root,
-        denyPath: session.config.permissions.denyPath,
         // 非视觉模型以引用模式展开 @图(判定与 Agent.prepareUserMessage 共用
         // providerModelIsVision,理由见 App.tsx 的同款注释);粘贴图 headless
         // 不支持,无需处理。

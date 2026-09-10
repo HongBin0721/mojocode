@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { setLocale } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import type { StatusSegment } from '../../src/config/schema.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 beforeEach(() => {
   setLocale('en');
@@ -39,12 +39,9 @@ async function setup(statusBar: StatusSegment[] = []) {
       compact: async () => {},
     },
     bus: new EventBus(),
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'sess', messages: [] },
     switch: () => provider,
     setMode: () => {},
@@ -100,7 +97,7 @@ describe('/setting 设置面板', () => {
     // 画在时间线里,不在任何会因面板状态变化而重新求值的分支上——只有重挂载
     // 发生了它才会变成中文。App 末尾那个 keyed Show 的回调一旦退回零元箭头
     // (Solid 据 children.length 决定要不要按值调用),这里立刻红。
-    expect(frame).toContain('/ 查看命令 · shift+tab 切权限模式');
+    expect(frame).toContain('/ 查看命令 · shift+enter 换行');
     await ui.destroy();
   });
 
@@ -123,12 +120,12 @@ describe('/setting 设置面板', () => {
     await openPanel(ui);
     await ui.press('down'); // → Status bar
     await ui.press('return');
-    expect(ui.frame()).toContain('Current permission mode');
-    await ui.type(' '); // 勾选 mode
-    await ui.press('down');
+    expect(ui.frame()).toContain('Current model id');
     await ui.type(' '); // 勾选 model
+    await ui.press('down');
+    await ui.type(' '); // 勾选 cwd
     await ui.press('return');
-    expect(ui.frame()).toContain('Status bar now shows: mode model.');
+    expect(ui.frame()).toContain('Status bar now shows: model cwd.');
     await ui.press('escape'); // 关闭面板,底栏回来
     const frame = ui.frame();
     expect(frame).toContain('test-model');
@@ -140,11 +137,10 @@ describe('/setting 设置面板', () => {
     await openPanel(ui);
     await ui.press('down');
     await ui.press('return');
-    await ui.type(' '); // 勾上 mode(尚未确认)
+    await ui.type(' '); // 取消勾选 model(尚未确认)
     await ui.press('escape');
     // 一级列表显示的仍是原值。
     expect(ui.frame()).toContain('model');
-    expect(ui.frame()).not.toContain('mode model');
     await ui.destroy();
   });
 });

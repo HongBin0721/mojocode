@@ -3,7 +3,13 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    // 带上 node:`@core/protocol` 这条白名单链会经 config/load、session/store
+    // 够到 node: 模块与 NodeJS 全局(ResolvedProvider、ChangedFileEntry 这些
+    // 类型的出处本身是 Node 模块),类型层面拦不住。以前不报只是运气——图里
+    // 某个依赖的 .d.ts 顺带 reference 了 @types/node,链一变短就整片报错。
+    // renderer **产物**的 Node-free 由 Vite 的别名白名单 + `npm run build`
+    // 保证(CI 的 desktop job 跑它),不靠这里扣掉类型定义。
+    "types": ["vite/client", "node"],
     // renderer 白名单(与 electron.vite.config.ts 的 rendererAliases 对齐):
     // extends 对 paths 是整体替换,这里只声明纯数据/纯类型模块 —— main-only
     // 别名(remote/replay/i18n/session-store)在 renderer 里 typecheck 即报

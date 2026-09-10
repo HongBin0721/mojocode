@@ -51,7 +51,6 @@ export const TaskRow = memo(function TaskRow({
           <PushPinIcon size={11} />
         </span>
       ) : null}
-      {task.hasPendingPermission ? <span className="task-badge-permission" /> : null}
       {task.isRunning ? (
         <span className="task-row-when task-row-when-running">{t('task.status.run')}</span>
       ) : (

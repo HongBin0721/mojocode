@@ -42,24 +42,6 @@ describe('TimelineItemView', () => {
     expect(container.querySelector('.entry-avatar')).toBeTruthy();
   });
 
-  it('exit_plan:结构化步骤渲染为计划卡;无结构回退 Markdown', () => {
-    const planInput = { plan: '- [x] 第一步\n- [ ] 第二步' };
-    const { container } = render(
-      <TimelineItemView item={toolItem({ toolName: 'exit_plan', input: planInput })} />,
-    );
-    expect(screen.getByText('执行计划')).toBeTruthy();
-    expect(container.querySelectorAll('.plan-step')).toHaveLength(2);
-    expect(container.querySelector('.plan-step-done')).toBeTruthy();
-
-    const fallback = render(
-      <TimelineItemView
-        item={toolItem({ toolName: 'exit_plan', input: { plan: '一段没有步骤的说明。' } })}
-      />,
-    );
-    // 回退路径:不渲染步骤行,但正文仍在(不白屏)。
-    expect(fallback.container.querySelector('.plan-step')).toBeNull();
-    expect(fallback.container.textContent).toContain('一段没有步骤的说明。');
-  });
 
   it('diff 卡统计走 parseDiffLines;截断的 diff 数字带 + 后缀', () => {
     const diff = '--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n+new line\n-old line';

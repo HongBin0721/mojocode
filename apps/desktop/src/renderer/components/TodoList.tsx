@@ -2,16 +2,17 @@
  * todo 清单(todo 工具的输入携带完整列表;实时面板在 TodoPanel——数据
  * 来自 state 快照,不经时间线)。
  *
- * TodoItem 在此本地声明:根仓库的出处(src/tools/todo.ts)带 ai/zod 的
- * 运行时依赖,进不了 renderer;结构兼容(extractTodos 的返回值可直接喂)。
+ * TodoItem 与 parseTodos 从 `@core/timeline-data` 取——它是 Node-free 的
+ * renderer 白名单入口,todo 扩展自己也是反过来从它 import 的。这里曾有一份
+ * 逐字相同的副本,理由是"出处(todo 扩展)带 ai/zod";parseTodos 搬进
+ * timeline-data 之后那条理由不再成立,而两份形状判定漂移时 typecheck 看不
+ * 出来,GUI 只会安静地把整份清单判成 undefined、面板空掉。
  */
 
 import React from 'react';
+import { parseTodos, type TodoItem } from '@core/timeline-data';
 
-export interface TodoItem {
-  content: string;
-  status: 'pending' | 'in_progress' | 'completed';
-}
+export { parseTodos, type TodoItem };
 
 export function TodoList({ todos }: { todos: TodoItem[] }) {
   return (

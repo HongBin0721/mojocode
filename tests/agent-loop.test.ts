@@ -27,6 +27,7 @@ vi.mock('../src/agent/compact.js', async (importOriginal) => ({
 }));
 
 import { Agent, wrapGuidance } from '../src/agent/loop.js';
+import { HookRegistry } from '../src/core/hooks.js';
 
 /** 每次 streamText 调用时的消息快照(this.messages 是活引用,必须复制)。 */
 const sent: string[][] = [];
@@ -697,7 +698,7 @@ describe('轮末事件', () => {
     expect(sent).toHaveLength(2); // 确实跑了两个流
     expect(events.filter((e) => e === 'turn-end')).toHaveLength(1);
     // turn-end 必须是整轮的最后一个事件,不能夹在两个流中间。
-    expect(events[events.length - 1]).toBe('turn-end');
+    expect(events.slice(-2)).toEqual(['turn-end', 'run-end']);
   });
 
   it('中断的轮不发 turn-end,由 aborted 收尾', async () => {
@@ -1076,14 +1077,22 @@ describe('contextUsage 显示回落', () => {
   });
 });
 
-describe('beforeTurn 门(MCP 非阻塞启动的补偿)', () => {
-  it('开流等到 beforeTurn 落定,首轮工具集不抢跑', async () => {
-    installDefaultStream();
+describe('turn_start 门(扩展的非阻塞启动补偿,如 MCP 连接)', () => {
+  /** 一个会挂住 turn_start 的钩子注册表;release 放行。 */
+  function gateHooks() {
+    const hooks = new HookRegistry();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const { agent } = makeAgent({}, {}, { beforeTurn: () => gate });
+    hooks.on('turn_start', () => gate);
+    return { hooks, release: () => release() };
+  }
+
+  it('开流等到 turn_start 落定,首轮工具集不抢跑', async () => {
+    installDefaultStream();
+    const { hooks, release } = gateHooks();
+    const { agent } = makeAgent({}, {}, { hooks });
 
     const running = agent.run('你好');
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1094,13 +1103,10 @@ describe('beforeTurn 门(MCP 非阻塞启动的补偿)', () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
-  it('等待 beforeTurn 期间 isRunning 已为真,再次 run 走注入而不是并发开轮', async () => {
+  it('等待 turn_start 期间 isRunning 已为真,再次 run 走注入而不是并发开轮', async () => {
     installDefaultStream();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const { agent, events } = makeAgent({}, {}, { beforeTurn: () => gate });
+    const { hooks, release } = gateHooks();
+    const { agent, events } = makeAgent({}, {}, { hooks });
 
     const running = agent.run('第一条');
     await new Promise((resolve) => setTimeout(resolve, 0));

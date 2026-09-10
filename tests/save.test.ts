@@ -6,12 +6,10 @@ import {
   deleteProviderEntry,
   saveApiKey,
   saveCustomProvider,
-  savePermissions,
   saveProviderEntry,
   saveReasoningEffort,
   setDefaultProvider,
 } from '../src/config/save.js';
-import { presetById } from '../src/config/schema.js';
 
 let dir: string;
 let file: string;
@@ -182,48 +180,6 @@ describe('saveReasoningEffort', () => {
   it('creates the providers entry when missing', async () => {
     await saveReasoningEffort('kimi', 'max', file);
     expect(await readConfig()).toEqual({ providers: { kimi: { reasoningEffort: 'max' } } });
-  });
-});
-
-describe('savePermissions', () => {
-  it('写项目配置而不是全局配置,放宽不会泄漏到其他工作区', async () => {
-    const saved = await savePermissions(dir, presetById('auto'), file);
-
-    expect(saved).toBe(file);
-    expect(await readConfig()).toEqual({ sandbox: 'workspace-write', approval: 'on-request' });
-  });
-
-  it('默认落在 <root>/.mojocode/config.json', async () => {
-    const saved = await savePermissions(dir, presetById('read-only'));
-
-    expect(saved).toBe(path.join(dir, '.mojocode', 'config.json'));
-    expect(JSON.parse(await fs.readFile(saved, 'utf8'))).toEqual({
-      sandbox: 'read-only',
-      approval: 'on-request',
-    });
-  });
-
-  // 用户显式选的档位一律留存,full-access 也不例外(它绕过硬拒名单,代价是
-  // 选中它的每条路径都要在时间线上留警告——见 App 的 applyMode)。
-  it('full-access 同样落盘', async () => {
-    expect(await savePermissions(dir, presetById('full-access'), file)).toBe(file);
-    expect(await readConfig()).toEqual({ sandbox: 'danger-full-access', approval: 'never' });
-  });
-
-  it('保留项目配置里已有的权限规则,并顺带清掉旧版 permissionMode', async () => {
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(
-      file,
-      JSON.stringify({ permissionMode: 'ask', permissions: { allowBash: ['git status'] } }),
-    );
-
-    await savePermissions(dir, presetById('auto'), file);
-
-    expect(await readConfig()).toEqual({
-      permissions: { allowBash: ['git status'] },
-      sandbox: 'workspace-write',
-      approval: 'on-request',
-    });
   });
 });
 

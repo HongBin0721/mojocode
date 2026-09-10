@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_TODO_ROWS, todoPanelRows } from '../src/ui/TodoPanel.js';
-import type { TodoItem } from '../src/tools/todo.js';
+import type { TodoItem } from '../src/extensions/todo/index.js';
 
 const make = (n: number, status: TodoItem['status']): TodoItem[] =>
   Array.from({ length: n }, (_, i) => ({ content: `task-${status}-${i}`, status }));

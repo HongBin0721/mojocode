@@ -1,11 +1,10 @@
 /**
  * 输入区(设计稿胶囊工具条)——外壳:textarea + 键盘状态机(slash 菜单
- * 导航/提交/权限循环三者的胶水)+ 提交;斜杠命令、附件、工具栏、上下文环
+ * 导航/提交的胶水)+ 提交;斜杠命令、附件、工具栏、上下文环
  * 在 composer/ 子目录(use-slash-commands / use-attachments /
- * ComposerToolbar / ContextRing / use-flash)。
+ * ComposerToolbar / ContextRing)。
  *
- * 键盘:Enter 提交 / Shift+Enter 换行;`Shift+Tab` 循环权限档;`/` 开头弹
- * 命令菜单;粘贴与拖入图片 → 缩略图附件 chips(拖入非图片忽略)。
+ * 键盘:Enter 提交 / Shift+Enter 换行;`/` 开头弹命令菜单;粘贴与拖入图片 → 缩略图附件 chips(拖入非图片忽略)。
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -13,9 +12,9 @@ import { useDesktopStore } from '../state/desktopStore.js';
 import { useTimelineStore } from '../state/timelineStore.js';
 import { rpcFire } from '../bridge/invoke.js';
 import { t, useLocale } from '../i18n/index.js';
-import { cyclePermissionsRpc } from '../commands/permissions.js';
 import { SlashMenu } from './SlashMenu.js';
 import { useSlashCommands } from './composer/use-slash-commands.js';
+import { OptionMenu } from './OptionMenu.js';
 import { useAttachments } from './composer/use-attachments.js';
 import { imageDataUri } from '../utils/image.js';
 import { ComposerToolbar } from './composer/ComposerToolbar.js';
@@ -80,21 +79,35 @@ export function Composer() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Shift+Tab:权限档循环(Codex/ZCode 同款按键)。
-    if (e.key === 'Tab' && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      if (snapshot) rpcFire(cyclePermissionsRpc(snapshot.config));
-      return;
+    // 选项层打开时按键只在它里面生效(它顶掉了命令菜单)。
+    if (slash.optionMenu) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        slash.moveOption(e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const option = slash.optionMenu.options[slash.optionCursor];
+        if (option) slash.pickOption(option);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        slash.backOption();
+        return;
+      }
+      // 其余按键(打字)不拦:选项层是浮层,输入框仍可用。
     }
     if (slash.menuVisible) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        slash.setCursor((slash.safeCursor + 1) % slash.entries.length);
+        slash.moveCommand(1);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        slash.setCursor((slash.safeCursor - 1 + slash.entries.length) % slash.entries.length);
+        slash.moveCommand(-1);
         return;
       }
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -129,7 +142,17 @@ export function Composer() {
 
   return (
     <div className="composer conv-col">
-      {slash.menuVisible ? (
+      {slash.optionMenu ? (
+        <OptionMenu
+          state={slash.optionMenu}
+          cursor={slash.optionCursor}
+          onHover={slash.setOptionCursor}
+          onPick={(index) => {
+            const option = slash.optionMenu?.options[index];
+            if (option) slash.pickOption(option);
+          }}
+        />
+      ) : slash.menuVisible ? (
         <SlashMenu
           entries={slash.entries}
           cursor={slash.safeCursor}

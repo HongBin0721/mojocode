@@ -34,7 +34,6 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
   messageCount: 3,
   status: 'connected',
   isRunning: false,
-  hasPendingPermission: false,
   unseen: false,
   ...over,
 });

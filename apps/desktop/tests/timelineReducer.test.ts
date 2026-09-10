@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentEvent, PermissionRequest } from '@core/events';
+import type { AgentEvent } from '@core/events';
 import { setLocale } from '../src/renderer/i18n/index.js';
 import {
   initialTimelineState,
@@ -19,12 +19,7 @@ setLocale('zh-CN');
 
 const makeCtx = (overrides: Partial<TimelineCtx> = {}): TimelineCtx => ({
   getModel: () => 'glm-5',
-  getConfig: () => ({ plan: false, goalMaxTurns: 10 }),
-  isGoalBusy: () => false,
-  isGoalActive: () => false,
   isAgentRunning: () => false,
-  onPermissionRequest: () => {},
-  onPermissionChange: () => {},
   ...overrides,
 });
 
@@ -69,6 +64,7 @@ describe('reduceTimeline', () => {
         },
         finishReason: 'stop',
       },
+      { type: 'run-end' },
     ]);
     expect(kinds(state)).toEqual(['user', 'assistant', 'assistant', 'turn']);
     // 段落提交的条目带 continuation 语义:后续片段渲染不带 ● 前缀。
@@ -132,13 +128,6 @@ describe('reduceTimeline', () => {
     expect(state.taskProgress['task1']).toBeUndefined();
   });
 
-  it('permission-request 上抛回调并进入 waiting 阶段', () => {
-    const onPermissionRequest = vi.fn();
-    const request: PermissionRequest = { id: 'p1', toolName: 'bash', title: 'bash: ls', risk: 'execute' };
-    const state = drain([{ type: 'turn-start', userText: 'x' }, { type: 'permission-request', request }], makeCtx({ onPermissionRequest }));
-    expect(onPermissionRequest).toHaveBeenCalledWith(request);
-    expect(state.work?.phase).toBe('waiting');
-  });
 
   it('中断:进行中的文本定稿进时间线,活动工具清空,状态行熄灭', () => {
     const state = drain([
@@ -186,33 +175,18 @@ describe('reduceTimeline', () => {
     expect(state.turnTokens).toBe(180);
   });
 
-  it('goal 循环:goal-start 落 notice、turn-end 时目标仍活跃则状态行不熄', () => {
-    const goalCtx = makeCtx({ isGoalBusy: () => true, isGoalActive: () => true });
-    const state = drain(
-      [
-        { type: 'turn-start', userText: 'x' },
-        { type: 'goal-start', condition: '测试通过', restored: false },
-        {
-          type: 'turn-end',
-          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cumulativeTotalTokens: 2, contextWindow: 1000 },
-          finishReason: 'stop',
-        },
-      ],
-      goalCtx,
-    );
-    expect(kinds(state)).toEqual(['user', 'notice', 'turn']);
-    expect(state.goalActive).toBe(true);
-    expect(state.work?.phase).toBe('thinking'); // 没被 turn-end 熄掉
-  });
-
-  it('goal-stop 落对应文案的 notice 并清 goalActive', () => {
-    const state = drain([
-      { type: 'goal-stop', reason: 'met', condition: '测试通过', detail: '', turns: 3, elapsedMs: 65000, tokens: 9000 },
+  it('turn-end 不熄灯(链条可能还有下一轮),状态行退回思考中;run-end 才熄', () => {
+    const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2, cumulativeTotalTokens: 2, contextWindow: 1000 };
+    let state = drain([
+      { type: 'turn-start', userText: 'x' },
+      { type: 'tool-start', callId: 'c1', toolName: 'read', input: { path: 'a' } },
+      { type: 'turn-end', usage, finishReason: 'stop' },
     ]);
-    const notice = state.items[0] as { kind: 'notice'; level: string; message: string };
-    expect(notice.level).toBe('info');
-    expect(notice.message).toContain('3 轮');
-    expect(state.goalActive).toBe(false);
+    expect(kinds(state)).toEqual(['user', 'turn']);
+    expect(state.work).toMatchObject({ phase: 'thinking' });
+    expect(state.work?.detail).toBeUndefined();
+    state = reduceTimeline(state, { type: 'run-end' }, makeCtx());
+    expect(state.work).toBeUndefined();
   });
 
   it('compaction-progress 推进压缩进度,compaction 收尾', () => {
@@ -227,34 +201,7 @@ describe('reduceTimeline', () => {
     expect(state.items.at(-1)?.kind).toBe('notice');
   });
 
-  it('计划模式下整轮未提交方案:turn-end 落 warn 提示', () => {
-    const planCtx = makeCtx({ getConfig: () => ({ plan: true, goalMaxTurns: 10 }) });
-    const state = drain(
-      [
-        { type: 'turn-start', userText: '调研一下' },
-        { type: 'text-delta', id: 't1', text: '结论……' },
-        { type: 'text-end', id: 't1' },
-        { type: 'turn-end', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cumulativeTotalTokens: 2, contextWindow: 1000 }, finishReason: 'stop' },
-      ],
-      planCtx,
-    );
-    const notices = state.items.filter((item) => item.kind === 'notice') as { level: string }[];
-    expect(notices.some((n) => n.level === 'warn')).toBe(true);
-  });
 
-  it('exit_plan 调用过就不落未提交警告', () => {
-    const planCtx = makeCtx({ getConfig: () => ({ plan: true, goalMaxTurns: 10 }) });
-    const state = drain(
-      [
-        { type: 'turn-start', userText: 'x' },
-        { type: 'tool-start', callId: 'c1', toolName: 'exit_plan', input: { plan: '# 方案' } },
-        { type: 'tool-end', callId: 'c1', toolName: 'exit_plan', summary: 'plan', output: {}, isError: false, durationMs: 5 },
-        { type: 'turn-end', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, cumulativeTotalTokens: 2, contextWindow: 1000 }, finishReason: 'stop' },
-      ],
-      planCtx,
-    );
-    expect(state.items.filter((item) => item.kind === 'notice')).toHaveLength(0);
-  });
 
   it('reasoning 流定稿为一行条目(正文保留,可展开)', () => {
     const state = drain([

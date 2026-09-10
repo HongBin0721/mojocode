@@ -1,145 +1,19 @@
 import { z } from 'zod';
 
-/**
- * 权限模型是两根正交的轴,对齐 Codex:
- *
- * - **sandbox**(能做什么):`read-only` 只读;`workspace-write` 工作区内文件
- *   编辑自由;`danger-full-access` 连硬拒命令名单也绕过(对应旧 yolo)。
- * - **approval**(什么时候问):`untrusted` 除安全白名单外全部确认;
- *   `on-request` 沙箱内自由、沙箱外弹确认(升级);`never` 从不弹框,
- *   沙箱外的操作直接以错误返回给模型。
- *
- * 与 Codex 的差别必须说清:Codex 的 sandbox 是 OS 内核强制(Seatbelt/Landlock),
- * 命令真的跑在沙箱里,所以 workspace-write 下任意命令可以放行——内核保证它
- * 出不了工作区。mojocode 的约束在权限门这一层,无法把一条 bash 命令圈在
- * 工作区里,所以 workspace-write 下非白名单命令仍视为"沙箱外"(要确认或被拒),
- * Codex 的 `on-failure`(沙箱内先跑、失败再升级)也因此不存在。
- * 路径硬约束(realpath 圈定工作区,.git、.env 系列、密钥永远禁止)与两轴无关,
- * 在任何组合下都生效——这是 mojocode 自己的不变量,danger-full-access 也不豁免。
- *
- * plan(计划模式)不在轴上:它是协作方式,激活时压过两轴(等同只读),
- * 批准方案后还原。见 PermissionGate 与 bootstrap。
- */
-export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
-export type SandboxMode = z.infer<typeof sandboxModeSchema>;
-
-export const approvalPolicySchema = z.enum(['untrusted', 'on-request', 'never']);
-export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
-
-/** 一对两轴取值。gate、bootstrap、UI 之间传递的最小单位。 */
-export interface Permissions {
-  sandbox: SandboxMode;
-  approval: ApprovalPolicy;
-}
-
-/**
- * `/approvals` 的预设,即两轴的常用组合(Codex 的 Read Only / Auto / Full Access,
- * 外加 mojocode 一直以来的默认档 ask)。数组顺序即选择器展示顺序,按放宽递增。
- */
-export const APPROVAL_PRESETS = [
-  // 只读调研,但写入和命令可以逐次升级确认——区别于 plan(完全不能写)。
-  { id: 'read-only', sandbox: 'read-only', approval: 'on-request' },
-  // 默认:写文件、跑非白名单命令都确认。等价旧 ask。
-  { id: 'ask', sandbox: 'workspace-write', approval: 'untrusted' },
-  // 工作区内编辑自由,命令仍确认。等价旧 acceptEdits;Codex 的 Auto。
-  { id: 'auto', sandbox: 'workspace-write', approval: 'on-request' },
-  // 全自动,连硬拒名单也绕过。等价旧 yolo;选中会留存,但每次都在时间线上留警告。
-  { id: 'full-access', sandbox: 'danger-full-access', approval: 'never' },
-] as const satisfies readonly ({ id: string } & Permissions)[];
-export type ApprovalPresetId = (typeof APPROVAL_PRESETS)[number]['id'];
-
-export function presetById(id: ApprovalPresetId): Permissions {
-  const preset = APPROVAL_PRESETS.find((p) => p.id === id)!;
-  return { sandbox: preset.sandbox, approval: preset.approval };
-}
-
-/** 当前组合对应的预设 id;自由组合(如 read-only+never)返回 undefined。 */
-export function presetFor(p: Permissions): ApprovalPresetId | undefined {
-  return APPROVAL_PRESETS.find((x) => x.sandbox === p.sandbox && x.approval === p.approval)?.id;
-}
-
-/** 状态栏/头部的显示标签:预设名,或自由组合的 `sandbox·approval`。 */
-export function permissionsLabel(p: Permissions): string {
-  return presetFor(p) ?? `${p.sandbox}·${p.approval}`;
-}
-
-/**
- * 这套组合下写入是否*有可能*发生(直接放行或经确认升级)。
- * `/init` 据此提前拦下注定写不出文件的一轮;plan 激活时恒为否。
- */
-export function canEverWrite(p: Permissions, planActive: boolean): boolean {
-  if (planActive) return false;
-  return !(p.sandbox === 'read-only' && p.approval === 'never');
-}
-
-/**
- * full-access(danger-full-access)绕过硬拒名单,是全部档位里唯一能让模型
- * 在工作区外动手、跑 `rm -rf`/`sudo` 这类命令的一档。
- *
- * 它和其余档位一样会被留存(用户显式选的档位就该活到下一次启动),但选中它
- * 必须在时间线上留一条警告:底栏两秒的回显翻不出来,事后看记录得能认出这一
- * 段是在无沙箱下跑的。
- */
-export function isDangerousPermissions(p: Permissions): boolean {
-  return p.sandbox === 'danger-full-access';
-}
-
-/**
- * shift+tab 的循环:read-only → ask → auto → full-access → plan → read-only。
- *
- * 四个预设按 APPROVAL_PRESETS 的顺序(放宽递增)走一遍,再经 plan 回到最紧的
- * 一档。full-access 也在循环里——它绕过硬拒名单,所以落到它时 UI 要在时间线上
- * 留一条警告(见 App 的 applyMode)。
- * 当前组合不在预设里(自由组合)时落到 plan:它写不了任何东西,误触只会收紧。
- */
-export function nextCycleStep(
-  p: Permissions,
-  planActive: boolean,
-): { plan: true } | { preset: ApprovalPresetId } {
-  if (planActive) return { preset: APPROVAL_PRESETS[0].id };
-  const index = APPROVAL_PRESETS.findIndex(
-    (x) => x.sandbox === p.sandbox && x.approval === p.approval,
-  );
-  if (index < 0) return { plan: true };
-  const next = APPROVAL_PRESETS[index + 1];
-  return next ? { preset: next.id } : { plan: true };
-}
-
-/**
- * 从 `current` 进入计划模式时,方案获批后应当还原的组合。
- *
- * 只有一种情况不忠实还原:read-only+never——那套组合下批准完仍旧一个字都
- * 改不了,"批准"就没有意义了,所以提升到 ask(逐次确认)。read-only+on-request
- * 忠实还原:实现阶段的每次写入走升级确认,批准本身仍然有意义。
- */
-export function planReturnFor(current: Permissions): { perms: Permissions; promoted: boolean } {
-  if (!canEverWrite(current, false)) return { perms: presetById('ask'), promoted: true };
-  return { perms: { ...current }, promoted: false };
-}
-
-/**
- * 旧的单轴 permissionMode 到两轴的一次性映射,用于读取旧配置与旧会话文件。
- * `plan` 与未知值返回 undefined(plan 从来不落盘,落了也不该复活)。
- */
-export function fromLegacyMode(mode: string): Permissions | undefined {
-  switch (mode) {
-    case 'readonly':
-      return { sandbox: 'read-only', approval: 'never' };
-    case 'ask':
-      return { sandbox: 'workspace-write', approval: 'untrusted' };
-    case 'acceptEdits':
-      return { sandbox: 'workspace-write', approval: 'on-request' };
-    case 'yolo':
-      return { sandbox: 'danger-full-access', approval: 'never' };
-    default:
-      return undefined;
-  }
-}
-
-/** 状态栏可选的信息段。状态文字本身始终显示,不在此列。枚举顺序即展示顺序,mode 固定排第一。 */
-export const statusSegmentSchema = z.enum(['mode', 'model', 'cwd', 'think', 'context', 'total', 'todos']);
+/** 状态栏可选的信息段。状态文字本身始终显示,不在此列。枚举顺序即展示顺序。 */
+export const statusSegmentSchema = z.enum(['model', 'cwd', 'think', 'context', 'total', 'todos']);
 export type StatusSegment = z.infer<typeof statusSegmentSchema>;
 export const STATUS_SEGMENTS = statusSegmentSchema.options;
+/**
+ * 配置里的 statusBar 列表:**宽容解析**,认不出的段静默丢弃而不是让整份配置
+ * 报错——权限档位那一段(`mode`)随权限系统一起退役了,而它曾是默认列表的
+ * 一员,几乎每份落过盘的配置里都有它。
+ */
+const statusBarSchema = z
+  .array(z.string())
+  .transform((list) =>
+    list.filter((item): item is StatusSegment => (STATUS_SEGMENTS as readonly string[]).includes(item)),
+  );
 
 /** 时间线显示密度(/focus)。 */
 export const timelineModeSchema = z.enum(['full', 'compact', 'result']);
@@ -243,24 +117,6 @@ export const mcpServerSchema = z.discriminatedUnion('type', [
 ]);
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 
-export const permissionRulesSchema = z.object({
-  /** 无需确认即可执行的 bash 命令前缀,例如 "git status"、"npm test"。 */
-  allowBash: z.array(z.string()).default([]),
-  /** 在内置拒绝列表之外,总是被拒绝的 bash 命令前缀。 */
-  denyBash: z.array(z.string()).default([]),
-  /** 无需确认即可写入的 glob(相对于工作区根目录)。 */
-  allowWrite: z.array(z.string()).default([]),
-  /** 永远不允许读或写的 glob。 */
-  denyPath: z.array(z.string()).default([]),
-  /**
-   * 无需确认的联网规则:`WebSearch`(放行搜索)或 `WebFetch(domain:example.com)`
-   * (放行抓取某域名,支持 `*.example.com` 通配)。裸域名也接受,视同 WebFetch 规则。
-   * 私网/云元数据地址不受此列表影响——那是硬拒,任何档位都不放行。
-   */
-  allowNet: z.array(z.string()).default([]),
-});
-export type PermissionRules = z.infer<typeof permissionRulesSchema>;
-
 /**
  * web_search 的后端选择。`auto` 按 glm → exa 的顺序取第一个能从预设环境变量
  * 拿到 key 的;`off` 给"有 key 但不想让 agent 搜"的人一个显式关闭口。
@@ -340,18 +196,12 @@ export const configSchema = z.object({
   /** 覆盖当前 provider 的默认模型。 */
   model: z.string().optional(),
   providers: z.record(z.string(), providerConfigSchema).default({}),
-  /** 两轴权限,见文件头注释。默认组合即 `ask` 预设。 */
-  sandbox: sandboxModeSchema.default('workspace-write'),
-  approval: approvalPolicySchema.default('untrusted'),
-  /** 以计划模式启动(--plan)。运行态标志,永不落盘,写在配置里也只影响启动。 */
-  plan: z.boolean().default(false),
-  permissions: permissionRulesSchema.default({
-    allowBash: [],
-    denyBash: [],
-    allowWrite: [],
-    denyPath: [],
-    allowNet: [],
-  }),
+  /**
+   * `mojocode install` 记下的扩展包(`npm:<name>[@ver]` / `git:<url>` / 绝对
+   * 路径)。启动时逐个解析到磁盘目录、读它的 manifest、装载里面的扩展与
+   * 技能。分层合并时两层**取并集**(项目层装的包不该把全局层的顶掉)。
+   */
+  packages: z.array(z.string()).default([]),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   /** web_search 的后端与凭据,见 config/search.ts。 */
   search: searchConfigSchema.default({ backend: 'auto' }),
@@ -407,7 +257,7 @@ export const configSchema = z.object({
   /** UI 语言。`auto` 跟随 MOJOCODE_LANG / LANG。 */
   language: z.enum(['auto', 'en', 'zh-CN']).default('auto'),
   /** 状态栏显示的信息段,可在 /setting 设置面板里调整。 */
-  statusBar: z.array(statusSegmentSchema).default([...STATUS_SEGMENTS]),
+  statusBar: statusBarSchema.default([...STATUS_SEGMENTS]),
   /**
    * 时间线显示密度,/focus 或 ctrl+o 切换。full = 全量;compact = 折叠
    * 工具调用过程;result = 只看问答。`user/assistant/error/banner` 与
@@ -438,13 +288,7 @@ export const partialConfigSchema = z.object({
   provider: z.string().optional(),
   model: z.string().optional(),
   providers: z.record(z.string(), providerConfigSchema).optional(),
-  sandbox: sandboxModeSchema.optional(),
-  approval: approvalPolicySchema.optional(),
-  plan: z.boolean().optional(),
-  // permissions 各字段有同样的既有问题——项目层只写 allowBash 会把全局层的
-  // denyPath 盖成空数组——但那是历史行为,修它超出本次改动范围;顶层 default
-  // 剥掉后,项目层完全没写 permissions 时全局层不再被幻影空对象覆盖。
-  permissions: permissionRulesSchema.optional(),
+  packages: z.array(z.string()).optional(),
   mcpServers: z.record(z.string(), mcpServerSchema).optional(),
   // 见 searchLayerSchema 的注释:默认值埋在子 schema 里,剥顶层不够。
   search: searchLayerSchema.optional(),
@@ -462,7 +306,7 @@ export const partialConfigSchema = z.object({
   maxContext: z.number().int().positive().optional(),
   systemPromptAppend: z.string().optional(),
   language: z.enum(['auto', 'en', 'zh-CN']).optional(),
-  statusBar: z.array(statusSegmentSchema).optional(),
+  statusBar: statusBarSchema.optional(),
   // timeline 同理:`.partial()` 不摘 `.default('full')`,项目层只要存在任意
   // 配置文件,幻影 timeline:'full' 就会以更高优先级把全局保存的 /focus
   // 偏好重置。裸 optional 让「没写」真正表示「没写」。

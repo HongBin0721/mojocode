@@ -1,19 +1,17 @@
 /**
  * 会话级全局状态(zustand),多任务分片:per-task 运行时(runtimes)按
- * taskId 分桶,顶层的 snapshot/connection/permission 是**聚焦任务的镜像**
+ * taskId 分桶,顶层的 snapshot/connection 是**聚焦任务的镜像**
  * ——组件继续读顶层字段,不感知分桶;聚焦切换时镜像整体换源。
  * 两个 store(本店 + timelineStore)都由 bridge/client.ts 从桥事件驱动。
  */
 
 import { create } from 'zustand';
-import type { PermissionRequest } from '@core/events';
 import type { StateSnapshot } from '@core/protocol';
 import type { ConnectionState, TaskSummary } from '../../shared/ipc.js';
 
 export interface TaskRuntime {
   snapshot: StateSnapshot | undefined;
   connection: ConnectionState;
-  permission: PermissionRequest | undefined;
   /** 后台任务的未读标记(turn-end 置位,聚焦清零;P8 接入)。 */
   unread: boolean;
 }
@@ -21,7 +19,6 @@ export interface TaskRuntime {
 const emptyRuntime = (): TaskRuntime => ({
   snapshot: undefined,
   connection: 'connecting',
-  permission: undefined,
   unread: false,
 });
 
@@ -29,7 +26,6 @@ export interface DesktopStore {
   /** 聚焦任务的镜像(组件的主要读取面)。 */
   connection: ConnectionState;
   snapshot: StateSnapshot | undefined;
-  permission: PermissionRequest | undefined;
   /** 任务列表(tasks 通道全量推)。undefined = 尚未收到/读取失败(降级提示)。 */
   tasks: TaskSummary[] | undefined;
   focusedTaskId: string | undefined;
@@ -41,7 +37,6 @@ export interface DesktopStore {
 
   applyState(taskId: string, snapshot: StateSnapshot): void;
   applyConnection(taskId: string, connection: ConnectionState): void;
-  applyPermission(taskId: string, permission: PermissionRequest | undefined): void;
   applyTasks(tasks: TaskSummary[] | undefined): void;
   /** 聚焦切换:换源顶层镜像(不发 IPC——那是调用方 focusTask 动作的事)。 */
   setFocused(taskId: string | undefined): void;
@@ -53,12 +48,11 @@ export interface DesktopStore {
 function mirrorOf(
   runtimes: Record<string, TaskRuntime>,
   focusedTaskId: string | undefined,
-): Pick<DesktopStore, 'connection' | 'snapshot' | 'permission'> {
+): Pick<DesktopStore, 'connection' | 'snapshot'> {
   const runtime = focusedTaskId ? runtimes[focusedTaskId] : undefined;
   return {
     connection: runtime?.connection ?? 'connecting',
     snapshot: runtime?.snapshot,
-    permission: runtime?.permission,
   };
 }
 
@@ -75,7 +69,6 @@ export const useDesktopStore = create<DesktopStore>((set) => {
   return {
     connection: 'connecting',
     snapshot: undefined,
-    permission: undefined,
     tasks: undefined,
     focusedTaskId: undefined,
     runtimes: {},
@@ -84,7 +77,6 @@ export const useDesktopStore = create<DesktopStore>((set) => {
 
     applyState: (taskId, snapshot) => patchRuntime(taskId, { snapshot }),
     applyConnection: (taskId, connection) => patchRuntime(taskId, { connection }),
-    applyPermission: (taskId, permission) => patchRuntime(taskId, { permission }),
     applyTasks: (tasks) => set({ tasks }),
     setFocused: (focusedTaskId) =>
       set((state) => ({ focusedTaskId, ...mirrorOf(state.runtimes, focusedTaskId) })),

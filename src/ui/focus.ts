@@ -20,7 +20,7 @@ export type { TimelineMode };
  * 三档:
  * - `full`    全量,原样返回;
  * - `compact` 折叠过程:连续的工具调用/思考合并为一条「⋯ N 个工具调用
- *             已折叠」占位(exit_plan 方案正文与 todo 清单是结果不是噪音,
+ *             已折叠」占位(todo 清单是结果不是噪音,
  *             保留);
  * - `result`  只看问答:过程静默丢弃,不留占位。
  */
@@ -66,8 +66,8 @@ function hidden(item: TimelineItem): boolean {
     case 'turn':
       return true;
     case 'tool':
-      // 方案正文与任务清单是结果,不是过程噪音。
-      return item.toolName !== 'exit_plan' && item.toolName !== 'todo';
+      // 任务清单是结果,不是过程噪音。
+      return item.toolName !== 'todo';
     default:
       // user / assistant / error / banner / notice / divider / collapsed:
       // 铁律,恒可见(notice 含 info,理由见文件头注释)。

@@ -1,7 +1,7 @@
 import { createMemo, For } from 'solid-js';
 import { Box, Text, type JSX } from './kit.js';
 import { theme, glyphs, truncateWidth, WIDTH_SAFETY } from './theme.js';
-import type { TodoItem } from '../tools/todo.js';
+import type { TodoItem } from './timeline-data.js';
 import { t } from '../i18n/index.js';
 
 /**

@@ -2,11 +2,11 @@ import stringWidth from 'string-width';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { setLocale } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 beforeEach(() => {
   setLocale('en');
@@ -29,12 +29,9 @@ function fakeSession() {
       compact: async () => {},
     },
     bus: new EventBus(),
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'sess', messages: [] },
     switch: () => provider,
     setMode: () => {},
@@ -62,19 +59,6 @@ describe('矮终端布局', () => {
     await ui.destroy();
   });
 
-  it('8 行极矮终端上权限确认框的选项可见', async () => {
-    const session = fakeSession();
-    const ui = await renderUi(() => <App session={session} />, { width: 60, height: 14 });
-    session.bus.emit({
-      type: 'permission-request',
-      request: { id: 'p1', toolName: 'bash', title: 'bash: npm test', risk: 'execute' },
-    });
-    await ui.tick();
-    const frame = ui.frame();
-    expect(frame).toContain('bash: npm test');
-    expect(frame).toContain('❯');
-    await ui.destroy();
-  });
 });
 
 /**
@@ -146,24 +130,4 @@ describe('底部区间距', () => {
     await ui.destroy();
   });
 
-  it('权限确认框:状态线紧贴在确认框上方,与时间线之间恰好一行', async () => {
-    const session = fakeSession();
-    const ui = await renderUi(() => <App session={session} />, { width: WIDTH, height: 16 });
-    overflowTimeline(session.bus);
-    session.bus.emit({
-      type: 'permission-request',
-      request: { id: 'p1', toolName: 'bash', title: 'bash: npm test', risk: 'execute' },
-    });
-    await ui.tick();
-
-    const frame = ui.frame();
-    expect(frame).toContain('bash: npm test'); // 确认框在场(同时 work=waiting)
-    expect(gapAboveFirstBorder(frame)).toBe(1);
-    // 状态线(第一条边线)与确认框的圆角顶边相邻:线是框的标题带,不留缝。
-    const lines = frame.split('\n');
-    const edge = lines.findIndex((l, i) => i > 0 && isEdge(l));
-    expect(lines[edge]).toMatch(/^── /);
-    expect(lines[edge + 1]).toContain('╭');
-    await ui.destroy();
-  });
 });

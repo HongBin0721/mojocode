@@ -7,6 +7,7 @@ export async function mcpChecks(
   config: Config,
   offline: boolean,
   known?: McpStatus[],
+  off = false,
 ): Promise<DoctorCheck[]> {
   const entries = Object.entries(config.mcpServers);
   if (entries.length === 0) {
@@ -15,6 +16,18 @@ export async function mcpChecks(
 
   const describe = (config_: (typeof entries)[number][1]): string =>
     config_.type === 'stdio' ? `stdio · ${config_.command}` : `http · ${config_.url}`;
+
+  // 本会话没装 MCP 扩展:配置里写着的 server 一个也没被碰过,doctor 不能
+  // 替它去连——那会给每个 stdio server 拉一个子进程,而用户正是用 `--no-mcp`
+  // 说了不要。`known` 分不出这一种:扩展没装时根本没人 publishRuntime。
+  if (off) {
+    return entries.map(([name, server]) => ({
+      id: `mcp:${name}`,
+      label: name,
+      level: 'info' as const,
+      detail: `${describe(server)} · ${t('doctor.mcpOff')}`,
+    }));
+  }
 
   if (offline && !known) {
     return entries.map(([name, server]) => ({

@@ -4,8 +4,6 @@ import { randomUUID } from 'node:crypto';
 import type { ModelMessage } from 'ai';
 import { sessionsDir } from '../config/paths.js';
 import { COMPACT_MARKER } from '../agent/compact.js';
-import type { ApprovalPolicy, SandboxMode } from '../config/schema.js';
-import type { TodoItem } from '../tools/todo.js';
 
 export interface SessionMeta {
   id: string;
@@ -25,24 +23,11 @@ export interface SessionMeta {
   archivedAt?: string;
 }
 
-/** 消息之外需要跨会话恢复的东西:todos、会话级授权规则、两轴权限。 */
+/** 消息之外需要跨会话恢复的东西:目前只有变更索引。
+ * 扩展自己的状态(todo 清单、`/goal` 的条件)走 custom 记录,不在这里。
+ * 旧文件里的会话级授权规则、两轴权限、`goal` 等字段被当作未知键忽略——
+ * 权限系统整套已去掉。 */
 export interface SessionState {
-  todos: TodoItem[];
-  /** 原始规则串,如 `Bash(npm test:*)`、`Mcp(name)`。 */
-  allowBash: string[];
-  allowWrite: string[];
-  /** 联网规则串(`WebSearch` / `WebFetch(domain:x)`)。可选:旧会话文件没有此字段。 */
-  allowNet?: string[];
-  sandbox?: SandboxMode;
-  approval?: ApprovalPolicy;
-  /** 旧版单轴字段。只在恢复旧会话文件时读取,转换见 resume.ts,不再写入。 */
-  permissionMode?: string;
-  /**
-   * 未完成的目标(`/goal`)。只存条件本身:轮数、计时与 token 基线都是
-   * "这一次监管"的统计,换个时间接着干本来就该从头算。恢复回来的目标是
-   * 「已设定但不自动开跑」——打开一个旧会话不该凭空烧掉一轮 token。
-   */
-  goal?: { condition: string };
   /**
    * 本会话经 write/edit 落地过的文件(任务视角的变更索引)。可选:空时
    * 整个字段不出现,老会话的状态 JSON 一字不差、脏检查不多写记录。
@@ -57,8 +42,6 @@ export interface ChangedFileEntry {
   kind: 'created' | 'modified';
   count: number;
 }
-
-const EMPTY_STATE: SessionState = { todos: [], allowBash: [], allowWrite: [] };
 
 interface MetaRecord {
   kind: 'meta';
@@ -142,6 +125,26 @@ interface UsageRecord {
   usage: SessionUsageRecord;
 }
 
+/**
+ * 扩展的自定义记录(Pi 的 appendEntry):type 由扩展自定,data 是任意可
+ * JSON 的值。核心不解释它——open() 只把它按顺序收进内存供 custom(type)
+ * 读,恢复回放不看它,旧版本读到未知 kind 静默跳过。分叉时整体带到新文件:
+ * 扩展的状态(todo 清单、目标条件)与 state 记录同属会话,分叉丢了它就
+ * 等于分叉丢了 todo。
+ */
+export interface SessionCustomRecord {
+  type: string;
+  data: unknown;
+  at: string;
+}
+
+interface CustomRecord {
+  kind: 'custom';
+  at: string;
+  type: string;
+  data: unknown;
+}
+
 type Record_ =
   | MetaRecord
   | MessagesRecord
@@ -149,7 +152,8 @@ type Record_ =
   | SnapshotRecord
   | StateRecord
   | TaskRecord
-  | UsageRecord;
+  | UsageRecord
+  | CustomRecord;
 
 /**
  * 逐消息记住序列化结果。带 base64 图片的消息单条就有几 MB,而 open() 里
@@ -265,6 +269,8 @@ export class SessionStore {
     /** 完整展示历史(压缩不缩减它),与 persisted 同步前进。 */
     private display: ModelMessage[],
     private state_: SessionState,
+    /** 扩展的自定义记录,按写入顺序;只在写成功后入列(与 state 同理)。 */
+    private customRecords: SessionCustomRecord[],
   ) {
     this.lastStateJson = JSON.stringify(this.state_);
   }
@@ -345,7 +351,7 @@ export class SessionStore {
       messageCount: 0,
     };
 
-    const store = new SessionStore(dir, meta, [], [], structuredClone(EMPTY_STATE));
+    const store = new SessionStore(dir, meta, [], [], {}, []);
     store.enqueue(async () => {
       await store.appendRecord({ kind: 'meta', meta });
       await store.writeSidecar();
@@ -370,6 +376,7 @@ export class SessionStore {
     let messages: ModelMessage[] = [];
     let display: ModelMessage[] = [];
     let state: SessionState | undefined;
+    const custom: SessionCustomRecord[] = [];
 
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue;
@@ -393,10 +400,20 @@ export class SessionStore {
         messages.push(...record.messages);
         display.push(...record.messages);
       } else if (record.kind === 'state') state = record.state;
+      else if (record.kind === 'custom') {
+        custom.push({ type: record.type, data: record.data, at: record.at });
+      }
     }
 
     if (!meta) throw new Error(`Session ${id} has no metadata record.`);
-    return new SessionStore(dir_, meta, messages, display, state ?? structuredClone(EMPTY_STATE));
+    return new SessionStore(
+      dir_,
+      meta,
+      messages,
+      display,
+      state ?? {},
+      custom,
+    );
   }
 
   /**
@@ -579,22 +596,31 @@ export class SessionStore {
       [...this.persisted],
       [...this.display],
       structuredClone(this.state_),
+      structuredClone(this.customRecords),
     );
     forked.enqueue(async () => {
-      await forked.appendRecord({ kind: 'meta', meta });
+      // 整个开篇一次写完:一条 meta + 种子快照 + state + 每条扩展记录。逐条
+      // appendFile 会给一个带 40 条 todo/goal 记录的会话开 43 次文件——分叉是
+      // 用户点一下就等着的操作,而这些记录此刻全在手上,没有任何理由分批。
+      const prologue: Record_[] = [{ kind: 'meta', meta }];
       if (forked.persisted.length > 0) {
         // 展示历史随种子快照带过去,分叉的会话恢复时同样能看到压缩前的完整对话。
         const displayDiffers =
           forked.display.length !== forked.persisted.length ||
           !forked.display.every((m, i) => m === forked.persisted[i]);
-        await forked.appendRecord({
+        prologue.push({
           kind: 'snapshot',
           at: now,
           messages: forked.persisted,
           ...(displayDiffers ? { display: forked.display } : {}),
         });
       }
-      await forked.appendRecord({ kind: 'state', at: now, state: forked.state_ });
+      prologue.push({ kind: 'state', at: now, state: forked.state_ });
+      // 扩展记录原样(含原 at)带过去,顺序不变。
+      for (const record of forked.customRecords) {
+        prologue.push({ kind: 'custom', at: record.at, type: record.type, data: record.data });
+      }
+      await forked.appendRecords(prologue);
       await forked.writeSidecar();
     });
     await forked.flush();
@@ -663,11 +689,40 @@ export class SessionStore {
    * 追加一条附属记录(子任务过程 / 轮末用量这类不属于对话历史的记录)。
    * 尽力而为:失败不打扰用户(与 saveState 同理)。
    */
-  private async appendExtra(record: TaskRecord | UsageRecord): Promise<void> {
+  private async appendExtra(record: TaskRecord | UsageRecord | CustomRecord): Promise<void> {
     this.enqueue(async () => {
       await this.appendRecord(record);
     });
     await this.flush();
+  }
+
+  /**
+   * 追加一条扩展记录(Pi 的 appendEntry)。写成功后才入内存列表——失败时
+   * custom() 读不到它,与磁盘一致;调用方按需重试。
+   */
+  async saveCustom(type: string, data: unknown): Promise<void> {
+    const at = new Date().toISOString();
+    const snapshot = structuredClone(data); // 防调用方后续原地修改
+    this.enqueue(async () => {
+      await this.appendRecord({ kind: 'custom', at, type, data: snapshot });
+      this.customRecords.push({ type, data: snapshot, at });
+    });
+    await this.flush();
+  }
+
+  /** 本会话的扩展记录(写入顺序);给 type 只取该类型。返回深拷贝,改它不影响 store。 */
+  custom(type?: string): SessionCustomRecord[] {
+    const picked = type === undefined ? this.customRecords : this.customRecords.filter((r) => r.type === type);
+    return structuredClone(picked);
+  }
+
+  /** 读出一个会话文件里的扩展记录(时间顺序),不常驻内存;给 type 只取该类型。 */
+  static readCustom(id: string, dir?: string, type?: string): Promise<SessionCustomRecord[]> {
+    return SessionStore.readExtraRecords(id, dir, (record) =>
+      record.kind === 'custom' && (type === undefined || record.type === type)
+        ? { type: record.type, data: record.data, at: record.at }
+        : undefined,
+    );
   }
 
   /** 追加一条子任务过程记录。 */
@@ -757,7 +812,13 @@ export class SessionStore {
   }
 
   private async appendRecord(record: Record_): Promise<void> {
-    await fs.appendFile(this.file, `${JSON.stringify(record)}\n`, 'utf8');
+    await this.appendRecords([record]);
+  }
+
+  /** 一次写多条:JSONL 是逐行独立的,攒成一次 appendFile 与逐条追加等价。 */
+  private async appendRecords(records: readonly Record_[]): Promise<void> {
+    if (records.length === 0) return;
+    await fs.appendFile(this.file, records.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf8');
   }
 
   /** 旁车原子写:tmp + rename,读到一半的 list() 不会看见撕裂的 JSON。 */

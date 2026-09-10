@@ -10,7 +10,6 @@
 
 import { t } from '@core/i18n';
 import { replayTimeline } from '@core/replay';
-import { permissionsLabel } from '@core/schema';
 import { SessionStore } from '@core/session-store';
 import type { TimelineItem } from '@core/types';
 import type { RemoteSession } from '@core/remote';
@@ -88,35 +87,19 @@ export async function buildDiskReplayItems(sessionId: string): Promise<TimelineI
 
 export function buildReplayItems(session: RemoteSession): TimelineItem[] {
   const snap = session.snapshot;
-  const mode = snap.config.plan
-    ? 'plan'
-    : permissionsLabel({ sandbox: snap.config.sandbox, approval: snap.config.approval });
-  const connected = snap.mcpStatuses.filter((status) => status.connected).length;
   const banner: TimelineItem = {
     key: 'replay-banner',
     kind: 'banner',
     providerLabel: snap.provider.label,
     model: snap.provider.model,
     root: snap.root,
-    mode,
-    mcpSummary:
-      snap.mcpStatuses.length > 0 ? `${connected}/${snap.mcpStatuses.length}` : undefined,
   };
 
   // 回放读**展示历史**(压缩不缩减):用户恢复会话该看到原始对话。
   const messages = session.store.displayMessages;
   if (messages.length === 0) return [banner];
 
-  const items: TimelineItem[] = [banner, ...replayedItems(messages, snap.storeId)];
-  // 恢复的目标在 bootstrap 期就 restore 过,那条 goal-start 没人听见——补一次
-  // 提示(与 TUI 挂载时的补条一致)。
-  if (snap.goal.restored) {
-    items.push({
-      key: 'replay-goal-restored',
-      kind: 'notice',
-      level: 'info',
-      message: t('notice.goalRestored', { condition: snap.goal.status?.condition ?? '' }),
-    });
-  }
-  return items;
+  // 扩展的恢复提示(如 /goal 的「目标待续」)不在这里补:它们的状态行随快照
+  // 常驻在输入框上方,启动时没人听见的 notice 不必伪造一条。
+  return [banner, ...replayedItems(messages, snap.storeId)];
 }

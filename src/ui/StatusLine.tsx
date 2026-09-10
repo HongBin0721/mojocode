@@ -9,11 +9,8 @@ export type WorkPhase =
   | 'thinking'
   | 'responding'
   | 'tool'
-  | 'waiting'
   | 'compacting'
-  | 'listingModels'
-  /** 一轮收尾后,评估器正在判断 `/goal` 的条件达成没有。 */
-  | 'evaluating';
+  | 'listingModels';
 
 export interface WorkState {
   phase: WorkPhase;
@@ -55,24 +52,20 @@ const FRAME_MS = 100;
 /** 进度条格数,与 Footer 的上下文表同宽,视觉上是同一族。 */
 const BAR_CELLS = 10;
 
-/** 不同阶段用不同颜色,一眼区分在想、在答、在跑工具还是在等人。 */
+/** 不同阶段用不同颜色,一眼区分在想、在答还是在跑工具。 */
 const PHASE_COLORS: Record<WorkPhase, string> = {
   thinking: 'magenta',
   responding: theme.accent,
   tool: theme.tool,
-  waiting: theme.warn,
   compacting: theme.accent,
   listingModels: theme.accent,
-  evaluating: 'magenta',
 };
 
 const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
   thinking: 'status.thinking',
   responding: 'status.responding',
-  waiting: 'status.waiting',
   compacting: 'status.compacting',
   listingModels: 'status.listingModels',
-  evaluating: 'status.evaluating',
 };
 
 type TailId = 'elapsed' | 'tokens' | 'todo' | 'interrupt';

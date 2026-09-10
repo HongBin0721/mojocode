@@ -136,9 +136,8 @@ describe('replayTimeline', () => {
     expect(collectRewindEntries(messages)[0]?.text).toBe('/review base main');
   });
 
-  // 方案在**输入**里,所以回放天然带得出来;`/plan <任务>` 不套 display,
-  // 任务原文直接以普通用户消息还原,无需任何特判。
-  it('exit_plan 回放带出方案原文与批准结果', () => {
+  // 工具调用的输入原样回放,无需任何特判。
+  it('工具调用回放带出输入原文与结果', () => {
     const items = replayTimeline([
       { role: 'user', content: '给 list() 加缓存' },
       {
@@ -147,8 +146,8 @@ describe('replayTimeline', () => {
           {
             type: 'tool-call',
             toolCallId: 'p1',
-            toolName: 'exit_plan',
-            input: { plan: '# 方案\n\n1. 改 store.ts' },
+            toolName: 'bash',
+            input: { command: 'npm test' },
           },
         ],
       },
@@ -158,8 +157,8 @@ describe('replayTimeline', () => {
           {
             type: 'tool-result',
             toolCallId: 'p1',
-            toolName: 'exit_plan',
-            output: { type: 'json', value: { approved: true, mode: 'ask' } },
+            toolName: 'bash',
+            output: { type: 'json', value: { exitCode: 0 } },
           },
         ],
       },
@@ -168,8 +167,8 @@ describe('replayTimeline', () => {
     expect(items[0]).toEqual({ kind: 'user', text: '给 list() 加缓存' });
     expect(items[1]).toMatchObject({
       kind: 'tool',
-      toolName: 'exit_plan',
-      input: { plan: '# 方案\n\n1. 改 store.ts' },
+      toolName: 'bash',
+      input: { command: 'npm test' },
       isError: false,
     });
   });

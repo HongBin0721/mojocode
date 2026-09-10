@@ -1,12 +1,12 @@
 /**
  * IPC 桥单测:createBridge 的依赖以最小形状注入,无需 mock electron。
- * 覆盖:TaskScoped 信封、事件批量合并、状态去重推送、权限 asker 往返、
- * 订阅幂等(含挂起审批重发)、dispose 收尾挂起审批、不可恢复错误 → lost、
- * RPC 白名单透传、onSessionsMutated 通知。换会话三连已退役,不再有对应用例。
+ * 覆盖:TaskScoped 信封、事件批量合并、状态去重推送、订阅幂等、不可恢复
+ * 错误 → lost、RPC 白名单透传、onSessionsMutated 通知。换会话三连已退役,
+ * 不再有对应用例。
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus, type PermissionAsker } from '@core/events';
+import { EventBus } from '@core/events';
 import type { StateSnapshot } from '@core/protocol';
 import type { RemoteSession } from '@core/remote';
 import { createBridge, type Bridge, type BridgeTarget } from '../src/main/bridge.js';
@@ -23,7 +23,6 @@ const makeSnapshot = (seed: number): StateSnapshot =>
     mcpStatuses: [],
     storeId: 's1',
     agent: { isRunning: false, isCompacting: false, historyLength: 0 },
-    goal: { active: false, busy: false },
     todos: [],
     skills: [],
     sentAt: seed,
@@ -40,12 +39,12 @@ interface Harness {
   onSessionsMutated: ReturnType<typeof vi.fn>;
   /** (channel, args) 的发送记录。 */
   sends: Array<{ channel: string; args: unknown[] }>;
-  asker: () => PermissionAsker;
   agents: AgentSpies;
-  /** 命令类 RPC 的 spy(runSkill/startReview/startSimplify/listProviderModels)。 */
+  /** 命令类 RPC 的 spy(runSkill/runCommand/commandOptions/startSimplify/listProviderModels)。 */
   commands: {
     runSkill: ReturnType<typeof vi.fn>;
-    startReview: ReturnType<typeof vi.fn>;
+    runCommand: ReturnType<typeof vi.fn>;
+    commandOptions: ReturnType<typeof vi.fn>;
     startSimplify: ReturnType<typeof vi.fn>;
     listProviderModels: ReturnType<typeof vi.fn>;
   };
@@ -65,7 +64,6 @@ function makeHarness(snapshotSeed = 1): Harness {
   const bus = new EventBus();
   let snapshot = makeSnapshot(snapshotSeed);
   const sends: Harness['sends'] = [];
-  let asker: PermissionAsker | undefined;
 
   const agents: AgentSpies = {
     run: vi.fn().mockResolvedValue(undefined),
@@ -73,7 +71,8 @@ function makeHarness(snapshotSeed = 1): Harness {
   };
   const commands = {
     runSkill: vi.fn().mockResolvedValue(undefined),
-    startReview: vi.fn().mockResolvedValue({ ok: true }),
+    runCommand: vi.fn().mockResolvedValue(undefined),
+    commandOptions: vi.fn().mockResolvedValue([{ value: 'base', expands: true }]),
     startSimplify: vi.fn().mockResolvedValue({ ok: true }),
     listProviderModels: vi.fn().mockResolvedValue([]),
   };
@@ -99,18 +98,11 @@ function makeHarness(snapshotSeed = 1): Harness {
         stateListener = undefined;
       };
     },
-    gate: {
-      setAsker: (ask: PermissionAsker) => {
-        asker = ask;
-      },
-    },
     agent: { ...agents, compact: vi.fn().mockResolvedValue(undefined) },
     archiveSession: vi.fn().mockResolvedValue({ id: 's1', archivedAt: '2026-01-01T00:00:00Z' }),
     ...commands,
     switch: vi.fn().mockResolvedValue(undefined),
     ...providerOps,
-    setPermissions: vi.fn(),
-    setPlan: vi.fn(),
   } as unknown as RemoteSession;
 
   const onSessionsMutated = vi.fn();
@@ -131,10 +123,6 @@ function makeHarness(snapshotSeed = 1): Harness {
     bus,
     onSessionsMutated,
     sends,
-    asker: () => {
-      if (!asker) throw new Error('asker 未注册');
-      return asker;
-    },
     agents,
     commands,
     providerOps,
@@ -201,29 +189,7 @@ describe('createBridge', () => {
     expect(sendsOf(h, IPC_CHANNELS.state)).toHaveLength(2);
   });
 
-  it('权限往返:asker 下发,rpc permission 兑现决定', async () => {
-    const h = makeHarness();
-    const pending = h.asker()({ id: 'p1', toolName: 'bash', title: 'bash: ls', risk: 'execute' });
-    await flushMicrotasks();
-    const pushes = sendsOf(h, IPC_CHANNELS.permission);
-    expect(pushes).toHaveLength(1);
-    expect((payloadOf(pushes[0]!) as { id: string }).id).toBe('p1');
 
-    const ok = await invokeRpc<boolean>(h, {
-      kind: 'permission',
-      id: 'p1',
-      decision: { type: 'allow-always', rule: 'Bash(ls)' },
-    });
-    expect(ok).toBe(true);
-    await expect(pending).resolves.toEqual({ type: 'allow-always', rule: 'Bash(ls)' });
-  });
-
-  it('rpc permission 对未知 id 幂等返回 false', async () => {
-    const h = makeHarness();
-    expect(
-      await invokeRpc<boolean>(h, { kind: 'permission', id: '不存在', decision: { type: 'allow' } }),
-    ).toBe(false);
-  });
 
   it('订阅幂等:重复 subscribe 返回快照并重推回放', async () => {
     const h = makeHarness();
@@ -234,24 +200,7 @@ describe('createBridge', () => {
     expect(sendsOf(h, IPC_CHANNELS.replay)).toHaveLength(2);
   });
 
-  it('订阅时重发挂起的审批(renderer 重载恢复路径)', async () => {
-    const h = makeHarness();
-    const pending = h.asker()({ id: 'p9', toolName: 'write', title: 'write: a.ts', risk: 'write' });
-    await flushMicrotasks();
-    await invokeSubscribe(h);
-    const pushes = sendsOf(h, IPC_CHANNELS.permission);
-    expect(pushes).toHaveLength(2); // asker 首发 + 订阅重发
-    await invokeRpc(h, { kind: 'permission', id: 'p9', decision: { type: 'deny' } });
-    await expect(pending).resolves.toEqual({ type: 'deny' });
-  });
 
-  it('dispose 把挂起的审批收尾为 deny(attach 模式 server 不随 GUI 退出)', async () => {
-    const h = makeHarness();
-    const pending = h.asker()({ id: 'p2', toolName: 'bash', title: 'bash: rm', risk: 'execute' });
-    await flushMicrotasks();
-    h.bridge.dispose();
-    await expect(pending).resolves.toEqual({ type: 'deny', reason: 'client closed' });
-  });
 
   it('dispose 后不再推送(事件与状态)', async () => {
     const h = makeHarness();
@@ -281,11 +230,13 @@ describe('createBridge', () => {
   it('rpc 白名单:命令类方法透传到 session 成员', async () => {
     const h = makeHarness();
     await invokeRpc(h, { kind: 'runSkill', name: 'release', args: 'v1', display: '/release v1' });
-    await invokeRpc(h, { kind: 'startReview', scope: 'uncommitted' });
+    await invokeRpc(h, { kind: 'runCommand', name: 'review', args: 'uncommitted' });
+    await invokeRpc(h, { kind: 'commandOptions', name: 'review', path: ['base'] });
     await invokeRpc(h, { kind: 'startSimplify', target: '' });
     await invokeRpc(h, { kind: 'listProviderModels' });
     expect(h.commands.runSkill).toHaveBeenCalledWith('release', 'v1', { display: '/release v1' });
-    expect(h.commands.startReview).toHaveBeenCalledWith('uncommitted');
+    expect(h.commands.runCommand).toHaveBeenCalledWith('review', 'uncommitted');
+    expect(h.commands.commandOptions).toHaveBeenCalledWith('review', ['base']);
     expect(h.commands.startSimplify).toHaveBeenCalledWith('');
     expect(h.commands.listProviderModels).toHaveBeenCalled();
   });
@@ -376,13 +327,4 @@ describe('createBridge', () => {
     expect(h.onSessionsMutated).toHaveBeenCalledTimes(1);
   });
 
-  it('pendingPermissionRequest 反映挂起审批(TaskSummary 角标数据源)', async () => {
-    const h = makeHarness();
-    expect(h.bridge.pendingPermissionRequest()).toBeUndefined();
-    const pending = h.asker()({ id: 'p3', toolName: 'bash', title: 'bash: ls', risk: 'execute' });
-    expect(h.bridge.pendingPermissionRequest()?.id).toBe('p3');
-    await invokeRpc(h, { kind: 'permission', id: 'p3', decision: { type: 'deny' } });
-    expect(h.bridge.pendingPermissionRequest()).toBeUndefined();
-    await expect(pending).resolves.toEqual({ type: 'deny' });
-  });
 });

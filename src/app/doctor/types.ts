@@ -36,7 +36,7 @@ export interface DoctorInput {
   configError?: string;
   /** 实际生效的配置文件路径,按优先级排序。 */
   sources: string[];
-  /** 加载期提示(旧版 permissionMode 的一次性转换等)。 */
+  /** 加载期提示。 */
   warnings: string[];
   env?: NodeJS.ProcessEnv;
   /** 跳过全部联网检查(端点探测、版本比对、MCP 连接)。 */
@@ -53,6 +53,11 @@ export interface DoctorInput {
    * 已经连着,再连一次等于把每个 stdio server 的子进程又拉起一份。
    */
   mcpStatuses?: McpStatus[];
+  /**
+   * 本会话根本没装 MCP 扩展(`--no-mcp`)。与 `mcpStatuses: []`(装了、一个
+   * 也没连上)是两回事:那是失败,这是用户明说了不要。doctor 既不连也不报错。
+   */
+  mcpOff?: boolean;
   /** 会话内已拉起的 LSP 服务器状态,同上:有则采信,没有的才做握手探测。 */
   lspStatuses?: LspRuntimeStatus[];
 }
@@ -63,10 +68,11 @@ export interface DoctorOptions {
   offline?: boolean;
   fetchImpl?: typeof fetch;
   /**
-   * 会话当前生效的配置。TUI 传它,好让报告反映 /approvals、/models 这些
+   * 会话当前生效的配置。TUI 传它,好让报告反映 /models 这些
    * 运行期改动;不传则以磁盘上的分层结果为准(CLI 的情形)。
    */
   config?: Config;
   mcpStatuses?: McpStatus[];
+  mcpOff?: boolean;
   lspStatuses?: LspRuntimeStatus[];
 }

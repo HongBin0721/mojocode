@@ -6,9 +6,10 @@
  *  - **不把完整 diff 嵌进提示词**——大 diff 会撑爆持久历史,而 bash 工具输出
  *   本身有 20K 截断;这里只嵌小型摘要(porcelain / diffstat / oneline log,
  *   各自封顶),由模型用 read 工具和下面列出的命令自己取全量。
- *  - **嵌入提示词的命令只准用安全前缀**(bash-rules.ts 的 SAFE_PREFIXES:
- *   git status / log / diff / show)。`git merge-base` 不在其中,所以 base
- *   范围的 merge-base 在这里解析成 SHA 再嵌——模型全程零确认弹窗。
+ *  - **范围在这里就解析成 SHA 再嵌**,提示词里只留 `git diff/log/show` 这类
+ *   直接可跑的命令。理由不是权限(已经没有权限系统了),是自足:`/simplify`
+ *   的四个 explore 子 agent **根本没有 shell**,同一段范围块也要发给它们,
+ *   一条「你先自己跑 git merge-base 算出基准」的指令在那边无从执行。
  *  - 失败以 reason 代码返回、不抛异常:UI 据此映射本地化提示,免得英文
  *   错误串直接怼进时间线。
  */
@@ -328,8 +329,8 @@ export async function collectReviewSummary(
   const verify = await git(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${baseBranch}`]);
   if (!verify.ok) return fail('unknown-branch', { branch: baseBranch });
   if (baseBranch === currentBranch) return fail('same-branch', { branch: baseBranch });
-  // merge-base 在这里解析成 SHA:模型自己跑 `git merge-base` 会弹确认(不在
-  // SAFE_PREFIXES),嵌 SHA 后它只需要 `git diff/log` 这类安全前缀命令。
+  // merge-base 在这里解析成 SHA:范围块也要发给没有 shell 的 explore 子 agent,
+  // 嵌 SHA 之后那段提示词自足,不需要读者先跑一条命令才知道基准是哪个提交。
   const mb = await git(root, ['merge-base', `refs/heads/${baseBranch}`, 'HEAD']);
   if (!mb.ok) return fail('no-merge-base', { branch: baseBranch });
   summary.mergeBaseSha = mb.stdout.trim();
@@ -440,44 +441,4 @@ export function scopeBlock(
     `- git diff --stat ${mb} HEAD`,
     `- git diff ${mb} HEAD -- <path>`,
   ].join('\n');
-}
-
-/**
- * 组稿审查提示词(英文——喂给模型的文本按约定不本地化)。
- *
- * 只读条款是用户确认过的产品语义:评审轮不准改任何文件、不准跑改状态的
- * 命令、不准调 exit_plan(评审的产出是发现清单,不是计划)。发现格式对齐
- * Codex review:按严重度排序、file:line 定位、最小具体修复、没有问题就明说。
- */
-export function buildReviewPrompt(scope: ReviewScope, summary: ReviewSummary): string {
-  return `Review the changes described below and report findings.
-
-This is a read-only review. Do NOT modify, create or delete any file, do NOT
-run any state-changing command (no commit, stash, checkout, rebase, branch or
-worktree operations), and do NOT call exit_plan. Read the repository and report.
-
-## Scope
-
-${scopeBlock(scope, summary)}
-
-## How to review
-
-- Fetch the full diff yourself with the commands listed in the scope block.
-  They are read-only and pre-approved. Diff file by file (\`... -- <path>\`) for
-  large changes so no single output gets truncated.
-- Read the code around each hunk — a hunk alone rarely shows whether the change
-  is correct.
-- Focus on real defects: bugs, logic errors, security issues, data races,
-  error-handling gaps, broken tests, API misuse, performance regressions. Skip
-  style nits and subjective preferences unless they hide a real problem.
-
-## Output format
-
-- Start with a one-paragraph summary of what the changes do.
-- Then list findings, most severe first, one per line:
-  [high|medium|low] path/to/file.ts:42 — what is wrong, why, and the smallest
-  concrete fix.
-  Cite only file:line references that exist in the diff or in files you read.
-- If nothing worth reporting was found, say so explicitly; do not invent
-  minor issues.`;
 }

@@ -6,34 +6,22 @@
  * 与 Solid 版的差异只有三处,均为环境性:
  *  - 私有可变状态(轮起点、思考起点、toolInputs…)从闭包变量变为 state 的
  *    显式字段(纯函数不能藏状态);
- *  - 对 session 的同步读取(config.plan、goal.busy、agent.isRunning…)经
- *    ctx 回调注入(renderer 从 state 快照取);
- *  - onPermissionRequest/onPermissionChange 仍走 ctx 回调(弹窗与权限镜像
- *    归 App 层所有,与 TUI 同构)。
+ *  - 对 session 的同步读取(agent.isRunning…)经 ctx 回调注入(renderer
+ *    从 state 快照取)。
  *
- * 随迁的三个小依赖(splitCommitted、formatDuration/formatTokens、
- * COMPACT_EXPECTED_SUMMARY_CHARS)是从根仓库复制的纯逻辑,各自的注释里
- * 标注了同步义务——上游改动时要跟。
+ * 随迁的两个小依赖(splitCommitted、COMPACT_EXPECTED_SUMMARY_CHARS)是从
+ * 根仓库复制的纯逻辑,各自的注释里标注了同步义务——上游改动时要跟。
  */
 
-import type {
-  AgentEvent,
-  ContextUsage,
-  GoalStopReason,
-  PermissionRequest,
-} from '@core/events';
-import type { Permissions } from '@core/schema';
+import type { AgentEvent, ContextUsage } from '@core/events';
 import type { ActiveToolCall, TimelineItem } from '@core/types';
-import { formatDuration, formatTokens } from '../utils/format.js';
-import { t, type MessageKey } from '../i18n/index.js';
+import { t } from '../i18n/index.js';
 
 /** 进行中的工作状态(类型复制自 src/ui/StatusLine.tsx——那是 Solid 组件文件)。 */
 export type WorkPhase =
   | 'thinking'
   | 'responding'
-  | 'evaluating'
   | 'tool'
-  | 'waiting'
   | 'compacting'
   | 'listingModels';
 
@@ -65,15 +53,7 @@ export interface UsageMirror {
 export interface TimelineCtx {
   /** turn-end 收尾行里显示的模型名。 */
   getModel(): string;
-  /** 事件分支要读的两项配置(plan 标志 / goal 轮数上限)。 */
-  getConfig(): { plan: boolean; goalMaxTurns: number };
-  isGoalBusy(): boolean;
-  isGoalActive(): boolean;
   isAgentRunning(): boolean;
-  /** 权限询问到达:App 弹审批卡。 */
-  onPermissionRequest(request: PermissionRequest): void;
-  /** 权限两轴 + plan 被 exit_plan 等工具侧切换:App 同步自己的镜像。 */
-  onPermissionChange(permissions: Permissions, plan: boolean): void;
 }
 
 export interface TimelineState {
@@ -97,11 +77,6 @@ export interface TimelineState {
   turnStartTokens: number;
   /** tool-start 记下输入,tool-end 不带输入。 */
   toolInputs: Record<string, unknown>;
-  /** 本轮是否调用过 exit_plan。 */
-  planSubmitted: boolean;
-  /** 本轮**开始时**是否就在计划模式(中途切进来的轮不追问方案)。 */
-  planAtTurnStart: boolean;
-  goalActive: boolean;
 }
 
 let itemCounter = 0;
@@ -124,23 +99,8 @@ export function initialTimelineState(contextUsage: ContextUsage | undefined): Ti
     turnStartedAt: 0,
     turnStartTokens: 0,
     toolInputs: {},
-    planSubmitted: false,
-    planAtTurnStart: false,
-    goalActive: false,
   };
 }
-
-/** goal-stop 的原因 → 文案(穷尽 Record:新增停止原因时编译期就会提醒补文案)。 */
-const GOAL_STOP_MESSAGES: Record<GoalStopReason, MessageKey> = {
-  met: 'notice.goalStopMet',
-  cleared: 'notice.goalStopCleared',
-  replaced: 'notice.goalStopReplaced',
-  'max-turns': 'notice.goalStopMaxTurns',
-  aborted: 'notice.goalStopAborted',
-  error: 'notice.goalStopError',
-  'check-failed': 'notice.goalStopCheckFailed',
-  'plan-mode': 'notice.goalStopPlanMode',
-};
 
 /** 复制自 src/ui/commands/registry.ts(那边 import 了整个命令系统,进不了 renderer)。 */
 const COMPACT_EXPECTED_SUMMARY_CHARS = 3000;
@@ -244,8 +204,6 @@ export function reduceTimeline(
   switch (event.type) {
     case 'turn-start':
       state.items = [...state.items, { key: nextKey(), kind: 'user', text: event.display ?? event.userText }];
-      state.planSubmitted = false;
-      state.planAtTurnStart = ctx.getConfig().plan;
       state.turnStartedAt = Date.now();
       state.turnStartTokens = state.usage.total;
       // 新一轮从零开始计时,不沿用上一轮残留的 since。
@@ -285,7 +243,6 @@ export function reduceTimeline(
       break;
 
     case 'tool-start':
-      if (event.toolName === 'exit_plan') state.planSubmitted = true;
       state.toolInputs[event.callId] = event.input;
       state.activeTools = [
         ...state.activeTools,
@@ -331,17 +288,6 @@ export function reduceTimeline(
       };
       break;
 
-    case 'permission-request':
-      ctx.onPermissionRequest(event.request);
-      beginWork(state, 'waiting');
-      break;
-
-    // 权限也可能由 exit_plan 在工具侧切换(方案获批),不订阅的话顶栏
-    // 会一直停在 plan。
-    case 'permission-change':
-      ctx.onPermissionChange(event.permissions, event.plan);
-      break;
-
     case 'step-end':
       state.usage = {
         used: event.usage.inputTokens,
@@ -352,14 +298,6 @@ export function reduceTimeline(
 
     case 'turn-end':
       state.usage = { ...state.usage, total: event.usage.cumulativeTotalTokens };
-      // 计划模式下这一轮没提交过方案:门禁保证了什么都没改,但"我明明用了
-      // /plan,它却没问我"必须看得见,不能静悄悄。
-      if (state.planAtTurnStart && ctx.getConfig().plan && !state.planSubmitted) {
-        state.items = [
-          ...state.items,
-          { key: nextKey(), kind: 'notice', level: 'warn', message: t('notice.planNoSubmission') },
-        ];
-      }
       // 一轮的收尾行(模型 · 耗时 · 本轮 token)。中断与出错各自走自己的
       // 分支(没有可信的用量),不画这一行。没见过本轮的 turn-start 就不画:
       // 那时基准是 0,整个会话的累计量会被当成这一轮的开销报出来。
@@ -379,73 +317,14 @@ export function reduceTimeline(
         // 基准一次性消费:漏收的那轮不该借用上一轮的起点。
         state.turnStartedAt = 0;
       }
-      // 目标循环**还会接着跑**时留着状态行,交给紧随其后的 goal-evaluating
-      // 接手;在这里熄灯的话,自动循环会每两轮闪一次"已空闲"。
-      if (!(ctx.isGoalBusy() && ctx.isGoalActive())) endWork(state);
+      // 不在这里熄灯:一轮结束不等于链条结束——两轮之间扩展可能正在评估、
+      // 排下一轮(/goal),agent 仍是 isRunning。状态行退回「思考中」等
+      // run-end 来熄,否则自动续跑会每两轮闪一次"已空闲"。
+      if (state.work) state.work = { ...state.work, phase: 'thinking', detail: undefined };
       break;
 
-    case 'goal-start':
-      state.goalActive = true;
-      state.items = [
-        ...state.items,
-        {
-          key: nextKey(),
-          kind: 'notice',
-          level: 'info',
-          message: event.restored
-            ? t('notice.goalRestored', { condition: event.condition })
-            : t('notice.goalSet', {
-                condition: event.condition,
-                max: ctx.getConfig().goalMaxTurns,
-              }),
-        },
-      ];
-      break;
-
-    case 'goal-evaluating':
-      beginWork(state, 'evaluating');
-      break;
-
-    case 'goal-verdict':
-      // 达成时的收尾文案由 goal-stop 给,这里不重复推第二条。
-      if (!event.met) {
-        state.items = [
-          ...state.items,
-          {
-            key: nextKey(),
-            kind: 'notice',
-            level: 'info',
-            message: t('notice.goalNotMet', {
-              reason: event.reason,
-              turn: event.turn,
-              max: event.maxTurns,
-            }),
-          },
-        ];
-      }
-      break;
-
-    case 'goal-stop':
-      // replaced 后面紧跟着新目标的 goal-start,顺序保证了不会误熄。
-      state.goalActive = false;
-      state.items = [
-        ...state.items,
-        {
-          key: nextKey(),
-          kind: 'notice',
-          level: event.reason === 'met' ? 'info' : 'warn',
-          // 八条文案共用一个参数袋:t() 忽略多余参数,各条只取自己关心的。
-          message: t(GOAL_STOP_MESSAGES[event.reason], {
-            condition: event.condition,
-            detail: event.detail,
-            turns: event.turns,
-            elapsed: formatDuration(event.elapsedMs),
-            tokens: formatTokens(event.tokens),
-          }),
-        },
-      ];
-      // `/goal clear` 可能是在一轮进行中发出的:那一轮还在流,别把状态行掐了。
-      if (!ctx.isAgentRunning()) endWork(state);
+    case 'run-end':
+      endWork(state);
       break;
 
     // 压缩摘要流式生成中:状态行切到「压缩中」并推进进度条。摘要总长事先

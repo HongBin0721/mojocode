@@ -9,19 +9,18 @@ import {
   fork,
   help,
   init,
-  mcp,
   newSession,
   resume,
   skills,
 } from './session-cmds.js';
-import { review, simplify } from './review-cmds.js';
-import { goal, plan, runSkillCommand } from './goal-plan-cmds.js';
-import { approvals, focus, models, provider, setting, think } from './config-cmds.js';
+import { simplify } from './simplify-cmds.js';
+import { runExtensionCommand, runSkillCommand } from './extension-cmds.js';
+import { focus, models, provider, setting, think } from './config-cmds.js';
 
 /**
  * 命令分发入口(原 App.tsx 的 runCommand 巨型 switch):
- * 别名归一 → BUSY_BLOCKED 拦截 → 查表执行 → 技能回退 → unknown 提示。
- * handler 本体分住在 session-cmds / review-cmds / goal-plan-cmds / config-cmds。
+ * 别名归一 → BUSY_BLOCKED 拦截 → 查表执行 → 扩展命令 → 技能回退 → unknown 提示。
+ * handler 本体分住在 session-cmds / simplify-cmds / extension-cmds / config-cmds。
  */
 
 /** 主名 → 处理器。new/clear 共用一个实现(见 session-cmds 的注释)。 */
@@ -31,18 +30,13 @@ const HANDLERS: Record<string, CommandHandler> = {
   new: newSession,
   clear: newSession,
   init,
-  review,
   simplify,
-  plan,
-  goal,
   compact,
-  approvals,
   think,
   setting,
   focus,
   provider,
   models,
-  mcp,
   skills,
   doctor,
   cost,
@@ -74,7 +68,9 @@ export async function dispatch(ctx: CommandContext, raw: string): Promise<void> 
     return;
   }
 
-  // 不是内置命令:查技能表。命中则整轮交给 runSkill(见 goal-plan-cmds)。
+  // 不是内置命令:先查扩展命令表(会话进程侧执行,见 extension-cmds),再查技能表
+  // (命中则整轮交给 runSkill)。
+  if (name && (await runExtensionCommand(ctx, name, arg))) return;
   if (name && (await runSkillCommand(ctx, name, arg, raw))) return;
   ctx.push({ kind: 'notice', level: 'warn', message: t('notice.unknownCommand', { name: name ?? '' }) });
 }

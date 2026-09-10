@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { globalConfigPath, projectConfigPath } from './paths.js';
-import { type Permissions } from './schema.js';
 
 /**
  * 对全局配置文件做读取-修改-写回。文件可能存有 API key,因此总是以 0600
@@ -123,34 +122,6 @@ export async function saveTimelineMode(mode: string, file?: string): Promise<str
   return updateGlobalConfig((config) => {
     config.timeline = mode;
   }, file);
-}
-
-/**
- * 保存 `/approvals` 切换的两轴权限,写**项目级** `<root>/.mojocode/config.json`。
- *
- * 刻意不写全局配置:权限是对某个工作区的信任声明,和 allow 规则同一个边界。
- * 写进 `~/.mojocode/config.json` 会让一次临时放宽泄漏到之后每个目录的每次启动,
- * 而界面上除了状态栏一行小字没有任何提示。
- *
- * 全部档位一视同仁地落盘,full-access 也不例外:用户显式选的档位就该活到
- * 下一次启动,而不是每次重开都被静默改回去。代价是它绕过硬拒名单,所以选中
- * 那一档的路径都要在时间线上留一条警告(见 App 的 applyMode)。
- * 顺带清掉旧版单轴字段 permissionMode,完成一次性迁移。
- */
-export async function savePermissions(
-  root: string,
-  permissions: Permissions,
-  file?: string,
-): Promise<string> {
-  return updateProjectConfig(
-    root,
-    (config) => {
-      config.sandbox = permissions.sandbox;
-      config.approval = permissions.approval;
-      delete config.permissionMode;
-    },
-    file,
-  );
 }
 
 /** 保存顶层 `language`,让设置面板里选的语言在下次启动时生效。 */

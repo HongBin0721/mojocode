@@ -1,7 +1,6 @@
 import { t, type MessageKey } from '../../i18n/index.js';
 import type { SlashCommand } from '../Input.js';
-import type { GoalStopReason } from '../../core/events.js';
-import type { ApprovalPresetId, ReasoningEffort, TimelineMode } from '../../config/schema.js';
+import type { ReasoningEffort, TimelineMode } from '../../config/schema.js';
 import type { ReviewFailure } from '../../agent/review.js';
 
 /**
@@ -24,20 +23,15 @@ export function buildCommands(): SlashCommand[] {
   return [
     { name: 'help', description: t('cmd.help') },
     { name: 'init', description: t('cmd.init') },
-    { name: 'review', description: t('cmd.review'), selectorTitle: t('reviewopt.selectorTitle') },
     { name: 'simplify', description: t('cmd.simplify') },
-    { name: 'plan', description: t('cmd.plan') },
-    { name: 'goal', description: t('cmd.goal') },
     { name: 'models', aliases: ['model'], description: t('cmd.models') },
     { name: 'provider', description: t('cmd.provider') },
-    { name: 'approvals', description: t('cmd.approvals') },
     { name: 'think', description: t('cmd.think') },
     { name: 'setting', aliases: ['settings'], description: t('cmd.setting') },
     { name: 'focus', description: t('cmd.focus') },
     { name: 'compact', description: t('cmd.compact') },
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
-    { name: 'mcp', description: t('cmd.mcp') },
     { name: 'skills', description: t('cmd.skills') },
     { name: 'doctor', description: t('cmd.doctor') },
     { name: 'cost', description: t('cmd.cost') },
@@ -46,14 +40,6 @@ export function buildCommands(): SlashCommand[] {
     { name: 'exit', aliases: ['quit'], description: t('cmd.exit') },
   ];
 }
-
-/** `/approvals` 二级选择器里各预设的说明。 */
-export const PRESET_DESCRIPTIONS: Record<ApprovalPresetId, MessageKey> = {
-  'read-only': 'approvalopt.readOnly',
-  ask: 'approvalopt.ask',
-  auto: 'approvalopt.auto',
-  'full-access': 'approvalopt.fullAccess',
-};
 
 /** 思考档位的选择器说明。/think 不进 BUSY_BLOCKED_COMMANDS:改档位对进行中
  * 的流无破坏,下一次请求才生效。 */
@@ -77,7 +63,6 @@ export const BUSY_BLOCKED_COMMANDS = new Set([
   'resume',
   'fork',
   'init',
-  'review',
   'simplify',
 ]);
 
@@ -88,24 +73,6 @@ export const BUSY_BLOCKED_COMMANDS = new Set([
  */
 export const COMPACT_EXPECTED_SUMMARY_CHARS = 3000;
 
-/**
- * `/goal` 的取消词。它们是**参数**而不是命令别名(命令别名会进补全菜单,
- * 而 `/stop`、`/off` 单独成命令毫无意义),与 Claude Code 对齐。
- */
-export const GOAL_CLEAR_WORDS = new Set(['clear', 'stop', 'off', 'reset', 'none', 'cancel']);
-
-/** goal-stop 的原因 → 文案。穷尽 Record:新增停止原因时编译期就会提醒补文案。 */
-export const GOAL_STOP_MESSAGES: Record<GoalStopReason, MessageKey> = {
-  met: 'notice.goalStopMet',
-  cleared: 'notice.goalStopCleared',
-  replaced: 'notice.goalStopReplaced',
-  'max-turns': 'notice.goalStopMaxTurns',
-  aborted: 'notice.goalStopAborted',
-  error: 'notice.goalStopError',
-  'check-failed': 'notice.goalStopCheckFailed',
-  'plan-mode': 'notice.goalStopPlanMode',
-};
-
 /** `/focus` 二级选择器里各档位的说明。 */
 export const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
   full: 'focusopt.full',
@@ -114,26 +81,27 @@ export const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
 };
 
 /**
- * 罐装命令(/review、/simplify)失败原因 → 两命令各自的提示文案 + 级别。
- * 穷举 Record:review.ts 新增失败原因时编译期就会提醒两列一起补文案,级别
- * 只写一份。"没有可评审的内容"是信息,其余是警告。git-error 的 {message}
- * 填的是 stderr 摘要,仅供排查。unknown-* 四项两命令措辞相同,共用 review*
- * 的键,不为换个前缀在目录里抄一份。
+ * `/simplify` 失败原因 → 提示文案 + 级别。穷举 Record:review.ts 新增失败
+ * 原因时编译期就会提醒补文案,级别按"是不是用户操作有误"分。git-error 的
+ * {message} 填的是 stderr 摘要,仅供排查。
+ *
+ * `/review` 的那一列跟着命令搬进了 `src/extensions/review/`:每个命令自己
+ * 穷举一份,比一张双列表更经得起拆分——搬走时只带走自己那一列。
  */
-export const CANNED_FAILURE_NOTICES: Record<
+export const SIMPLIFY_FAILURE_NOTICES: Record<
   ReviewFailure,
-  { review: MessageKey; simplify: MessageKey; level: 'info' | 'warn' }
+  { key: MessageKey; level: 'info' | 'warn' }
 > = {
-  'no-repo': { review: 'notice.reviewNoRepo', simplify: 'notice.simplifyNoRepo', level: 'warn' },
-  'clean-tree': { review: 'notice.reviewCleanTree', simplify: 'notice.simplifyCleanTree', level: 'info' },
-  'no-commits': { review: 'notice.reviewNoCommits', simplify: 'notice.simplifyNoCommits', level: 'info' },
-  'no-diff': { review: 'notice.reviewNoDiff', simplify: 'notice.simplifyNoDiff', level: 'info' },
-  'unknown-branch': { review: 'notice.reviewUnknownBranch', simplify: 'notice.reviewUnknownBranch', level: 'warn' },
-  'same-branch': { review: 'notice.reviewSameBranch', simplify: 'notice.reviewSameBranch', level: 'warn' },
-  'no-merge-base': { review: 'notice.reviewNoMergeBase', simplify: 'notice.reviewNoMergeBase', level: 'warn' },
-  'unknown-commit': { review: 'notice.reviewUnknownCommit', simplify: 'notice.reviewUnknownCommit', level: 'warn' },
-  'git-error': { review: 'notice.reviewGitError', simplify: 'notice.simplifyGitError', level: 'warn' },
-  'bad-arg': { review: 'notice.reviewUsage', simplify: 'notice.simplifyUsage', level: 'warn' },
+  'no-repo': { key: 'notice.simplifyNoRepo', level: 'warn' },
+  'clean-tree': { key: 'notice.simplifyCleanTree', level: 'info' },
+  'no-commits': { key: 'notice.simplifyNoCommits', level: 'info' },
+  'no-diff': { key: 'notice.simplifyNoDiff', level: 'info' },
+  'unknown-branch': { key: 'notice.reviewUnknownBranch', level: 'warn' },
+  'same-branch': { key: 'notice.reviewSameBranch', level: 'warn' },
+  'no-merge-base': { key: 'notice.reviewNoMergeBase', level: 'warn' },
+  'unknown-commit': { key: 'notice.reviewUnknownCommit', level: 'warn' },
+  'git-error': { key: 'notice.simplifyGitError', level: 'warn' },
+  'bad-arg': { key: 'notice.simplifyUsage', level: 'warn' },
 };
 
 /**

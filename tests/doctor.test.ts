@@ -147,17 +147,11 @@ describe('collectDoctor', () => {
   });
 
   it('加载期提示逐条呈现为提醒', async () => {
-    const report = await collectDoctor(input({ warnings: ['permissionMode is the old setting'] }));
+    const report = await collectDoctor(input({ warnings: ['some load-time warning'] }));
     expect(find(report, 'configWarning0')?.level).toBe('warn');
     expect(report.counts.warn).toBeGreaterThan(0);
   });
 
-  it('danger-full-access 提醒,而不是当作正常档位', async () => {
-    const report = await collectDoctor(
-      input({ config: configSchema.parse({ provider: 'deepseek', sandbox: 'danger-full-access' }) }),
-    );
-    expect(find(report, 'mode')?.level).toBe('warn');
-  });
 
   // 全新安装:~/.mojocode 连同 sessions/ 都还没建出来。这时报"不可写"会让
   // 第一次跑 doctor 的人直接吃一条异常加退出码 1,而其实一切正常。

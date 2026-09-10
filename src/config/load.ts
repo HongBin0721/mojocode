@@ -1,10 +1,7 @@
 import fs from 'node:fs/promises';
 import {
-  approvalPolicySchema,
   configSchema,
-  fromLegacyMode,
   partialConfigSchema,
-  sandboxModeSchema,
   searchBackendSchema,
   type Config,
   type JsonValue,
@@ -51,52 +48,9 @@ async function readJsonIfExists(file: string): Promise<unknown | undefined> {
   }
 }
 
-/**
- * 旧版单轴 `permissionMode` 的一次性转换:映射到两轴,除非同一层已经写了
- * 新键(新键优先)。转换只在内存里发生,不改写用户文件——`/approvals` 落盘
- * 时才顺带清理旧键。产生一条提示,由 CLI 打给用户。
- */
-function convertLegacyMode(
-  json: Record<string, unknown>,
-  origin: string,
-  warnings: string[],
-): void {
-  const legacy = json.permissionMode;
-  delete json.permissionMode;
-  if (typeof legacy !== 'string') return;
-  const mapped = fromLegacyMode(legacy);
-  if (!mapped) return;
-
-  // 逐轴填空,而不是"两个新键都缺才整体映射"。后者会在同一层混写新旧键时
-  // 静默放宽:`{permissionMode:"readonly", approval:"on-request"}` 里的
-  // readonly 被整个丢弃,sandbox 落回默认的 workspace-write——用户要的是只读,
-  // 拿到的却是可写沙箱,而且一声不吭。
-  const filled: string[] = [];
-  if (json.sandbox === undefined) {
-    json.sandbox = mapped.sandbox;
-    filled.push(`sandbox=${mapped.sandbox}`);
-  }
-  if (json.approval === undefined) {
-    json.approval = mapped.approval;
-    filled.push(`approval=${mapped.approval}`);
-  }
-
-  warnings.push(
-    filled.length > 0
-      ? `${origin}: permissionMode "${legacy}" is the old single-axis setting; ` +
-          `interpreted as ${filled.join(', ')}. ` +
-          'Update the file to the new keys (the next /approvals change rewrites it for you).'
-      : `${origin}: permissionMode "${legacy}" was ignored — sandbox and approval are both set ` +
-          'explicitly and take precedence. Remove the stale permissionMode key.',
-  );
-}
-
-async function readLayer(file: string, warnings: string[]): Promise<PartialConfig> {
+async function readLayer(file: string): Promise<PartialConfig> {
   const json = await readJsonIfExists(file);
   if (json === undefined) return {};
-  if (typeof json === 'object' && json !== null) {
-    convertLegacyMode(json as Record<string, unknown>, file, warnings);
-  }
   const parsed = partialConfigSchema.safeParse(json);
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -106,14 +60,13 @@ async function readLayer(file: string, warnings: string[]): Promise<PartialConfi
   }
   // zod 4 的 .partial() 不摘 .default():文件里没写的键会被幻影默认值填充
   // (provider→deepseek、timeline→full、compactThreshold→0.8……)。层合并按层优先级
-  // 覆盖,于是项目层只要存在(/approvals 落盘就会写它),一个不相干的键就
-  // 足以把全局保存的 provider/model、/focus 偏好在每次启动时静默重置。
+  // 覆盖,于是项目层只要存在(`mojocode install --local` 就会写出一个),
+  // 一个不相干的键就足以把全局保存的 provider/model、/focus 偏好在每次启动
+  // 时静默重置。
   // schema.ts 只对 search/lsp/timeline 三个嵌套字段手动 extend 成裸 optional;
   // 这里按文件实际写了的键过滤解析结果,「没写」才等于「这一层不表态」——
   // 一处兜住所有带默认值的顶层字段,包括未来新增的。嵌套对象(search/lsp)
   // 的内层默认由层 schema 自己负责,不受这份过滤影响。
-  // 注意 written 必须在 convertLegacyMode 之后采集:它会把 permissionMode
-  // 转写成 sandbox/approval 写回 json,那两个键算这一层明确表态的。
   const written = new Set(Object.keys(json as Record<string, unknown>));
   const layer: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(parsed.data)) {
@@ -123,53 +76,23 @@ async function readLayer(file: string, warnings: string[]): Promise<PartialConfi
 }
 
 /** 映射到顶层配置键的环境变量。provider 的 API key 另行单独处理。 */
-function envLayer(env: NodeJS.ProcessEnv, warnings: string[]): PartialConfig {
+function envLayer(env: NodeJS.ProcessEnv): PartialConfig {
   const layer: PartialConfig = {};
   if (env.MOJOCODE_PROVIDER) layer.provider = env.MOJOCODE_PROVIDER;
   if (env.MOJOCODE_MODEL) layer.model = env.MOJOCODE_MODEL;
   if (env.MOJOCODE_GOAL_MODEL) layer.goalModel = env.MOJOCODE_GOAL_MODEL;
   if (env.MOJOCODE_TASK_MODEL) layer.taskModel = env.MOJOCODE_TASK_MODEL;
   if (env.MOJOCODE_VISION_MODEL) layer.visionModel = env.MOJOCODE_VISION_MODEL;
-  if (env.MOJOCODE_SANDBOX) {
-    const parsed = sandboxModeSchema.safeParse(env.MOJOCODE_SANDBOX);
-    if (parsed.success) layer.sandbox = parsed.data;
-  }
-  if (env.MOJOCODE_APPROVAL) {
-    const parsed = approvalPolicySchema.safeParse(env.MOJOCODE_APPROVAL);
-    if (parsed.success) layer.approval = parsed.data;
-  }
   // 搜索 key(MOJOCODE_SEARCH_API_KEY)不进配置层,由 resolveSearchBackend 直接读。
   if (env.MOJOCODE_SEARCH_BACKEND) {
     const parsed = searchBackendSchema.safeParse(env.MOJOCODE_SEARCH_BACKEND);
     if (parsed.success) layer.search = { backend: parsed.data };
   }
-  // 旧环境变量:逐轴填空(理由同 convertLegacyMode——整体映射会静默放宽)。
-  if (env.MOJOCODE_PERMISSION_MODE) {
-    const mapped = fromLegacyMode(env.MOJOCODE_PERMISSION_MODE);
-    if (mapped) {
-      const filled: string[] = [];
-      if (layer.sandbox === undefined) {
-        layer.sandbox = mapped.sandbox;
-        filled.push(`sandbox=${mapped.sandbox}`);
-      }
-      if (layer.approval === undefined) {
-        layer.approval = mapped.approval;
-        filled.push(`approval=${mapped.approval}`);
-      }
-      warnings.push(
-        filled.length > 0
-          ? `MOJOCODE_PERMISSION_MODE is the old single-axis setting; ` +
-              `interpreted as ${filled.join(', ')}. Switch to MOJOCODE_SANDBOX / MOJOCODE_APPROVAL.`
-          : 'MOJOCODE_PERMISSION_MODE was ignored — MOJOCODE_SANDBOX and MOJOCODE_APPROVAL ' +
-              'are both set and take precedence. Unset the stale variable.',
-      );
-    }
-  }
   return layer;
 }
 
 /**
- * 按键做浅合并,其中 `providers`、`permissions`、`mcpServers` 和 `search` 会
+ * 按键做浅合并,其中 `providers`、`mcpServers` 和 `search` 会
  * 多深入一层合并,这样项目配置可以只新增一个 MCP server 或只改搜索后端,
  * 而不会抹掉全局定义的其他条目。`lsp` 再多合并一层:`lsp.servers` 按服务器
  * id 合并,项目层只加一个 gopls 不会抹掉全局层的 pyright 覆盖。
@@ -194,7 +117,11 @@ function mergeLayers(layers: PartialConfig[]): PartialConfig {
               }
             : {}),
         } as PartialConfig['lsp'];
-      } else if (key === 'providers' || key === 'mcpServers' || key === 'permissions' || key === 'search') {
+      } else if (key === 'packages') {
+        // 装了的包取并集:项目层 `install --local` 的包不该把全局层的顶掉。
+        const prev = (out.packages ?? []) as string[];
+        out.packages = [...new Set([...prev, ...(value as string[])])];
+      } else if (key === 'providers' || key === 'mcpServers' || key === 'search') {
         const prev = (out as Record<string, unknown>)[key];
         (out as Record<string, unknown>)[key] = {
           ...(typeof prev === 'object' && prev !== null ? prev : {}),
@@ -235,7 +162,7 @@ export interface LoadedConfig {
   provider: ResolvedProvider;
   /** 实际生效的配置文件,按优先级排序。供 `mojocode config` 使用。 */
   sources: string[];
-  /** 加载期的提示(如旧版 permissionMode 的一次性转换),由 CLI 打给用户。 */
+  /** 加载期的提示,由 CLI 打给用户。 */
   warnings: string[];
 }
 
@@ -355,14 +282,14 @@ export async function loadRawConfig(
   const warnings: string[] = [];
 
   const [globalLayer, projectLayer] = await Promise.all([
-    readLayer(globalFile, warnings),
-    readLayer(projectFile, warnings),
+    readLayer(globalFile),
+    readLayer(projectFile),
   ]);
 
   const merged = mergeLayers([
     globalLayer,
     projectLayer,
-    envLayer(env, warnings),
+    envLayer(env),
     options.overrides ?? {},
   ]);
 

@@ -52,18 +52,12 @@ export function initBridge(): () => void {
       maybeResetReview();
     }),
     api.on('connection', ({ taskId, data }) => desktop.getState().applyConnection(taskId, data)),
-    api.on('permission', ({ taskId, data }) => desktop.getState().applyPermission(taskId, data)),
     api.on('tasks', (tasks) => desktop.getState().applyTasks(tasks)),
     api.on('replay', ({ taskId, data }) => timeline.getState().setItems(taskId, data)),
     api.on('event', ({ taskId, data }) => {
       const { applyEvent } = timeline.getState();
       for (const wire of data) {
         const event = deserializeEvent(wire);
-        // effect: 决策已定(allow/deny)关掉审批卡。事件流的其余部分照常进 reducer。
-        if (event.type === 'permission-resolved') {
-          desktop.getState().applyPermission(taskId, undefined);
-          continue;
-        }
         // effect: 终端面板——bash 的流式输出与命令行注入(reducer 对该类型是 no-op)。
         if (event.type === 'tool-output-delta') {
           usePanelStore.getState().appendChunk(taskId, event.chunk);
@@ -94,7 +88,6 @@ export function initBridge(): () => void {
       for (const entry of live) {
         desktop.getState().applyState(entry.taskId, entry.state);
         desktop.getState().applyConnection(entry.taskId, entry.connection);
-        if (entry.permission) desktop.getState().applyPermission(entry.taskId, entry.permission);
         if (entry.replayItems) timeline.getState().setItems(entry.taskId, entry.replayItems);
       }
       desktop.getState().setFocused(focusedTaskId);

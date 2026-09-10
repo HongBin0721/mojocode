@@ -11,10 +11,9 @@ function makeConfig(overrides: PartialConfig = {}) {
 }
 
 describe('search 配置节 schema', () => {
-  it('默认 backend=auto,permissions.allowNet 默认空数组', () => {
+  it('默认 backend=auto', () => {
     const config = makeConfig();
     expect(config.search.backend).toBe('auto');
-    expect(config.permissions.allowNet).toEqual([]);
   });
 
   it('拒绝非法 backend 与越界 count', () => {

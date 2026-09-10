@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 /**
  * 覆盖 App 从事件总线到时间线的流式收尾逻辑:中断(Esc)和流级异常时
@@ -28,12 +28,9 @@ async function setup() {
       compact: async () => {},
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'test-session', messages: [] },
     switch: () => provider,
     setMode: () => {},

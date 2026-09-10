@@ -6,12 +6,11 @@ import {
   glyphs,
   formatTokens,
   meterBar,
-  modeColor,
   truncateWidth,
   truncateWidthStart,
   shortenHome,
 } from './theme.js';
-import type { TodoItem } from '../tools/index.js';
+import type { TodoItem } from './timeline-data.js';
 import type { StatusSegment } from '../config/schema.js';
 import { t } from '../i18n/index.js';
 
@@ -21,12 +20,6 @@ interface Props {
   cumulativeTokens: number;
   todos: TodoItem[];
   model: string;
-  /** 当前权限模式,启用 mode 段时以着色文本显示在最前。 */
-  mode: string;
-  /**
-   * 点击 mode 段(App 用它弹出档位选项框)。不传则该段只是文字。
-   */
-  onModeClick?: () => void;
   /** 当前工作区根目录,启用 cwd 段时以 `~` 缩写展示。 */
   root: string;
   /** 当前思考强度,auto(默认)时不占位。 */
@@ -49,11 +42,8 @@ const METER_CELLS = 8;
 const CWD_WIDTH = 40;
 /** 路径收到比这还短就没有信息量了,那时改为独占一行。 */
 const MIN_CWD_WIDTH = 16;
-/**
- * 一行装不下时的丢弃顺序(先丢前面的)。mode 排最后:它是"此刻能不能
- * 改你的文件",任何时候都比 token 计数重要。
- */
-const DROP_ORDER: StatusSegment[] = ['total', 'think', 'context', 'model', 'cwd', 'mode'];
+/** 一行装不下时的丢弃顺序(先丢前面的)。 */
+const DROP_ORDER: StatusSegment[] = ['total', 'think', 'context', 'model', 'cwd'];
 
 interface Part {
   id: StatusSegment;
@@ -189,20 +179,6 @@ export function Footer(props: Props): JSX.Element {
     const available = Math.max(1, props.columns - 1);
 
     const parts: Part[] = [];
-    if (show.has('mode')) {
-      parts.push({
-        id: 'mode',
-        side: 'left',
-        plain: props.mode,
-        // 点击命中的是这一段自己的 <text>(行是 flex row,每段各占自己的宽度),
-        // 所以点在 model/cwd 上不会误切档位。
-        render: (text) => (
-          <Text color={modeColor(props.mode)} bold onClick={props.onModeClick}>
-            {text}
-          </Text>
-        ),
-      });
-    }
     if (show.has('model')) {
       parts.push({
         id: 'model',

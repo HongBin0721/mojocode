@@ -60,8 +60,15 @@ interface ManagedTask {
   optimistic?: { title: string };
 }
 
-/** 会开启一轮对话的 RPC(与 protocol 的 RUN_LIKE_METHODS 对应的 GUI 子集)。 */
-const RUN_RPC_KINDS = new Set(['run', 'runSkill', 'startReview', 'startSimplify']);
+/**
+ * 会开启一轮对话的 RPC(与 protocol 的 RUN_LIKE_METHODS 对应的 GUI 子集)。
+ *
+ * `runCommand` 刻意不在其中:扩展命令**不一定**开轮(`/mcp` 就
+ * 不开),而这个标志一旦置上就不会清——给不开轮的命令置位等于凭空造一个
+ * 空会话的侧栏行。代价是「空会话里第一件事就是 /review」这一种情形下,
+ * 侧栏行要等首答的 step-end 才出现,而不是即刻。
+ */
+const RUN_RPC_KINDS = new Set(['run', 'runSkill', 'startSimplify']);
 
 /** 首问的乐观行标题(磁盘 meta 生成标题前的占位,取自用户输入)。 */
 function optimisticTitle(request: RpcRequest): string {
@@ -70,8 +77,6 @@ function optimisticTitle(request: RpcRequest): string {
       return (request.options?.display ?? request.text).trim().slice(0, 80);
     case 'runSkill':
       return request.display ?? `/${request.name}`;
-    case 'startReview':
-      return '/review';
     case 'startSimplify':
       return '/simplify';
     default:
@@ -187,7 +192,6 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
         title: meta.title || managed?.optimistic?.title || '',
         status: managed?.status ?? 'dormant',
         isRunning,
-        hasPendingPermission: managed?.bridge.pendingPermissionRequest() !== undefined,
         ...(managed ? { lastActivityAt: managed.lastActivityAt } : {}),
         // 运行中恒 false(行上是旋转图标);空会话没有可看的内容。
         unseen: !isRunning && messageCount > 0 && viewedCounts[meta.id] !== messageCount,
@@ -380,13 +384,12 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
     const live: LiveTaskState[] = [];
     for (const task of tasks.values()) {
       if (task.taskId === focusedTaskId) {
-        // 聚焦任务:完整重放(回放 + 挂起审批 + 连接态 + 快照推送)。
+        // 聚焦任务:完整重放(回放 + 连接态 + 快照推送)。
         const result = await task.bridge.subscribe();
         live.push({
           taskId: task.taskId,
           state: result.state,
           connection: result.connection,
-          permission: task.bridge.pendingPermissionRequest(),
           replayItems: result.replayItems,
         });
       } else {
@@ -394,7 +397,6 @@ export function createTaskManager(deps: TaskManagerDeps): TaskManager {
           taskId: task.taskId,
           state: task.desktop.session.snapshot,
           connection: task.bridge.connectionState(),
-          permission: task.bridge.pendingPermissionRequest(),
         });
       }
     }

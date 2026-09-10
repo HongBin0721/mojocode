@@ -4,26 +4,26 @@
  * 子 agent 复用同一个 Agent 类(同一个循环驱动 TUI、headless、现在还有
  * 子任务),但挂在**自己的 EventBus** 上——它的几十步流式细节不进主时间线,
  * 只有聚合的 task-progress 事件转发到主总线,由渲染层贴在进行中的工具行上。
- * 工具、权限门与主 agent 完全共享:子 agent 的写入/命令照样弹同一个确认框,
- * 计划模式照样锁死写入。唯一带回主对话的是它的最终报告——这正是意义所在:
- * 大范围调研的中间过程不再挤占主上下文。
+ * 工具与主 agent 完全共享。唯一带回主对话的是它的最终报告——这正是意义
+ * 所在:大范围调研的中间过程不再挤占主上下文。
  *
- * 递归只放一层:子 agent 的工具集不含 task(也不含 todo/exit_plan,那两个
- * 是主会话的状态),由 bootstrap 组装时保证。
+ * 递归只放一层:子 agent 的工具集不含 task(也不含 todo,那是主会话的
+ * 状态),由 bootstrap 组装时保证。
  */
 
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { Agent } from '../agent/loop.js';
 import { EventBus } from '../core/events.js';
+import type { HookRegistry } from '../core/hooks.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type { Config } from '../config/schema.js';
 import { truncate } from './context.js';
 
 /**
- * 子 agent 的类型。general 与主 agent 同一套工具(去 task/todo/exit_plan);
+ * 子 agent 的类型。general 与主 agent 同一套工具(去 task/todo);
  * explore 只给只读工具(read/glob/grep/web),纯调研任务用它更安全——
- * 连写入确认框都不会弹。
+ * 它手上根本没有能改工作区的工具,提示词怎么写都动不了盘。
  */
 export type TaskMode = 'general' | 'explore';
 
@@ -49,10 +49,15 @@ export interface TaskToolDeps {
    */
   model: () => LanguageModel;
   provider: () => ResolvedProvider;
-  /** 子 agent 的系统提示词(不含计划模式段——子 agent 没有 exit_plan)。 */
+  /** 子 agent 的系统提示词。 */
   systemPrompt: (mode: TaskMode) => string;
   /** 子 agent 的工具集:按类型给,见 TaskMode。 */
   tools: (mode: TaskMode) => ToolSet;
+  /**
+   * 扩展钩子,与主 agent 同一份:权限、结果改写这类扩展对子 agent 同样生效
+   * (钩子输入带 subagent: true,扩展自己决定要不要区别对待)。
+   */
+  hooks?: HookRegistry;
   /** 子 agent 的总消耗,并入主 agent 的会话累计(Agent.addExternalTokens)。 */
   onTokens: (tokens: number) => void;
   /**
@@ -123,6 +128,8 @@ export async function runTaskSubagent(deps: TaskToolDeps, opts: RunTaskOptions):
     systemPrompt: deps.systemPrompt(mode),
     tools: deps.tools(mode),
     bus: innerBus,
+    hooks: deps.hooks,
+    subagent: true,
   });
 
   let steps = 0;
@@ -175,7 +182,7 @@ export async function runTaskSubagent(deps: TaskToolDeps, opts: RunTaskOptions):
     }
   });
 
-  // esc 中断主轮时子 agent 必须跟着停,否则它还在后台烧 token、弹确认框。
+  // esc 中断主轮时子 agent 必须跟着停,否则它还在后台烧 token、继续写盘。
   const onAbort = (): void => agent.abort();
   abortSignal?.addEventListener('abort', onAbort, { once: true });
   try {
@@ -244,12 +251,12 @@ export function createTaskTool(deps: TaskToolDeps) {
       'Delegate a self-contained task to a subagent that runs in its own fresh context and ' +
       'returns only its final report. Use it when the intermediate work would flood your ' +
       'context: exploring many files, summarizing a subsystem, researching an independent ' +
-      'question, or an isolated chunk of implementation. The subagent has the same tools and ' +
-      'permissions as you (minus task/todo), but sees NONE of this conversation — write the ' +
+      'question, or an isolated chunk of implementation. The subagent has the same tools as ' +
+      'you (minus task/todo), but sees NONE of this conversation — write the ' +
       'prompt as a complete standalone brief: the goal, all context it needs, and exactly what ' +
       'the report should contain. Do not use it for quick single-file lookups; read directly. ' +
-      "For pure research set mode 'explore': the subagent then gets only read-only tools, " +
-      'which is safer and never prompts for write approval.',
+      "For pure research set mode 'explore': the subagent then gets only read-only tools, so " +
+      'it cannot modify the workspace no matter what the prompt says.',
     inputSchema: z.object({
       description: z.string().describe('Short label shown to the user (3-8 words).'),
       prompt: z.string().describe('Complete standalone instructions for the subagent.'),

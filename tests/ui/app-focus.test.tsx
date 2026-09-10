@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import { setLocale } from '../../src/i18n/index.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import type { TimelineMode } from '../../src/config/schema.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 beforeEach(() => {
   setLocale('en');
@@ -34,12 +34,9 @@ async function setup(timeline: TimelineMode = 'full') {
       compact: async () => {},
     },
     bus: new EventBus(),
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'sess', messages: [] },
     switch: () => provider,
     setMode: () => {},

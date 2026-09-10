@@ -15,7 +15,7 @@ import {
 
 /**
  * 层文件里「没写」的键不得以幻影默认值参与合并(zod 4 的 .partial() 不摘
- * .default())。回归背景:项目层只要存在(/approvals 落盘就会写它),幻影
+ * .default())。回归背景:项目层只要存在,幻影
  * provider:'deepseek' 就以更高优先级把全局保存的 /provider、/models 选择
  * 在每次启动时静默重置回默认厂商——用户看到的就是"切换模型关掉再开就丢"。
  */
@@ -49,8 +49,8 @@ describe('层文件缺省键不产生幻影默认值', () => {
       provider: 'glm',
       providers: { glm: { apiKey: 'k', model: 'GLM-5.2' } },
     });
-    // 项目层只写了权限(/approvals 落盘的真实形状),不含任何模型选择。
-    await writeProject({ sandbox: 'danger-full-access', approval: 'never' });
+    // 项目层只写了一个不相干的键,不含任何模型选择。
+    await writeProject({ cleanupPeriodDays: 7 });
 
     const { config } = await loadRawConfig({ root, env: { ZHIPU_API_KEY: 'k' } });
     expect(config.provider).toBe('glm');
@@ -68,7 +68,7 @@ describe('层文件缺省键不产生幻影默认值', () => {
 
   it('两层都没写 provider 时,deepseek 默认值照常生效', async () => {
     await writeGlobal({ language: 'zh-CN' });
-    await writeProject({ approval: 'never' });
+    await writeProject({ cleanupPeriodDays: 7 });
 
     const { config } = await loadRawConfig({ root, env: { DEEPSEEK_API_KEY: 'k' } });
     expect(config.provider).toBe('deepseek');
@@ -76,7 +76,7 @@ describe('层文件缺省键不产生幻影默认值', () => {
 
   it('幻影默认不覆盖其他带默认值的标量字段(goalMaxTurns/reasoningEffort)', async () => {
     await writeGlobal({ goalMaxTurns: 5, reasoningEffort: 'max' });
-    await writeProject({ approval: 'never' });
+    await writeProject({ cleanupPeriodDays: 7 });
 
     const { config } = await loadRawConfig({ root, env: {} });
     expect(config.goalMaxTurns).toBe(5);

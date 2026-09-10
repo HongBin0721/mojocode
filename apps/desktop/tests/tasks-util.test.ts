@@ -18,7 +18,6 @@ function task(patch: Partial<TaskSummary> & { id: string }): TaskSummary {
     messageCount: 1,
     status: 'connected',
     isRunning: false,
-    hasPendingPermission: false,
     unseen: false,
     ...patch,
   };

@@ -66,7 +66,6 @@ function fakeSession(world: FakeWorld, id: string): RemoteSession {
           isCompacting: false,
           historyLength: world.historyLengths.get(id) ?? 0,
         },
-        goal: { active: false, busy: false },
         todos: [],
         skills: [],
         provider: {},

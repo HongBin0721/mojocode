@@ -1,9 +1,8 @@
 /**
  * 技能发现:扫描四个约定目录,按优先级去重。
  *
- * 发现走裸 fs 而不经沙箱——与 gatherEnvironment 读 AGENTS.md 同理,这是
- * 宿主自己的配置读取,不是模型驱动的工具调用;模型读技能目录里的 L3 资源
- * 才走沙箱(激活时登记的只读扩根,见 bootstrap 的 activateSkill)。
+ * 扫描四个约定目录之外,`mojocode install` 装的包也能带技能(manifest 的
+ * `skills` 段或约定的 `skills/` 目录),它们排在最后——优先级最低。
  */
 
 import fs from 'node:fs/promises';
@@ -17,7 +16,7 @@ import {
 } from '../config/paths.js';
 import { parseSkillMd, type SkillMetaFields } from './parse.js';
 
-export type SkillSource = 'project' | 'user' | 'claude-project' | 'claude-user';
+export type SkillSource = 'project' | 'user' | 'claude-project' | 'claude-user' | 'package';
 
 export interface SkillMeta extends SkillMetaFields {
   /** 技能目录的绝对路径(激活时作只读扩根)。 */
@@ -45,21 +44,25 @@ export interface SkillCommandInfo {
   argumentHint?: string;
 }
 
-/** 优先级从高到低:项目 .mojocode > 全局 .mojocode > 项目 .claude > 全局 .claude。 */
-export function skillLocations(root: string): Array<{ dir: string; source: SkillSource }> {
+/** 优先级从高到低:项目 .mojocode > 全局 .mojocode > 项目 .claude > 全局 .claude > 包。 */
+export function skillLocations(
+  root: string,
+  packageDirs: readonly string[] = [],
+): Array<{ dir: string; source: SkillSource }> {
   return [
     { dir: projectSkillsDir(root), source: 'project' },
     { dir: globalSkillsDir(), source: 'user' },
     { dir: claudeProjectSkillsDir(root), source: 'claude-project' },
     { dir: claudeGlobalSkillsDir(), source: 'claude-user' },
+    ...packageDirs.map((dir) => ({ dir, source: 'package' as const })),
   ];
 }
 
-export async function discoverSkills(root: string): Promise<SkillIndex> {
+export async function discoverSkills(root: string, packageDirs: readonly string[] = []): Promise<SkillIndex> {
   const byName = new Map<string, SkillMeta>();
   const failures: SkillParseFailure[] = [];
 
-  for (const location of skillLocations(root)) {
+  for (const location of skillLocations(root, packageDirs)) {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(location.dir, { withFileTypes: true });

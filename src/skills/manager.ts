@@ -25,6 +25,8 @@ function notifyKeyOf(index: SkillIndex): string {
 
 export class SkillManager {
   private readonly root: string;
+  /** 扩展包带来的技能目录(优先级最低),见 discovery.ts。 */
+  private readonly packageDirs: readonly string[];
   private readonly ttlMs: number;
   private cached: Promise<SkillIndex> | undefined;
   private fetchedAt = 0;
@@ -33,8 +35,9 @@ export class SkillManager {
   private notifyKey = notifyKeyOf(EMPTY_INDEX);
   private readonly listeners = new Set<() => void>();
 
-  constructor(options: { root: string; ttlMs?: number }) {
+  constructor(options: { root: string; packageDirs?: readonly string[]; ttlMs?: number }) {
     this.root = options.root;
+    this.packageDirs = options.packageDirs ?? [];
     this.ttlMs = options.ttlMs ?? 15_000;
   }
 
@@ -43,7 +46,7 @@ export class SkillManager {
     const now = Date.now();
     if (!this.cached || now - this.fetchedAt > this.ttlMs) {
       this.fetchedAt = now;
-      this.cached = discoverSkills(this.root).then(
+      this.cached = discoverSkills(this.root, this.packageDirs).then(
         (index) => {
           this.applyIndex(index);
           return index;

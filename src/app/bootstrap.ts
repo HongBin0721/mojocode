@@ -1,26 +1,35 @@
 import type { ModelMessage, ToolSet } from 'ai';
 import { Agent } from '../agent/loop.js';
-import { GoalController } from '../agent/goal.js';
+import { BUILTIN_EXTENSIONS } from '../extensions/index.js';
+import { discoverExtensions, loadExtension } from '../extensions/loader.js';
+import { resolvePackages } from '../extensions/packages.js';
+import { LSP_RUNTIME_KEY } from '../extensions/lsp/index.js';
+import { MCP_RUNTIME_KEY } from '../extensions/mcp/index.js';
+import type {
+  ExtensionAPI,
+  ExtensionCommand,
+  ExtensionCommandInfo,
+  ExtensionStatusEntry,
+  ExtensionCommandOption,
+  ExtensionToolFactory,
+  ToolScope,
+} from '../core/extension.js';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
-import { resolveSearchBackend } from '../config/search.js';
 import { imagesDir } from '../config/paths.js';
-import {
-  providerModelIsVision,
-  resolveVisionModelId,
-} from '../config/providers.js';
+import { providerModelIsVision, resolveVisionModelId } from '../config/providers.js';
 import { createViewImageTool } from '../tools/view-image.js';
 import {
-  planReturnFor,
   providerConfigSchema,
   type Config,
-  type Permissions,
   type ProviderConfig,
   type ReasoningEffort,
 } from '../config/schema.js';
 import { deleteProviderEntry, saveProviderEntry } from '../config/save.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
-import { EventBus, type PermissionAsker } from '../core/events.js';
+import { EventBus } from '../core/events.js';
+import { errorMessage } from '../core/errors.js';
+import { HookRegistry } from '../core/hooks.js';
 import {
   createModel,
   listModels,
@@ -32,11 +41,9 @@ import {
 } from '../model/registry.js';
 import { capabilitiesFor, createCatalogSource, type ModelCapabilities } from '../model/catalog.js';
 import { effectiveEfforts } from '../model/reasoning.js';
-import { connectMcpServers, type McpConnection, type McpStatus } from '../mcp/client.js';
-import { bridgeMcpTools } from '../mcp/bridge.js';
-import { PermissionGate } from '../permissions/gate.js';
-import { LspManager } from '../lsp/manager.js';
-import { createBuiltinTools, TodoStore } from '../tools/index.js';
+import type { McpStatus } from '../mcp/client.js';
+import type { LspRuntimeStatus } from '../lsp/manager.js';
+import { createBuiltinTools } from '../tools/index.js';
 import {
   createTaskTool,
   runTaskSubagent,
@@ -64,19 +71,12 @@ import { t } from '../i18n/index.js';
 import fs from 'node:fs/promises';
 import { SkillManager } from '../skills/manager.js';
 import { createSkillTool } from '../skills/tool.js';
-import { readSkillBody, type SkillCommandInfo, type SkillMeta } from '../skills/discovery.js';
+import { readSkillBody, type SkillCommandInfo } from '../skills/discovery.js';
 import { substituteArgs } from '../skills/substitute.js';
 import { wrapSkillPrompt } from '../skills/invocation.js';
 import {
-  buildReviewPrompt,
-  collectReviewCommits,
   collectReviewSummary,
   collectReviewTargets,
-  parseReviewArg,
-  type ReviewCommit,
-  type ReviewScope,
-  type ReviewStartResult,
-  type ReviewSummary,
   type ReviewTargets,
 } from '../agent/review.js';
 import {
@@ -93,15 +93,22 @@ export interface Session {
   env: EnvironmentInfo;
   agent: Agent;
   bus: EventBus;
-  gate: PermissionGate;
-  todos: TodoStore;
-  /** `/goal` 的目标监管器:发起轮次时经它走,由它决定要不要自动续跑。 */
-  goal: GoalController;
-  /** LSP 诊断管理器;lsp.enabled: false 时为 undefined。/doctor 读它的运行状态。 */
-  lsp?: LspManager;
-  mcpStatuses: McpStatus[];
-  /** MCP 状态订阅:非阻塞连接逐个落地时触发(serve 借此把新快照推给客户端)。 */
-  mcpStatusChanged: (listener: () => void) => () => void;
+  /**
+   * 扩展钩子注册表(core/hooks.ts):功能从核心搬出去成为扩展时挂在这里——
+   * 否决工具、改写结果、改系统提示词、轮后续跑。与主 agent 和子 agent 共享。
+   */
+  hooks: HookRegistry;
+  /**
+   * 装配期产生的、必须让用户看到的提示(磁盘扩展加载失败之类)。
+   *
+   * 为什么不在 bootstrap 里直接 `bus.emit`:那一刻**还没有任何渲染层订阅**
+   * ——serve 在 `await bootstrap()` 返回之后才 `bus.on`,TUI 在 App 挂载时才
+   * 订阅,headless 同理,而 EventBus 没有重放。emit 出去就是掉在地上。所以
+   * 攒起来,由各消费方在订阅之后自己取:serve 在**新客户端接上 SSE 时**补发
+   * (刚连上的 client 得知道它连上之前发生过什么),headless 在 `bus.on`
+   * 之后立刻发。
+   */
+  startupNotices: ReadonlyArray<{ level: 'warn' | 'info'; message: string }>;
   store: SessionStore;
   /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
   newSession: () => Promise<SessionStore>;
@@ -132,7 +139,7 @@ export interface Session {
   /** 本会话经 write/edit 落地过的文件(任务视角变更索引,进 StateSnapshot)。 */
   readonly changedFiles: ChangedFileEntry[];
   /**
-   * 工作区 git 写操作(GUI 显式操作,不经 PermissionGate;见 workspace-write.ts
+   * 工作区 git 写操作(GUI 上的显式操作,不是模型工具;见 workspace-write.ts
    * 的信任模型)。commit/discard 成功后清空 changedFiles(pending 已结清)。
    */
   switchBranch: (name: string) => Promise<GitOpResult>;
@@ -182,10 +189,6 @@ export interface Session {
    * 复用已拉起的 LSP——收进契约后 TUI 不必再摸 session.lsp / mcpStatuses。
    */
   doctor: (options: { offline: boolean }) => Promise<DoctorReport>;
-  /** 切换两轴权限(用户显式操作:/approvals、shift+tab)。 */
-  setPermissions: (permissions: Permissions) => void;
-  /** 进入/退出计划模式。退出即"未批准就放弃",批准走 exit_plan 的回调。 */
-  setPlan: (active: boolean) => void;
   /**
    * 重新收集环境信息并重建系统提示词,让刚写入的 AGENTS.md 不用重启就
    * 生效(`/init` 完成后调用)。
@@ -203,20 +206,29 @@ export interface Session {
    * 原文,进时间线;缺省按 name/args 重组。
    */
   runSkill: (name: string, args: string, options?: { display?: string }) => Promise<void>;
+  /** 扩展注册的斜杠命令投影(菜单用),同步读取(远程侧走 SSE 镜像)。 */
+  readonly extensionCommands: ExtensionCommandInfo[];
+  /** 扩展贴在输入框上方的状态行,同步读取(远程侧走 SSE 镜像)。 */
+  readonly extensionStatus: ExtensionStatusEntry[];
+  /** 扩展发布的结构化状态(key → 值,如 todo 清单),同步读取。 */
+  readonly extensionState: Record<string, unknown>;
+  /** 取一条扩展命令的选择器取值。每次现取:档位要标当前值,分支列表要跑 git。 */
+  commandOptions: (name: string, path?: string[]) => Promise<ExtensionCommandOption[]>;
+  /** 命令表或状态行变化时通知(菜单/状态行据此重算)。返回退订函数。 */
+  extensionsChanged: (listener: () => void) => () => void;
   /**
-   * `/review` 二级选择器的数据源(server 侧跑 git:当前分支 + 其余本地分支,
-   * 按最近提交排序)。远程侧普通 RPC——快、小、不跑 agent。
+   * 执行一条扩展命令。**即时**调用:处理器要发起一轮就 followUp,不 await
+   * 整轮(见 ExtensionCommand.handler)。未知命令抛错。
+   */
+  runCommand: (name: string, args: string) => Promise<void>;
+  /**
+   * 本地分支列表(server 侧跑 git:当前分支 + 其余本地分支,按最近提交
+   * 排序)。远程侧普通 RPC——快、小、不跑 agent。
+   *
+   * `/review` 的选择器不再经它——那条命令是扩展,自己在会话进程里跑 git;
+   * 留下这条是给 GUI 顶栏的**分支切换器**用的,它与评审无关。
    */
   reviewTargets: () => Promise<ReviewTargets>;
-  /** `/review` 提交选择器的数据源:最近 N 个提交。远程侧普通即时 RPC。 */
-  reviewCommits: () => Promise<ReviewCommit[]>;
-  /**
-   * 以用户身份跑一轮代码评审(`/review`):权威解析范围 → 收集 git 摘要 →
-   * 组稿罐装提示词交给 agent.run(信封复用技能的 `<skill-command>`,回放
-   * 据此还原成命令原文)。失败以 reason 代码返回、不抛异常,UI 据此映射
-   * 本地化提示。远程侧是 deferred RPC(包 agent.run,可能跑几分钟)。
-   */
-  startReview: (scopeArg: string, options?: { display?: string }) => Promise<ReviewStartResult>;
   /**
    * 以用户身份跑一轮代码清理(`/simplify`,对齐 Claude Code):解析目标 →
    * 复用 review.ts 的收集器 → 组稿清理提示词交给 agent.run,模型在这一轮里
@@ -243,22 +255,50 @@ export class ProviderSwitchError extends Error {
 export interface BootstrapOptions {
   root: string;
   loaded: LoadedConfig;
-  ask: PermissionAsker;
   /** 恢复该会话的历史,而不是从头开始。 */
   resume?: SessionStore;
   /** 配合 resume:历史与状态载入,但写入一个全新的会话 id(`--fork-session`)。 */
   fork?: boolean;
-  /** 跳过 MCP 连接——`-p` 模式在速度更重要时使用。 */
-  skipMcp?: boolean;
+  /**
+   * 不加载这几个一方扩展(按 id)。`--no-mcp` 走的就是这条路——功能搬成扩展
+   * 之后,「关掉一个功能」天然就是「不加载那个扩展」,不必再给每个功能配一个
+   * 专属开关。
+   */
+  disabledExtensions?: string[];
+  /** 命令行 `-e <path>` 指定的磁盘扩展(文件或目录),在目录发现之后装。 */
+  extensionPaths?: string[];
 }
 
+/** explore 子 agent 的只读白名单(内置工具);扩展工具由各自的工厂决定。 */
+const EXPLORE_TOOLS = new Set(['read', 'glob', 'grep', 'view_image', 'skill']);
+
+/** 扩展不得覆盖的内置工具名(含 task/skill 这两个由 bootstrap 装配的)。 */
+const BUILTIN_TOOL_NAMES = new Set([
+  'read',
+  'write',
+  'edit',
+  'glob',
+  'grep',
+  'bash',
+  'view_image',
+  'task',
+  'skill',
+]);
+
 export async function bootstrap(options: BootstrapOptions): Promise<Session> {
-  const { root, loaded, ask } = options;
+  const { root, loaded } = options;
   const config = loaded.config;
   let provider = loaded.provider;
 
   const bus = new EventBus();
-  const todos = new TodoStore();
+  // 扩展钩子(core/hooks.ts)。处理器出错只上报成 notice,绝不冒泡到循环里。
+  const hooks = new HookRegistry(({ hook, error }) => {
+    bus.emit({
+      type: 'notice',
+      level: 'warn',
+      message: t('notice.hookFailed', { hook, message: error.message }),
+    });
+  });
   // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
   const catalogSource = createCatalogSource();
 
@@ -286,185 +326,57 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     }
   };
 
-  // 会话状态快照:todos + 会话级授权规则 + 当前两轴权限。gate/store 在下方
-  // 才创建,闭包按绑定取值,实际调用时都已就绪。
-  const snapshotState = (): SessionState => {
-    // 只有一种情况不把权限写进会话记录:permsPromoted——read-only+never 下批准
-    // 方案被提升到 ask,那是"这一次批准"换来的放宽,不是用户选的档位,不该活到
-    // 下一次 `mojocode -c`。用户显式切的档位一律留存,full-access 也不例外。
-    //
-    // 计划模式**不**在此列:SessionState 根本不存 plan 标志,恢复时不可能停在
-    // 计划模式;而进入计划模式时两轴保持不变(setPlan 原样传当前组合),所以
-    // 这里存的就是进入前的选择。漏存反而会抹掉它——状态记录是整份替换,
-    // shift+tab 切到 auto 再切进 plan,记录就被重写成没有权限,恢复这个会话时
-    // 用户的选择凭空消失(项目配置里存的是"这个工作区最后一次选的档",会话
-    // 记录存的是"这个会话当时的档",两者各管各的)。
-    const perms: Permissions = { sandbox: config.sandbox, approval: config.approval };
-    const omit = permsPromoted;
-    const activeGoal = goal.state;
-    // allowNet 与 goal 同一手法:空时整个字段不出现,老会话的状态记录
-    // JSON 保持一字不差,脏检查不会平白多写一条记录。
-    const { allowNet, ...sessionRules } = gate.exportSessionRules();
-    return {
-      todos: todos.get(),
-      ...sessionRules,
-      ...(allowNet.length > 0 ? { allowNet } : {}),
-      ...(omit ? {} : { sandbox: perms.sandbox, approval: perms.approval }),
-      // 无目标时整个字段不出现:JSON.stringify 的结果与加这个功能之前一字
-      // 不差,saveState 的脏检查因此不会为老会话平白多写一条 state 记录。
-      ...(activeGoal ? { goal: { condition: activeGoal.condition } } : {}),
-      // changedFiles 同一手法:空时字段不出现。
-      ...(changedFiles.size > 0 ? { changedFiles: changedFilesList() } : {}),
-    };
-  };
+  // 会话状态快照:目前只有变更索引。store 在下方才创建,闭包按绑定取值。
+  const snapshotState = (): SessionState => ({
+    // 空时整个字段不出现:老会话的状态记录 JSON 保持一字不差,脏检查不会
+    // 平白多写一条记录。
+    ...(changedFiles.size > 0 ? { changedFiles: changedFilesList() } : {}),
+  });
   const persistState = (): void => {
     void store.saveState(snapshotState()).catch(() => {
       // 状态是尽力而为的附属信息,失败不打扰用户(消息保存失败才提示)。
     });
   };
 
-  const gate = new PermissionGate({
-    root,
-    permissions: { sandbox: config.sandbox, approval: config.approval },
-    plan: config.plan,
-    rules: config.permissions,
-    ask,
-    bus,
-    onRulesChanged: () => persistState(),
-  });
-
-  // 中断后仍排在队列里的授权询问要一并作废——并行工具调用会让多个请求
-  // 依次排队,否则用户得为一个已经死掉的轮次挨个消确认框。
-  bus.on((event) => {
-    if (event.type === 'aborted') gate.cancelPending();
-    else if (event.type === 'turn-start') {
-      gate.resumePending();
-      // 轮前刷新技能:模型在本轮看到的 L1 列表最多旧 15s(TTL);digest
-      // 变了就地换 skill 工具,下一次 stream 生效。
-      void skillManager
-        .list()
-        .then(() => syncSkillTool())
-        .catch(() => {});
-    }
-  });
-
   /**
-   * 方案获批后要还原的两轴组合——即进入计划模式之前的那套。planReturnFor
-   * 决定要不要提升(只有 read-only+never 会提升到 ask,批准才有意义)。
-   * `--plan` 直接启动时没有这次转换,归宿取配置里的两轴(即启动时的组合)。
-   */
-  let planReturn = planReturnFor({ sandbox: config.sandbox, approval: config.approval });
-  /**
-   * 当前组合是否由"批准方案"提升而来。为真时不写进会话记录,见 snapshotState。
-   * 任何显式的权限切换都会把它清掉——那时是用户自己的选择,理应留存。
-   */
-  let permsPromoted = false;
-
-  // 诊断回喂:惰性拉起 LSP 服务器,write/edit 后把错误/警告随工具结果给模型。
-  const lsp = config.lsp.enabled ? new LspManager(root, config.lsp) : undefined;
-
-  /**
-   * 技能激活的会话态。asked 记住已经问过 allowed-tools 的技能(同会话只问
-   * 一次,**拒绝也记住**——反复弹同一个框比放弃预授权更烦人);extraReadRoots
-   * 是已激活技能目录的 realpath 集合(read/glob 的只读扩根);pendingUserSkills
-   * 是本轮用户斜杠点名的技能(skill 工具据此放行 disable-model-invocation)。
+   * 技能的会话态:pendingUserSkills 是本轮用户斜杠点名的技能(skill 工具
+   * 据此放行 disable-model-invocation)。
    */
   const skillActivation = {
-    asked: new Set<string>(),
-    extraReadRoots: new Set<string>(),
     pendingUserSkills: new Set<string>(),
   };
-  /** `/new`、`/resume` 时清空:激活是对话级状态,不跨对话漂移。 */
+  /** `/new`、`/resume` 时清空:它是对话级状态,不跨对话漂移。 */
   const resetSkillActivation = (): void => {
-    skillActivation.asked.clear();
-    skillActivation.extraReadRoots.clear();
     skillActivation.pendingUserSkills.clear();
   };
 
   const toolContext = {
     root,
-    gate,
     bus,
-    rules: config.permissions,
     readFiles: new Set<string>(),
-    lsp,
-    // 惰性 getter,理由同下方 GoalController 的 evaluatorModel:config 会被
-    // switchProvider/applyPermissions 就地修改,现取现算才拿到当下的值。
-    searchBackend: () => resolveSearchBackend(config, process.env),
-    // view_image 的视觉模型:顶层 visionModel 覆盖,缺省回落内置预设
-    // (GLM 系给 glm-4.6v;deepseek SDK 的转换器丢图片 part,一律不解析,
-    // 见 resolveVisionModelId)。原样发往端点、不经 normalizeModelId——同
-    // taskProvider 的先例;provider 是下方 switchProvider 会重赋的闭包
-    // 变量,现取现建才不会打向被换掉的服务端。解析不出则工具不注册。
+    // 惰性 getter:config 会被 switchProvider 就地修改,现取现算才拿到当下
+    // 的值。view_image 的视觉模型:顶层 visionModel 覆盖,缺省回落内置预设。
     visionModel: () => {
-      const id = resolveVisionModelId(provider.id, config);
-      return id === undefined ? undefined : createModel({ ...provider, model: id });
+      const target = resolveVisionModelId(provider.id, config);
+      return target ? createModel({ ...provider, model: target }) : undefined;
     },
-    // applyPermissions 在下方才定义,但这个回调要到工具执行时才被调用,那时
-    // 早已就绪——与上面 snapshotState 闭包 gate/store 是同一手法。
-    exitPlanMode: (): Permissions => {
-      applyPermissions(planReturn.perms, { plan: false, promoted: planReturn.promoted });
-      return planReturn.perms;
-    },
-    extraReadRoots: () => [imagesDir(), ...skillActivation.extraReadRoots],
   };
-  // 粘贴图的落盘目录(view_image 的只读扩根之一)。提前建好使 resolveReadable
-  // 的 realpath 比对稳定;失败不打扰——目录不存在时扩根会被跳过,降级
-  // 落盘那一刻的 mkdir 才是真正的兜底。
+  // 粘贴图的落盘目录。提前建好;失败不打扰——降级落盘那一刻的 mkdir 才是
+  // 真正的兜底。
   void fs.mkdir(imagesDir(), { recursive: true }).catch(() => {});
 
-  const skillManager = new SkillManager({ root });
-
-  /**
-   * 激活技能:目录 realpath 进只读扩根;主 agent 且带 allowed-tools 时做
-   * 一次性确认(拒绝也记住,同会话不纠缠)。子 agent 激活只扩根不确认——
-   * explore 子代理连确认框都不该弹,这是它进 explore 白名单的前提。
-   * 计划模式跳过预授权:方案未批就先放行写规则是自相矛盾的,硬拒仍兜底。
-   */
-  const activateSkill = async (meta: SkillMeta, opts?: { subagent?: boolean }): Promise<void> => {
-    try {
-      skillActivation.extraReadRoots.add(await fs.realpath(meta.dir));
-    } catch {
-      // 目录已消失:不扩根,正文读取会给出具体报错。
-    }
-    if (opts?.subagent || !meta.allowedTools?.length || config.plan) return;
-    if (skillActivation.asked.has(meta.name)) return;
-    // 先记后问:确认框是异步的,同一轮里并发触发同一个技能会连弹两次。
-    skillActivation.asked.add(meta.name);
-    await gate.confirmSessionRules(meta.name, meta.allowedTools);
-  };
-
-  // MCP 非阻塞:连接不再挡 bootstrap——每个 server 最坏 15s 超时曾直接叠在
-  // 启动路径上,GUI/TUI 拉起 sidecar 的握手都得陪着等。statuses 数组按引用
-  // 进 Session 快照,逐 server 落地时原地 push 并通知订阅方(serve 借
-  // mcpStatusChanged 推 state 帧);连接全部结束后由下方 mcpReady 的收尾把
-  // MCP 工具原地并进 tools。首轮不抢跑:Agent 的 beforeTurn 门等 mcpReady,
-  // 等待只是从「启动时」挪到「真要开轮时」,轮次语义与旧的阻塞式一致。
-  const mcp: { connections: McpConnection[]; statuses: McpStatus[] } = {
-    connections: [],
-    statuses: [],
-  };
-  const mcpListeners = new Set<() => void>();
-  const notifyMcpChanged = (): void => {
-    for (const listener of mcpListeners) listener();
-  };
-  let mcpDisposed = false;
-  const mcpConnect = options.skipMcp
-    ? Promise.resolve({ connections: [] as McpConnection[] })
-    : connectMcpServers(config.mcpServers, (status) => {
-        mcp.statuses.push(status);
-        // 失败即刻上总线:连接非阻塞之后,状态是在**握手之后**才落地的,
-        // 调用方写 stderr 已经晚了(受管 sidecar 里进不可见的尾部缓冲,
-        // 进程内 TUI 里直接糊进全屏画面)。bus 是三个前端都收得到的通道。
-        if (!status.connected) {
-          bus.emit({
-            type: 'notice',
-            level: 'warn',
-            message: t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' }),
-          });
-        }
-        notifyMcpChanged();
-      });
+  // 扩展包先解析到磁盘:它既可能带扩展也可能带技能,后者要在 SkillManager
+  // 建好之前知道目录。配置里记着却找不到的包不是致命错误——提示用户重新
+  // install 即可,别的扩展照装。
+  const startupNotices: Array<{ level: 'warn' | 'info'; message: string }> = [];
+  const resolved = await resolvePackages(config.packages, { root });
+  for (const spec of resolved.missing) {
+    startupNotices.push({ level: 'warn', message: t('notice.packageMissing', { spec }) });
+  }
+  const skillManager = new SkillManager({
+    root,
+    packageDirs: resolved.packages.flatMap((pkg) => pkg.manifest.skills),
+  });
 
   // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
   // 技能初扫并入同一批:tools 组装(下方)读 skillManager.current() 决定
@@ -475,61 +387,60 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   ]);
 
   /**
+   * 扩展注册的工具(name → 工厂,见 ExtensionAPI.registerTool)。主 agent 的
+   * `tools` 是**就地改键**的(与运行中的 Agent 共享引用,下一次开流生效);
+   * 子 agent 的工具集每次现建,直接从这张表现算。
+   */
+  const extensionTools = new Map<string, ExtensionToolFactory>();
+  const materializeExtensionTools = (scope: ToolScope): ToolSet => {
+    const out: ToolSet = {};
+    for (const [name, factory] of extensionTools) {
+      const built = factory(scope);
+      if (built) out[name] = built;
+    }
+    return out;
+  };
+
+  /**
    * 子 agent 的工具集:每次现建一份 builtin(共享同一个 toolContext,权限门、
-   * readFiles、搜索后端全都同一套),去掉主会话状态类工具——todo 会抢主界面
-   * 的任务面板,exit_plan 属于主 agent 的计划审批;task 本身不在 builtin 里,
-   * 递归天然只放一层。现建而非复用 tools:web_search 注册与否取决于当时
-   * 能不能解析出搜索后端。
+   * readFiles、搜索后端全都同一套)。task 本身不在 builtin 里,递归天然只放
+   * 一层;todo 与 exit_plan 现在都是**扩展工具**,「子 agent 不给」由各自的
+   * 工厂按 `ToolScope` 自己判,不在这里剔除。现建而非复用 tools:注册与否
+   * 取决于当时的运行时状态(搜索后端解析得出来没有、MCP 连上没有)。
    */
   const subagentTools = (mode: TaskMode): ToolSet => {
     // 自己的 readFiles:护栏要保证"改的那个 agent 亲眼看过内容",共享会让
     // 主 agent 凭子 agent 的阅读就能编辑自己从没读过的文件。每次调用现建
     // 一份,连续两个子任务之间也不串。
-    const subContext = { ...toolContext, readFiles: new Set<string>(), subagent: true };
-    const all: ToolSet = {
-      ...createBuiltinTools(subContext, todos),
-      ...bridgeMcpTools(mcp.connections, gate, { subagent: true }),
+    const subContext = { ...toolContext, readFiles: new Set<string>() };
+    const builtin: ToolSet = {
+      ...createBuiltinTools(subContext),
       // 子 agent 的 skill 工具:激活只扩根、不弹确认,fork 退化为内联返回
       // 正文(runFork 不注入),守住"递归只放一层"。
       ...(hasModelSkills() ? { skill: skillToolFor(true) } : {}),
     };
-    const { todo: _todo, exit_plan: _exitPlan, ...general } = all;
-    if (mode !== 'explore') return general;
-    // explore:纯调研,只留只读工具。MCP 工具不透明,可能有副作用,一并去掉。
-    // skill 留下是安全的:它只返回文本、登记只读扩根,子 agent 激活不确认,
-    // 所以永远不会在 explore 里弹出确认框——这个耦合破了就得把它移出白名单。
-    const picked: ToolSet = {};
-    for (const name of ['read', 'glob', 'grep', 'web_fetch', 'web_search', 'view_image', 'skill']) {
-      const t_ = (general as ToolSet)[name];
-      if (t_) picked[name] = t_;
+    // explore:纯调研,只留只读工具。skill 留下是安全的:它只返回文本、登记
+    // 只读扩根,子 agent 激活不确认,所以永远不会在 explore 里弹出确认框
+    // ——这个耦合破了就得把它移出白名单。
+    if (mode === 'explore') {
+      for (const name of Object.keys(builtin)) {
+        if (!EXPLORE_TOOLS.has(name)) delete builtin[name];
+      }
     }
-    return picked;
+    // 扩展工具由工厂按作用域自己决定给不给(MCP 在 explore 里就不给),
+    // 所以不参与上面那张内置白名单;每次现建,注册即刻生效。
+    return { ...builtin, ...materializeExtensionTools({ subagent: true, mode }) };
   };
 
-  /**
-   * 子 agent 的系统提示词。plan 恒传 false——计划模式那段要求"最终必须调
-   * exit_plan",而子 agent 没有这个工具,照抄只会让它对着不存在的工具空转;
-   * 写入约束本身由共享的权限门兜底,这里只需一句说明。
-   */
+  /** 子 agent 的系统提示词:同一份基座 + 子 agent 约束 + explore 的只读说明。 */
   const subagentSystemPrompt = (mode: TaskMode): string => {
     const base = buildSystemPrompt(
       env,
-      {
-        permissions: { sandbox: config.sandbox, approval: config.approval },
-        plan: false,
-        webSearch: webSearchAvailable,
-        viewImage: viewImageFor(taskProvider()),
-      },
+      { viewImage: viewImageFor(taskProvider()) },
       config.systemPromptAppend,
     );
-    // 计划模式下写入会被门禁硬拒。提前说清楚,免得它把步数耗在"试一次被拒
-    // →再试一次"上;门禁的拒绝理由也针对子 agent 单独措辞(见 hardStopReason)。
-    const planNote = config.plan
-      ? '\n\nNote: the session is in plan mode — file edits and state-changing commands are ' +
-        'refused. Research and report only. You have no exit_plan tool; never try to call it.'
-      : '';
     const modeNote = mode === 'explore' ? `\n\n${EXPLORE_PROMPT}` : '';
-    return `${base}\n\n${SUBAGENT_PROMPT}${modeNote}${planNote}`;
+    return `${base}\n\n${SUBAGENT_PROMPT}${modeNote}`;
   };
 
   /** 子 agent 的 provider:惰性取,taskModel 覆盖模型 id(未配置则原样)。 */
@@ -540,6 +451,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const taskDeps: TaskToolDeps = {
     config,
     bus,
+    hooks,
     // 惰性取值:/models、/provider 之后 provider 是新对象,提前建好的模型
     // 会一直打向被换掉的服务端(与 GoalController.evaluatorModel 同理)。
     // model 与 provider 必须取同一份:normalizeError 用 provider.model 组装
@@ -565,7 +477,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const skillToolFor = (subagent: boolean) =>
     createSkillTool({
       manager: skillManager,
-      activate: (meta) => activateSkill(meta, { subagent }),
       ...(subagent
         ? {}
         : {
@@ -582,30 +493,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     });
 
   const tools = {
-    ...createBuiltinTools(toolContext, todos),
+    ...createBuiltinTools(toolContext),
     task: createTaskTool(taskDeps),
     // 一个 model-invocable 技能都没有时干脆不注册:空列表的工具纯占前缀。
     ...(hasModelSkills() ? { skill: skillToolFor(false) } : {}),
   };
   /**
-   * MCP 连接收尾(非阻塞启动的另一半):工具原地并进 tools——与 syncSkillTool
-   * 同一招,tools 与运行中的 Agent 共享引用,改键下一次开流生效。dispose 竞态
-   * 下(连接落地时会话已关)直接关掉连接,绝不留 stdio 孤儿进程。永不 reject:
-   * beforeTurn 门 await 它,拒绝会把之后每一轮都炸掉。
+   * 扩展工具并进主工具集(就地改键,理由见 extensionTools 与 syncSkillTool)。
+   * 内置工具不可覆盖:一个装错的扩展不该把 `read` 顶掉。
    */
-  const mcpReady = mcpConnect
-    .then(({ connections }) => {
-      if (mcpDisposed) {
-        for (const connection of connections) void connection.close(); // close 内部已吞错
-        return;
-      }
-      mcp.connections.push(...connections);
-      // 不另发通知:状态早已逐 server 通知过,工具注册不进 wire 快照。
-      Object.assign(tools as ToolSet, bridgeMcpTools(connections, gate));
-    })
-    .catch(() => {});
+  const syncExtensionTool = (name: string): void => {
+    const factory = extensionTools.get(name);
+    if (!factory) {
+      delete (tools as ToolSet)[name];
+      return;
+    }
+    const built = factory({ subagent: false });
+    if (built) (tools as ToolSet)[name] = built;
+    else delete (tools as ToolSet)[name];
+  };
   // 系统提示词按注册结果如实陈述——说了不存在的工具,模型就会去调它。
-  const webSearchAvailable = 'web_search' in tools;
   let viewImageAvailable = 'view_image' in tools;
   /**
    * /provider 切换后同步 view_image 的注册状态(照 syncSkillTool 的原地改键:
@@ -660,20 +567,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     model: createModel(provider),
     provider,
     config,
-    systemPrompt: buildSystemPrompt(
-      env,
-      {
-        permissions: { sandbox: config.sandbox, approval: config.approval },
-        plan: config.plan,
-        webSearch: webSearchAvailable,
-        viewImage: viewImageFor(provider),
-      },
-      config.systemPromptAppend,
-    ),
+    systemPrompt: buildSystemPrompt(env, { viewImage: viewImageFor(provider) }, config.systemPromptAppend),
     tools,
     bus,
-    // MCP 非阻塞启动的补偿门:真要开轮了才等连接收尾(通常早已 resolve)。
-    beforeTurn: () => mcpReady,
+    hooks,
     onHistoryChange: (messages: ModelMessage[]) => {
       void store.save(messages).catch((err: Error) => {
         bus.emit({ type: 'notice', level: 'warn', message: t('notice.sessionSaveFailed', { message: err.message }) });
@@ -714,34 +611,159 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       .catch(() => {});
   });
 
-  const goal = new GoalController({
-    agent,
-    bus,
+  // ---- 扩展(core/extension.ts):命令表、状态行,以及给每个扩展的 API ----
+  const extensionCommands = new Map<string, { info: ExtensionCommandInfo; command: ExtensionCommand }>();
+  const extensionStatus = new Map<string, ExtensionStatusEntry>();
+  /** 扩展发布给客户端的结构化状态(见 ExtensionAPI.setState),随快照过线。 */
+  const extensionState = new Map<string, unknown>();
+  const extensionListeners = new Set<() => void>();
+  const extensionsChanged = (): void => {
+    for (const listener of extensionListeners) listener();
+  };
+  /**
+   * 值没变就不通知。一次 extensionsChanged 在 serve 侧要走完
+   * `computeState()`(重建 redactConfig 的两张表、排一遍变更文件、四个扩展
+   * 投影)再对整份快照做一次 `JSON.stringify` 去重——比在这里把一个小值
+   * 序列化一遍贵得多。重复发布是常态而非例外:todo 每次工具调用都重发整份
+   * 清单(哪怕只是把一项从 pending 挪到 in_progress),而那次调用自己的
+   * tool-end 已经推过一帧了。
+   */
+  const sameJson = (a: unknown, b: unknown): boolean =>
+    a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  /**
+   * 扩展发布的运行时快照(见 ExtensionAPI.publishRuntime)。只在会话进程里
+   * 读,不进任何 wire 快照——它描述的是本进程里的活物(已拉起的子进程)。
+   */
+  const extensionRuntime = new Map<string, () => unknown>();
+  /**
+   * 读一份扩展发布的运行时快照;getter 可以返回 promise(MCP 的连接收尾)。
+   *
+   * 返回 `undefined` 有**两种**来路,调用方必须自己分清:没人发布过这个 key
+   * (扩展没装),或者发布方此刻确实没东西可报(LSP 还没被任何编辑触发)。
+   * 想区分就配 `extensionRuntime.has(key)`——doctor 的 MCP 分节正靠它。
+   */
+  const runtimeOf = async <T>(key: string): Promise<T | undefined> =>
+    (await extensionRuntime.get(key)?.()) as T | undefined;
+  const createExtensionApi = (id: string): ExtensionAPI => ({
+    id,
+    root,
+    on: (name, handler) => hooks.on(name, handler),
+    onEvent: (handler) => bus.on(handler),
+    registerCommand: (name, command) => {
+      extensionCommands.set(name, {
+        info: {
+          name,
+          description: command.description,
+          ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+          ...(command.options ? { hasOptions: true } : {}),
+          ...(command.selectorTitle ? { selectorTitle: command.selectorTitle } : {}),
+        },
+        command,
+      });
+      extensionsChanged();
+    },
+    setStatus: (text, opts) => {
+      if (text === undefined) {
+        if (!extensionStatus.delete(id)) return;
+      } else {
+        const next = { id, text, ...(opts?.since !== undefined ? { since: opts.since } : {}) };
+        if (sameJson(extensionStatus.get(id), next)) return;
+        extensionStatus.set(id, next);
+      }
+      extensionsChanged();
+    },
+    setState: (key, value) => {
+      if (value === undefined) {
+        if (!extensionState.delete(key)) return;
+      } else {
+        if (sameJson(extensionState.get(key), value)) return;
+        // 存副本:扩展后续原地改自己的数组不该悄悄改变已发布的快照。
+        extensionState.set(key, structuredClone(value));
+      }
+      extensionsChanged();
+    },
+    notify: (level, message) => bus.emit({ type: 'notice', level, message }),
+    publishRuntime: (key, get) => extensionRuntime.set(key, get),
+    registerTool: (name, factory) => {
+      if (BUILTIN_TOOL_NAMES.has(name)) {
+        throw new Error(`Extension "${id}" cannot register the builtin tool "${name}".`);
+      }
+      extensionTools.set(name, factory);
+      syncExtensionTool(name);
+    },
+    unregisterTool: (name) => {
+      extensionTools.delete(name);
+      syncExtensionTool(name);
+    },
+    run: (text, opts) => agent.run(text, opts),
+    followUp: (text, opts) => agent.followUp(text, opts),
+    isRunning: () => agent.isRunning,
+    abort: () => agent.abort(),
+    history: () => agent.history,
+    // store 是可变绑定(/new、/resume 换掉它),闭包现读才写进当前会话。
+    appendEntry: (type, data) => store.saveCustom(type, data),
+    entries: (type) => store.custom(type),
     config,
     // 现取而不是提前建好:`/models`、`/provider` 换过之后 provider 是个新对象,
     // 提前建的模型会一直打向已经被换掉的那个服务端。createModel 只是本地
-    // 构造(registry.ts:13),没有网络往返,每次评估现建一个不值一提。
-    evaluatorModel: () =>
-      createModel(config.goalModel ? { ...provider, model: config.goalModel } : provider),
-    onChange: () => persistState(),
+    // 构造,没有网络往返。
+    model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
   });
+  const disabled = new Set(options.disabledExtensions ?? []);
+  const loadedIds = new Set<string>();
+  for (const extension of BUILTIN_EXTENSIONS) {
+    if (disabled.has(extension.id)) continue;
+    await extension.setup(createExtensionApi(extension.id));
+    loadedIds.add(extension.id);
+  }
+  /**
+   * 磁盘扩展(包 / 全局目录 / 项目目录 / `-e`)。与一方扩展的差别只有一条
+   * 纪律:**任何一个装不上都不能拖垮会话**——文件解析失败、setup 抛错、id
+   * 与已装的撞车,一律变成一条 startup notice 然后跳过。一方扩展装不上则
+   * 照常抛(那是我们自己的 bug,该在 CI 里红)。
+   */
+  const { extensions: discovered, notFound } = await discoverExtensions({
+    root,
+    extraPaths: options.extensionPaths ?? [],
+    packages: resolved.packages,
+  });
+  for (const file of notFound) {
+    startupNotices.push({ level: 'warn', message: t('notice.extensionPathMissing', { file }) });
+  }
+  for (const entry of discovered) {
+    if (disabled.has(entry.id)) continue;
+    try {
+      const extension = await loadExtension(entry);
+      if (disabled.has(extension.id)) continue;
+      if (loadedIds.has(extension.id)) {
+        startupNotices.push({
+          level: 'warn',
+          message: t('notice.extensionDuplicate', { id: extension.id, file: entry.file }),
+        });
+        continue;
+      }
+      await extension.setup(createExtensionApi(extension.id));
+      loadedIds.add(extension.id);
+    } catch (err) {
+      startupNotices.push({
+        level: 'warn',
+        message: t('notice.extensionLoadFailed', { id: entry.id, file: entry.file, message: errorMessage(err) }),
+      });
+    }
+  }
 
-  const restoreState = (state: SessionState): void => {
-    todos.set(structuredClone(state.todos));
-    restoreChangedFiles(state.changedFiles);
-    gate.setSessionRules(state);
-    // else 分支同样重要:从一个带目标的会话 /resume 到不带目标的会话时,
-    // 旧目标必须解除,否则它会悄悄接管新会话的轮次。
-    if (state.goal?.condition) goal.restore(state.goal.condition);
-    else goal.clear();
-    // 两轴权限不在此处应用:CLI 启动路径已把它并进配置层;
-    // TUI 内 /resume 则由 resumeSession 显式调用 setPermissions。
+  const runCommand = async (name: string, args: string): Promise<void> => {
+    const entry = extensionCommands.get(name);
+    if (!entry) throw new Error(`Unknown command: ${name}`);
+    await entry.command.handler(args);
   };
 
   if (options.resume) {
     agent.setHistory([...options.resume.messages]);
-    restoreState(options.resume.state);
+    restoreChangedFiles(options.resume.state.changedFiles);
   }
+  // 扩展从会话记录恢复自己的状态(如 /goal 的条件)。在历史与状态换好之后。
+  await hooks.sessionStart({ reason: 'startup' });
 
   const switchProvider = (change: {
     provider?: string;
@@ -777,40 +799,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
 
   /**
-   * 权限变化的唯一落点。`promoted` 只有 exit_plan 从 read-only+never 提升
-   * 上来时为真,它决定这套组合要不要写进会话记录(见 snapshotState)。
-   */
-  const applyPermissions = (
-    permissions: Permissions,
-    opts: { plan: boolean; promoted: boolean },
-  ): void => {
-    // 进入计划模式时记下来路,批准后按它还原。
-    if (opts.plan && !config.plan) {
-      planReturn = planReturnFor({ sandbox: config.sandbox, approval: config.approval });
-    }
-    permsPromoted = opts.promoted;
-    config.sandbox = permissions.sandbox;
-    config.approval = permissions.approval;
-    config.plan = opts.plan;
-    gate.setPermissions(permissions);
-    gate.setPlanMode(opts.plan);
-    agent.updateSystemPrompt(
-      buildSystemPrompt(
-        env,
-        { permissions, plan: opts.plan, webSearch: webSearchAvailable, viewImage: viewImageFor(provider) },
-        config.systemPromptAppend,
-      ),
-    );
-    persistState();
-    // 权限也可能由 exit_plan 在工具侧切换,渲染层只能靠这条事件跟上。
-    bus.emit({ type: 'permission-change', permissions, plan: opts.plan });
-  };
-
-  /** 用户显式切换两轴:一律留存(写会话记录;项目配置由 UI 侧的 savePermissions 落盘),并退出计划模式。 */
-  const setPermissions = (permissions: Permissions): void =>
-    applyPermissions(permissions, { plan: false, promoted: false });
-
-  /**
    * 以用户身份调用技能(`/技能名`)。fork 技能不展开正文,只给模型一行英文
    * 指令让它调 skill 工具——正文全程不进主上下文,进度/落盘/中断都走 task
    * 的现成轨道;pendingUserSkills 在轮内放行 disable-model-invocation。
@@ -820,16 +808,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     args: string,
     options?: { display?: string },
   ): Promise<void> => {
-    // 上一轮被 esc 中断后确认队列处于作废态,轮前的 allowed-tools 确认会被
-    // 静默自动拒(askSerialized 的 pendingCancelled 分支)。先显式复位。
-    gate.resumePending();
     await skillManager.list().catch(() => {});
     syncSkillTool();
     const meta = skillManager.find(name);
     if (!meta || !meta.userInvocable) {
       throw new Error(`Unknown skill: ${name}`);
     }
-    await activateSkill(meta);
     const display = options?.display ?? `/${name}${args ? ` ${args}` : ''}`;
 
     if (meta.context === 'fork') {
@@ -848,30 +832,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
     const body = await readSkillBody(meta);
     await agent.run(wrapSkillPrompt(display, substituteArgs(body, args)), { display });
-  };
-
-  /**
-   * `/review` 的执行侧:收集 git 摘要 → 失败以 reason 返回(英文 git 错误串
-   * 不直接怼进时间线,与 runSkill 的差异之一)→ 组稿提示词跑一轮。与
-   * runSkill 的另一点差异:不需要 gate.resumePending()(评审没有轮前的
-   * allowed-tools 确认,turn-start 的总线监听已统一复位)。display 缺省按
-   * `/review <范围>` 重组——picker 路径没有"用户原文"可用,直打路径与原文
-   * 等价。曾与 /simplify 共用一个参数化执行体,两阶段化后各只剩一份差异,
-   * 单调用方的包装层即拆除。
-   */
-  const startReview = async (
-    scopeArg: string,
-    options?: { display?: string },
-  ): Promise<ReviewStartResult> => {
-    const scope = parseReviewArg(scopeArg);
-    if (!scope) return { ok: false, reason: 'bad-arg' };
-    const collected = await collectReviewSummary(root, scope);
-    if (!collected.ok) return collected;
-    const display = options?.display ?? `/review ${scopeArg}`;
-    await agent.run(wrapSkillPrompt(display, buildReviewPrompt(scope, collected.summary)), {
-      display,
-    });
-    return { ok: true };
   };
 
   /**
@@ -909,19 +869,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     return { ok: true };
   };
 
-  /**
-   * 进入/退出计划模式,两轴始终不动。
-   *
-   * 退出 = 未批准就放弃,所以绝不能走 planReturn.perms:从 read-only+never
-   * 进来时那已经是被提升过的 ask(提升只有"用户真的批准了方案"才配得上),
-   * 放弃却拿到可写权限、还会被记进会话文件。进入时两轴原样保留,当前值
-   * 本来就是进入前的组合,原样传回即可。
-   */
-  const setPlan = (active: boolean): void => {
-    const current: Permissions = { sandbox: config.sandbox, approval: config.approval };
-    applyPermissions(current, { plan: active, promoted: false });
-  };
-
   return {
     root,
     config,
@@ -933,47 +880,34 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
     agent,
     bus,
-    gate,
-    todos,
-    goal,
-    lsp,
-    mcpStatuses: mcp.statuses,
-    mcpStatusChanged: (listener: () => void) => {
-      mcpListeners.add(listener);
-      return () => {
-        mcpListeners.delete(listener);
-      };
-    },
+    hooks,
+    startupNotices,
     get store() {
       return store;
     },
     newSession: async () => {
       store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
       agent.clear();
-      todos.set([]);
-      goal.clear();
       changedFiles.clear();
       resetSkillActivation();
       persistState();
+      await hooks.sessionStart({ reason: 'new' });
       return store;
     },
     resumeSession: async (idOrPrefix: string) => {
       const id = await SessionStore.resolveId(idOrPrefix, { root });
       const opened = await SessionStore.open(id);
       store = opened;
-      // 与 setSessionRules 的替换语义同理:上一段对话激活的技能(扩根、
-      // allowed-tools 确认)不能漂进另一段对话。
+      // 上一段对话点名的技能不能漂进另一段对话。
       resetSkillActivation();
       // 换的是另一段对话:累计用量一并归零(见 setHistory 的注释)。
       agent.setHistory([...opened.messages], { resetSpend: true });
-      restoreState(opened.state);
-      if (opened.state.sandbox && opened.state.approval) {
-        setPermissions({ sandbox: opened.state.sandbox, approval: opened.state.approval });
-      }
+      restoreChangedFiles(opened.state.changedFiles);
       // 刻意不切回会话记录的 provider/model:恢复的是对话内容,模型始终
       // 沿用当前正在用的那一个。反过来把 meta 更新成当前模型,列表里那一行
       // 才不会继续宣称一个这段对话往后都不会再用的模型。
       opened.setModel(provider.id, provider.model);
+      await hooks.sessionStart({ reason: 'resume' });
       return opened;
     },
     forkSession: async () => {
@@ -984,6 +918,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 落后于内存(saveState 静默失败过),分叉的 lastStateJson 也初始化成了
       // 同一份旧值,脏检查会一直压住重写。这里按当前真实状态补一次。
       persistState();
+      await hooks.sessionStart({ reason: 'fork' });
       return store;
     },
     archiveSession: async (id, archived) => {
@@ -1012,7 +947,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       const files = await listWorkspaceFiles(root, limit);
       return { files, truncated: files.length >= limit };
     },
-    readFile: (filePath) => readWorkspaceFile(root, filePath, config.permissions.denyPath),
+    readFile: (filePath) => readWorkspaceFile(root, filePath),
     get changedFiles() {
       return changedFilesList();
     },
@@ -1066,8 +1001,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       delete config.providers[id];
       await deleteProviderEntry(id);
     },
-    setPermissions,
-    setPlan,
     setReasoningEffort: (level: ReasoningEffort) => {
       // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
       // streamText 生效;同时写回内存配置,使 /models、/provider 重新 resolve
@@ -1101,32 +1034,31 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     },
     listModels: () => listModels(provider),
     doctor: async ({ offline }) => {
-      // 等连接落定再体检:mcp.statuses 是逐个填的,半满的数组会被 doctor
-      // 当成权威(没落地的 server 一律报 fail · "?"),还会把退出码带成 1。
-      await mcpReady;
+      // 会话内已经拉起来的子进程直接采信状态,doctor 不再自己连/拉一份。两份
+      // 都由扩展发布(publishRuntime),扩展没装时为 undefined——那不是"一个
+      // 都没起来",doctor 会自己去探测。MCP 那份是**连接收尾后**的数组:半满
+      // 的会被当成权威(没落地的 server 一律报 fail · "?")还把退出码带成 1,
+      // 所以扩展给的是个 promise,这里一并 await。
+      const [mcpStatuses, lspStatuses] = await Promise.all([
+        runtimeOf<McpStatus[]>(MCP_RUNTIME_KEY),
+        runtimeOf<LspRuntimeStatus[]>(LSP_RUNTIME_KEY),
+      ]);
       return runDoctor({
         root,
         config,
-        mcpStatuses: mcp.statuses,
-        // 会话内已拉起的服务器直接采信状态;没拉起过的由 doctor 做一次真握手
-        // 探测(探完即杀)。
-        lspStatuses: lsp?.statuses(),
+        mcpStatuses,
+        // 没人发布过 MCP 快照 = mcp 扩展没装(`--no-mcp`)。LSP 那边不需要
+        // 这一条:它的 getter 装了也可能返回 undefined(还没触发过),两种
+        // 情形对 doctor 都是"去探一下"。
+        mcpOff: !extensionRuntime.has(MCP_RUNTIME_KEY),
+        lspStatuses,
         offline,
       });
     },
     refreshEnvironment: async () => {
       env = await gatherEnvironment(root);
       agent.updateSystemPrompt(
-        buildSystemPrompt(
-          env,
-          {
-            permissions: { sandbox: config.sandbox, approval: config.approval },
-            plan: config.plan,
-            webSearch: webSearchAvailable,
-            viewImage: viewImageFor(provider),
-          },
-          config.systemPromptAppend,
-        ),
+        buildSystemPrompt(env, { viewImage: viewImageFor(provider) }, config.systemPromptAppend),
       );
     },
     get skills() {
@@ -1139,18 +1071,30 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return skillManager.commandInfos();
     },
     runSkill,
-    reviewTargets: () => collectReviewTargets(root),
-    reviewCommits: () => collectReviewCommits(root),
-    startReview,
-    startSimplify,
-    dispose: async () => {
-      goal.dispose();
-      // 置位在前 + 等连接落定:关会话时连接可能还在路上(每 server 最坏 15s),
-      // 不等的话 mcp.connections 还是空的,那批 stdio 子进程就成了孤儿——
-      // mcpReady 的 disposed 分支负责关掉它们,但它得先跑完。
-      mcpDisposed = true;
-      await mcpReady; // 永不 reject
-      await Promise.all([...mcp.connections.map((c) => c.close()), lsp?.dispose()]);
+    get extensionCommands() {
+      return [...extensionCommands.values()].map((entry) => entry.info);
     },
+    get extensionStatus() {
+      return [...extensionStatus.values()];
+    },
+    get extensionState() {
+      return Object.fromEntries(extensionState);
+    },
+    commandOptions: async (name: string, path?: string[]) => {
+      const entry = extensionCommands.get(name);
+      return (await entry?.command.options?.(path ?? [])) ?? [];
+    },
+    extensionsChanged: (listener: () => void) => {
+      extensionListeners.add(listener);
+      return () => {
+        extensionListeners.delete(listener);
+      };
+    },
+    runCommand,
+    reviewTargets: () => collectReviewTargets(root),
+    startSimplify,
+    // 子进程(MCP 的 stdio server、LSP 的语言服务器)由各自的扩展在
+    // session_shutdown 里关,包括「连接还在路上时会话就关了」的孤儿竞态。
+    dispose: () => hooks.sessionShutdown(),
   };
 }

@@ -4,7 +4,7 @@ import { Header } from '../../src/ui/Header.js';
 import { Footer } from '../../src/ui/Footer.js';
 import { TodoPanel } from '../../src/ui/TodoPanel.js';
 import { IdleRule, StatusLine } from '../../src/ui/StatusLine.js';
-import { GoalLine } from '../../src/ui/GoalLine.js';
+import { ExtensionStatusLine } from '../../src/ui/ExtensionStatusLine.js';
 import { renderPixelLogo } from '../../src/ui/logo.js';
 import { APP_NAME } from '../../src/config/paths.js';
 import { packageVersion } from '../../src/config/version.js';
@@ -18,7 +18,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
           providerLabel="DeepSeek"
           model="deepseek-chat"
           root="/tmp/proj"
-          mode="ask"
           columns={60}
         />
       ),
@@ -43,7 +42,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
           providerLabel="DeepSeek"
           model="deepseek-chat"
           root="/tmp/proj"
-          mode="ask"
           columns={40}
         />
       ),
@@ -64,7 +62,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
           providerLabel="DeepSeek"
           model="deepseek-chat"
           root="/tmp/proj"
-          mode="ask"
           columns={46}
         />
       ),
@@ -85,7 +82,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
         cumulativeTokens={12345}
         todos={[]}
         model="kimi-k3"
-        mode="ask"
         root="/tmp/proj"
         think="auto"
         segments={['model', 'context']}
@@ -100,7 +96,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     await ui.destroy();
   });
 
-  it('Footer:用量段靠右对齐,档位是无底色的着色文本', async () => {
+  it('Footer:用量段靠右对齐', async () => {
     const columns = 70;
     const ui = await renderUi(
       () => <Footer
@@ -109,10 +105,9 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
         cumulativeTokens={38200}
         todos={[]}
         model="kimi-k3"
-        mode="plan"
         root="/tmp/proj"
         think="auto"
-        segments={['mode', 'model', 'context']}
+        segments={['model', 'context']}
         columns={columns}
       />,
       { width: columns, height: 3 },
@@ -122,8 +117,7 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     expect(line.length).toBe(columns - 1);
     expect(line).toMatch(/▰▰▱▱▱▱▱▱ 23%$/);
     expect(line).toMatch(/ {2,}▰/);
-    // 档位是纯文本段,与后一段之间用常规 ` · ` 分隔,行首无徽章内边距。
-    expect(line).toMatch(/^plan · kimi-k3/);
+    expect(line).toMatch(/^kimi-k3/);
     await ui.destroy();
   });
 
@@ -135,7 +129,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
         cumulativeTokens={38200}
         todos={[]}
         model="kimi-k3"
-        mode="ask"
         root="/tmp/proj"
         think="auto"
         segments={['context']}
@@ -159,10 +152,9 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
         cumulativeTokens={10000}
         todos={[]}
         model="kimi-k3"
-        mode="full-access"
         root="/private/tmp/claude-501/very/deep/scratchpad/mcdemo"
         think="max"
-        segments={['mode', 'model', 'cwd', 'think', 'context', 'total']}
+        segments={['model', 'cwd', 'think', 'context', 'total']}
         columns={columns}
       />,
       { width: columns, height: 6 },
@@ -171,8 +163,6 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(columns);
     const body = lines.filter(Boolean).join('\n');
     expect(body).not.toMatch(/\S·|·\S/);
-    // 权限档位在任何宽度下都不能被丢掉
-    expect(body).toContain('full-access');
     await ui.destroy();
   });
 
@@ -187,10 +177,9 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
           cumulativeTokens={10000}
           todos={[{ content: '一个很长很长的任务标题需要被截断', status: 'in_progress' }]}
           model="kimi-k3"
-          mode="full-access"
-          root="/private/tmp/claude-501/very/deep/scratchpad/mcdemo"
+            root="/private/tmp/claude-501/very/deep/scratchpad/mcdemo"
           think="max"
-          segments={['mode', 'model', 'cwd', 'think', 'context', 'total', 'todos']}
+          segments={['model', 'cwd', 'think', 'context', 'total', 'todos']}
           columns={columns}
           notice="再按一次 ctrl+c 退出"
         />,
@@ -313,25 +302,16 @@ describe('叶子组件在 OpenTUI 下渲染', () => {
     }
   });
 
-  it('GoalLine:靠右对齐的目标进度行', async () => {
-    const ui = await renderUi(
-      () => <GoalLine
-        snapshot={() => ({
-          condition: '让测试全绿',
-          turns: 3,
-          maxTurns: 10,
-          elapsedMs: 64000,
-          tokens: 0,
-          lastReason: '',
-          restored: false,
-        })}
-        columns={50}
-      />,
-      { width: 50, height: 3 },
-    );
+  it('ExtensionStatusLine:靠右对齐的扩展状态行,带 since 时追加已用时', async () => {
+    const entries = [{ id: 'goal', text: '◎ goal 3/10', since: Date.now() - 64_000 }];
+    const ui = await renderUi(() => <ExtensionStatusLine entries={() => entries} columns={50} />, {
+      width: 50,
+      height: 3,
+    });
     const frame = ui.frame();
     expect(frame).toContain('◎');
     expect(frame).toContain('3/10');
+    expect(frame).toContain('1m04s');
     // 靠右:行首应有前导空白(justifyContent flex-end 生效)
     const line = ui
       .frame()

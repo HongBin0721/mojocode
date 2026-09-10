@@ -69,13 +69,10 @@ describe('expandAtReferences / unwrapAttachments', () => {
     expect(result.skipped).toEqual([{ path: 'missing.ts', reason: 'not found' }]);
   });
 
-  it('sandbox 拒绝的路径(.env、越界)进 skipped', async () => {
+  it('没有路径围栏:.env 照常附上,工作区外不存在的文件报 not found', async () => {
     const result = await expandAtReferences('看 @.env 和 @../outside.ts', { root });
-    expect(result.attached).toEqual([]);
-    expect(result.skipped.map((s) => s.reason)).toEqual([
-      'blocked by workspace rules',
-      'blocked by workspace rules',
-    ]);
+    expect(result.attached).toEqual(['.env']);
+    expect(result.skipped).toEqual([{ path: '../outside.ts', reason: 'not found' }]);
   });
 
   it('目录、二进制、超限文件各有原因', async () => {
@@ -120,14 +117,11 @@ describe('expandAtReferences / unwrapAttachments', () => {
   });
 
   it('非 not found 的原因一律提示,哪怕没有引用成功', async () => {
-    const result = await expandAtReferences('@.env', { root });
-    expect(warnableSkips(result)).toEqual([
-      { path: '.env', reason: 'blocked by workspace rules' },
-    ]);
+    const result = await expandAtReferences('@sub', { root });
+    expect(warnableSkips(result)).toEqual([{ path: 'sub', reason: 'is a directory' }]);
   });
 
-  // absolutePath 是 sandbox 的 realpath 结果(macOS 的 /var → /private/var)。
-  const realImg = async (): Promise<string> => fs.realpath(path.join(root, 'img.png'));
+  const realImg = async (): Promise<string> => path.join(root, 'img.png');
 
   it('@图片附成 images,不进文本信封,expanded 与原文相等', async () => {
     const text = '看这张图 @img.png';

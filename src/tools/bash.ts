@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { execa } from 'execa';
 import path from 'node:path';
-import { resolveInsideWorkspace } from '../permissions/sandbox.js';
+import { resolvePath } from './paths.js';
 import { truncate, type ToolContext } from './context.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -34,10 +34,8 @@ export function createBashTool(ctx: ToolContext) {
         .describe(`Timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}).`),
     }),
     execute: async ({ command, cwd, timeoutMs }, { abortSignal, toolCallId }) => {
-      const workDir = cwd ? (await resolveInsideWorkspace(cwd, { root: ctx.root, denyPath: ctx.rules.denyPath })).absolute : ctx.root;
+      const workDir = cwd ? resolvePath(cwd, ctx.root).absolute : ctx.root;
       const label = path.relative(ctx.root, workDir) || '.';
-
-      await ctx.gate.checkBash(command, label, { subagent: ctx.subagent });
 
       const started = Date.now();
       const subprocess = execa(command, {

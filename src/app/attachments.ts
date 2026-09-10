@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { resolveInsideWorkspace, SandboxError } from '../permissions/sandbox.js';
+import { resolvePath } from '../tools/paths.js';
 import { looksBinary } from '../tools/files.js';
 import { downscaleImage } from './image.js';
 
@@ -87,13 +87,13 @@ export interface ExpandResult {
 }
 
 /**
- * 展开文本中的 @文件引用。每个引用独立失败(不存在/目录/二进制/超限/
- * 被 sandbox 拒绝),只进 skipped,绝不抛错;全部失败时不加信封,
+ * 展开文本中的 @文件引用。每个引用独立失败(不存在/目录/二进制/超限),
+ * 只进 skipped,绝不抛错;全部失败时不加信封,
  * 但 skipped 照常返回供 UI 提醒。
  */
 export async function expandAtReferences(
   text: string,
-  options: { root: string; denyPath?: string[]; imageMode?: 'inline' | 'reference' },
+  options: { root: string; imageMode?: 'inline' | 'reference' },
 ): Promise<ExpandResult> {
   const attached: string[] = [];
   const skipped: { path: string; reason: string }[] = [];
@@ -104,7 +104,7 @@ export async function expandAtReferences(
 
   for (const ref of extractAtPaths(text)) {
     try {
-      const resolved = await resolveInsideWorkspace(ref, options);
+      const resolved = resolvePath(ref, options.root);
       const stat = await fs.stat(resolved.absolute);
       if (stat.isDirectory()) {
         skipped.push({ path: ref, reason: 'is a directory' });
@@ -167,9 +167,7 @@ export async function expandAtReferences(
       attached.push(resolved.relative);
       blocks.push(`<file path="${resolved.relative}">\n${buffer.toString('utf8')}\n</file>`);
     } catch (err) {
-      if (err instanceof SandboxError) {
-        skipped.push({ path: ref, reason: 'blocked by workspace rules' });
-      } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         skipped.push({ path: ref, reason: NOT_FOUND });
       } else {
         skipped.push({ path: ref, reason: (err as Error).message });

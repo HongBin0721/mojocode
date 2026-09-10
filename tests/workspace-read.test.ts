@@ -33,16 +33,8 @@ describe('readWorkspaceFile', () => {
     expect(result).toMatchObject({ ok: true, path: 'ok.ts', content: 'export const x = 1;\n' });
   });
 
-  it('.env 命中 DEFAULT_DENY → denied', async () => {
-    expect((await readWorkspaceFile(root, '.env')).reason).toBe('denied');
-  });
-
   it('软链逃逸出工作区 → denied', async () => {
     expect((await readWorkspaceFile(root, 'escape.txt')).reason).toBe('denied');
-  });
-
-  it('配置的 denyPath 同样生效', async () => {
-    expect((await readWorkspaceFile(root, 'ok.ts', ['ok.ts'])).reason).toBe('denied');
   });
 
   it('二进制 → binary;目录 → is-directory;缺失 → not-found;超大 → too-large', async () => {

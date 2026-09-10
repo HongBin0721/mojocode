@@ -14,9 +14,9 @@ import {
   truncateWidth,
   WIDTH_SAFETY,
 } from './theme.js';
-import { extractDiff, extractPlan, extractTodos } from './timeline-data.js';
+import { extractDiff, extractTodos } from './timeline-data.js';
 import type { TimelineItem } from './types.js';
-import type { TodoItem } from '../tools/todo.js';
+import type { TodoItem } from './timeline-data.js';
 import { t } from '../i18n/index.js';
 
 /**
@@ -153,8 +153,6 @@ export function TimelineEntry(props: {
           providerLabel={item.providerLabel}
           model={item.model}
           root={item.root}
-          mode={item.mode}
-          mcpSummary={item.mcpSummary}
           columns={props.columns}
         />
       );
@@ -173,7 +171,6 @@ function ToolEntry(props: {
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
   const todos = extractTodos(item);
-  const plan = extractPlan(item);
 
   return (
     <Box marginTop={1} flexDirection="column">
@@ -184,15 +181,6 @@ function ToolEntry(props: {
       </Box>
       {todos ? (
         <TodoChecklist todos={todos} />
-      ) : plan ? (
-        // 方案完整展开,后面再跟一行批准结果。渲染结果按条目缓存(见文件头)。
-        <Box paddingLeft={2} flexDirection="column">
-          <Text>{renderMarkdownCached(`${item.key}:plan`, plan, props.columns - 2 - WIDTH_SAFETY)}</Text>
-          <Box>
-            <Text color={theme.dim}>{glyphs.branch}  </Text>
-            <Text color={item.isError ? theme.error : theme.dim}>{item.summary}</Text>
-          </Box>
-        </Box>
       ) : (
         <Box paddingLeft={2}>
           <Text color={theme.dim}>{glyphs.branch}  </Text>

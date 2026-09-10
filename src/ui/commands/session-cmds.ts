@@ -2,8 +2,6 @@ import { t } from '../../i18n/index.js';
 import { INIT_PROMPT } from '../../agent/init.js';
 import { formatDoctor } from '../../app/doctor.js';
 import { ProviderSwitchError } from '../../app/bootstrap.js';
-import { canEverWrite } from '../../config/schema.js';
-import { glyphs } from '../theme.js';
 import { formatCommandLabel } from '../Input.js';
 import { buildResumeItems, sessionBanner } from '../timeline-controller.js';
 import { buildCommands } from './registry.js';
@@ -50,17 +48,6 @@ export const newSession: CommandHandler = async (ctx) => {
 // (turn-start 的 display),完整指令进历史喂模型。轮结束后刷新
 // 环境信息,让刚生成的 AGENTS.md 立刻进入系统提示词。
 export const init: CommandHandler = (ctx) => {
-  // 写入完全不可能的组合(plan、read-only+never)下这一轮注定写不出
-  // AGENTS.md,提前拦下,别白烧一轮 token。read-only+on-request 放行:
-  // 写入可以逐次升级确认。
-  if (!canEverWrite(ctx.perms(), ctx.planActive())) {
-    ctx.push({
-      kind: 'notice',
-      level: 'warn',
-      message: t('notice.initReadonly', { mode: ctx.modeLabel() }),
-    });
-    return;
-  }
   ctx.setRunning(true);
   void ctx.session.agent
     .run(INIT_PROMPT, { display: '/init' })
@@ -128,15 +115,11 @@ export const resume: CommandHandler = async (ctx, arg) => {
       return;
     }
   }
-  // 横幅取 session 值而非 state 镜像:resumeSession 可能刚改写了权限,
-  // 镜像要到下面的 set 之后才追上。provider/model 不会被恢复改写
-  //(始终沿用当前模型),但旧版 server 仍可能切,照样同步一遍。
+  // provider/model 不会被恢复改写(始终沿用当前模型),但旧版 server 仍可能
+  // 切,照样同步一遍。
   ctx.setItems([sessionBanner(session), ...buildResumeItems(session)]);
-  // 同步 UI 状态:权限可能被恢复改写;上下文用量取恢复历史的估算
-  // (lastInputTokens 已随 setHistory 作废),下一轮 step-end 会带回
-  // 真实值。todos 由订阅自动更新。
-  ctx.setPerms({ sandbox: session.config.sandbox, approval: session.config.approval });
-  ctx.setPlanActive(session.config.plan);
+  // 同步 UI 状态:上下文用量取恢复历史的估算(lastInputTokens 已随
+  // setHistory 作废),下一轮 step-end 会带回真实值。todos 由订阅自动更新。
   ctx.setProviderLabel(session.provider.label);
   ctx.setModel(session.provider.model);
   ctx.setThink(session.provider.reasoningEffort);
@@ -148,23 +131,6 @@ export const resume: CommandHandler = async (ctx, arg) => {
       message: t('notice.resumeProviderFailed', { message: providerWarn }),
     });
   }
-};
-
-export const mcp: CommandHandler = (ctx) => {
-  ctx.push({
-    kind: 'notice',
-    level: 'info',
-    message:
-      ctx.session.mcpStatuses.length === 0
-        ? t('notice.mcpNone')
-        : ctx.session.mcpStatuses
-            .map((s) =>
-              s.connected
-                ? `  ${glyphs.done} ${s.name} — ${t('notice.mcpTools', { n: s.toolCount })}`
-                : `  ${glyphs.failed} ${s.name} — ${s.error ?? '?'}`,
-            )
-            .join('\n'),
-  });
 };
 
 // 强制重扫技能目录并列出(名字、参数提示、描述)。远程模式下这也是

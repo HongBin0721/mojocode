@@ -35,10 +35,10 @@ vi.mock('../../src/app/attachments.js', () => ({
 
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { EventBus } from '../../src/core/events.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 async function setup(options?: { isRunning?: boolean }) {
   const bus = new EventBus();
@@ -80,12 +80,9 @@ async function setup(options?: { isRunning?: boolean }) {
       compact: async () => {},
     },
     bus,
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(run),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: { id: 'test-session', messages: [] },
     newSession: async () => {
       newSessions++;

@@ -17,7 +17,6 @@ const base: TaskSummary = {
   messageCount: 4,
   status: 'connected',
   isRunning: false,
-  hasPendingPermission: false,
   unseen: false,
 };
 

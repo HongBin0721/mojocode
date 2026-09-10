@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelMessage } from 'ai';
-import { parseVerdict, renderTranscript } from '../src/agent/goal.js';
+import { parseVerdict, renderTranscript } from '../src/extensions/goal/evaluate.js';
 
 /**
  * 评估器回复的解析,以及喂给它的抄本渲染。两者都是纯函数,与循环分开测:

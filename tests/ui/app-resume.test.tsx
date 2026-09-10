@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 
 import { App } from '../../src/ui/App.js';
-import { stubGoal } from '../support/goal.js';
 import { RewindPicker } from '../../src/ui/RewindPicker.js';
 import { EventBus } from '../../src/core/events.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import type { ModelMessage } from 'ai';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 // 注:旧版还有一组「终端 resize 触发清屏重放」测试(断言 \x1b[2J\x1b[3J\x1b[H
 // 清屏序列)。全屏 OpenTUI 渲染下该机制已整体移除——渲染器每帧整屏重画,
@@ -31,12 +31,9 @@ function makeSession(messages: ModelMessage[], displayMessages?: ModelMessage[])
       compact: async () => {},
     },
     bus: new EventBus(),
-    gate: { setAsker: () => {} },
-    todos: { get: () => [], subscribe: () => () => {} },
-    goal: stubGoal(async () => {}),
-    mcpStatuses: [],
     skills: [],
     skillsChanged: () => () => {},
+    ...stubExtensions(),
     store: {
       id: 'resumed-session-id',
       messages,

@@ -13,7 +13,6 @@ const LOCALE_LABELS: Record<Locale, string> = {
 
 /** 状态栏各信息段的说明。穷尽 Record:新增段时编译期就会提醒补文案。 */
 const SEGMENT_DESCRIPTIONS: Record<StatusSegment, MessageKey> = {
-  mode: 'statusopt.mode',
   model: 'statusopt.model',
   cwd: 'statusopt.cwd',
   think: 'statusopt.think',

@@ -1,7 +1,6 @@
 import fg from 'fast-glob';
 import { execa } from 'execa';
 import { DEFAULT_IGNORE } from '../tools/search.js';
-import { matchGlob } from '../permissions/sandbox.js';
 
 /**
  * @ 文件引用弹出菜单的数据源:列举工作区文件 + 模糊过滤。
@@ -11,6 +10,45 @@ import { matchGlob } from '../permissions/sandbox.js';
  */
 
 const DEFAULT_LIMIT = 5000;
+
+/**
+ * 极简 glob 匹配器:支持 `**`、`*` 和 `?`。对忽略规则来说足够了。
+ * 只给下面的 `isIgnored` 兜底用(见那里),不对外。
+ */
+function matchGlob(pattern: string, value: string): boolean {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regex = escaped
+    .replace(/\*\*\//g, ' SLASHSTAR ')
+    .replace(/\*\*/g, ' GLOBSTAR ')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/ SLASHSTAR /g, '(?:.*/)?')
+    .replace(/ GLOBSTAR /g, '.*');
+  return new RegExp(`^${regex}$`).test(value);
+}
+
+/**
+ * `DEFAULT_IGNORE` 现在**整张表**都是 `**\/<dir>/**` 形状,也就是"路径里
+ * 任何一段是这个目录名"。拆成一个目录名集合,判定就是逐段查表——而逐条
+ * 跑 matchGlob 等于给每个文件现编 9 个正则,`git ls-files` 在大仓库里一次
+ * 就是几万行。形状不符的规则(将来有人加了别的)照旧走通用引擎,不静默漏掉。
+ */
+const IGNORED_DIRS = new Set<string>();
+const IGNORE_PATTERNS: string[] = [];
+for (const rule of DEFAULT_IGNORE) {
+  const dir = /^\*\*\/([^*?/]+)\/\*\*$/.exec(rule)?.[1];
+  if (dir) IGNORED_DIRS.add(dir);
+  else IGNORE_PATTERNS.push(rule);
+}
+
+function isIgnored(file: string): boolean {
+  const segments = file.split('/');
+  // 末段是文件名;`**/x/**` 要求 x 是**目录**,所以只看它前面的段。
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if (IGNORED_DIRS.has(segments[i]!)) return true;
+  }
+  return IGNORE_PATTERNS.some((rule) => matchGlob(rule, file));
+}
 
 /**
  * 列举工作区文件(相对 posix 路径)。优先 `git ls-files`(尊重 .gitignore,
@@ -32,7 +70,7 @@ export async function listWorkspaceFiles(root: string, limit = DEFAULT_LIMIT): P
     files = result.stdout
       .split('\n')
       .filter(Boolean)
-      .filter((file) => !DEFAULT_IGNORE.some((rule) => matchGlob(rule, file)));
+      .filter((file) => !isIgnored(file));
   } catch {
     files = await fg('**/*', {
       cwd: root,

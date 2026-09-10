@@ -21,7 +21,7 @@ export interface SubmitGate {
   /** 只放开 busy 门(不动代数)。 */
   clearPending(): void;
   /**
-   * 罐装命令启动窗口:占门 + 标记罐装。见 review-cmds 里 launchCanned 的
+   * 罐装命令启动窗口:占门 + 标记罐装。见 simplify-cmds 里 launchSimplify 的
    * 注释——它与 @ 展开窗口不同,没有作废机制,esc 不清它、handleSubmit 拒绝它。
    */
   beginCanned(): void;

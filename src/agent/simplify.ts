@@ -256,8 +256,7 @@ ${sections.join('\n\n')}
   cleanup could plausibly change behavior, skip it and say why.
 - Edit only code this change touches; keep every edit minimal.
 - Apply fixes by editing the working tree and leave them uncommitted for the
-  user to review: no git commit, stash, checkout, rebase or branch, and do
-  NOT call exit_plan.
+  user to review: no git commit, stash, checkout, rebase or branch.
 - If AGENTS.md or the README lists a typecheck or test command, run it on
   what you touched and report the outcome.
 

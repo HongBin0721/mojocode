@@ -8,10 +8,10 @@ import {
   collectReviewTargets,
   collectReviewCommits,
   collectReviewSummary,
-  buildReviewPrompt,
   MAX_STATUS_LINES,
   type ReviewSummary,
 } from '../src/agent/review.js';
+import { buildReviewPrompt } from '../src/extensions/review/prompt.js';
 
 describe('parseReviewArg', () => {
   it('识别四个范围', () => {
@@ -110,7 +110,6 @@ describe('buildReviewPrompt', () => {
         const prompt = buildReviewPrompt(scope, summary);
         expect(prompt).toContain('read-only review');
         expect(prompt).toContain('Do NOT modify');
-        expect(prompt).toContain('exit_plan');
         expect(prompt).toContain('[high|medium|low]');
       }
     }

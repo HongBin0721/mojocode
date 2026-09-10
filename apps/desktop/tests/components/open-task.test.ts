@@ -23,7 +23,6 @@ const task = (over: Partial<TaskSummary>): TaskSummary => ({
   messageCount: 2,
   status: 'dormant',
   isRunning: false,
-  hasPendingPermission: false,
   unseen: false,
   ...over,
 });
@@ -50,7 +49,7 @@ describe('openTask', () => {
     // 静默无事,既不复活也不推回放,而桶里的 connection 还是 connected。
     useDesktopStore.setState({
       tasks: [task({ id: 's-2', status: 'dormant' })],
-      runtimes: { 's-2': { connection: 'connected', snapshot: undefined, permission: undefined, unread: false } },
+      runtimes: { 's-2': { connection: 'connected', snapshot: undefined, unread: false } },
       focusedTaskId: 's-1',
     });
 
@@ -66,7 +65,7 @@ describe('openTask', () => {
   it('行状态 connected 且有 runtime:走快路径 focusTask', () => {
     useDesktopStore.setState({
       tasks: [task({ id: 's-2', status: 'connected' })],
-      runtimes: { 's-2': { connection: 'connected', snapshot: undefined, permission: undefined, unread: false } },
+      runtimes: { 's-2': { connection: 'connected', snapshot: undefined, unread: false } },
       focusedTaskId: 's-1',
     });
 
@@ -84,7 +83,7 @@ describe('openTask', () => {
     );
     useDesktopStore.setState({
       tasks: [task({ id: 's-2' }), task({ id: 's-3', status: 'connected' })],
-      runtimes: { 's-1': { connection: 'connected', snapshot: undefined, permission: undefined, unread: false } },
+      runtimes: { 's-1': { connection: 'connected', snapshot: undefined, unread: false } },
       focusedTaskId: 's-1',
     });
 
@@ -103,7 +102,7 @@ describe('openTask', () => {
     openTaskRpc.mockRejectedValue(new Error('spawn 失败'));
     useDesktopStore.setState({
       tasks: [task({ id: 's-2' })],
-      runtimes: { 's-1': { connection: 'connected', snapshot: undefined, permission: undefined, unread: false } },
+      runtimes: { 's-1': { connection: 'connected', snapshot: undefined, unread: false } },
       focusedTaskId: 's-1',
     });
 

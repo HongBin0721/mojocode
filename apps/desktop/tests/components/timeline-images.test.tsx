@@ -21,7 +21,7 @@ setLocale('zh-CN');
 const IMG = { mediaType: 'image/png', data: 'iVBORw0KGgo=', filename: 'clipboard-1.png' };
 
 const ctx: TimelineCtx = {
-  getConfig: () => ({ plan: false }),
+  isPlanMode: () => false,
 } as unknown as TimelineCtx;
 
 describe('UserEntry 附图渲染', () => {

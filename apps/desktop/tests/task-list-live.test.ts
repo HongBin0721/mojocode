@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '@core/events';
 import { connectRemote } from '@core/remote';
-import { startServer, createPermissionBroker } from '../../../src/server/serve.js';
+import { startServer } from '../../../src/server/serve.js';
 import { createTaskManager, type TaskSummaryMeta } from '../src/main/task-manager.js';
 import type { ServerRuntime } from '../src/main/resolve-runtime.js';
 import { IPC_CHANNELS } from '../src/shared/ipc.js';
@@ -39,7 +39,6 @@ function fakeServerSession() {
     },
     gate: { setAsker: vi.fn() },
     todos: { get: () => [], subscribe: () => () => {} },
-    goal: { active: false, busy: false, state: undefined, snapshot: () => undefined },
     mcpStatuses: [],
     store: {
       id: 'session-0001',
@@ -52,6 +51,9 @@ function fakeServerSession() {
     },
     skills: [],
     skillsChanged: () => () => {},
+    extensionCommands: [],
+    extensionStatus: [],
+    extensionsChanged: () => () => {},
     mcpStatusChanged: () => () => {},
     changedFiles: [],
     dispose: vi.fn(async () => {}),
@@ -89,8 +91,7 @@ afterEach(async () => {
 describe('首问后任务列表更新(真实 server/remote 链路)', () => {
   it('turn-start 后 tasks 推送应带 messageCount ≥ 1', async () => {
     const world = fakeServerSession();
-    const broker = createPermissionBroker();
-    const server = await startServer({ session: world.session as never, broker });
+    const server = await startServer({ session: world.session as never });
     cleanups.push(() => server.close());
 
     const metas: TaskSummaryMeta[] = [
