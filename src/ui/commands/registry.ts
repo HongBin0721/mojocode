@@ -33,6 +33,7 @@ export function buildCommands(): SlashCommand[] {
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },
     { name: 'skills', description: t('cmd.skills') },
+    { name: 'reload', description: t('cmd.reload') },
     { name: 'doctor', description: t('cmd.doctor') },
     { name: 'cost', description: t('cmd.cost') },
     { name: 'resume', description: t('cmd.resume') },
@@ -64,6 +65,7 @@ export const BUSY_BLOCKED_COMMANDS = new Set([
   'fork',
   'init',
   'simplify',
+  'reload',
 ]);
 
 /**

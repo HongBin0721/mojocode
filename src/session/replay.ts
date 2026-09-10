@@ -1,7 +1,7 @@
 import type { ModelMessage } from 'ai';
 import type { NewTimelineItem, TimelineImage } from '../ui/types.js';
 import { summarizeToolResult } from '../tools/index.js';
-import { unwrapGuidance } from '../agent/loop.js';
+import { unwrapCustomMessage, unwrapGuidance } from '../agent/loop.js';
 import { unwrapAttachments } from '../app/attachments.js';
 import { unwrapImagesEnvelope } from '../app/image-defer.js';
 import { isInitPrompt } from '../agent/init.js';
@@ -67,6 +67,12 @@ export function replayTimeline(
       const skillCommand = unwrapSkillPrompt(text);
       if (skillCommand) {
         items.push({ kind: 'user', text: skillCommand });
+        continue;
+      }
+      // 扩展的自定义消息(可能套在引导信封里):按 customType 还原成 custom 条目。
+      const custom = unwrapCustomMessage(unwrapGuidance(text) ?? text);
+      if (custom) {
+        items.push({ kind: 'custom', ...custom });
         continue;
       }
       // 运行中插入的引导消息持久化的是包装后的版本;@ 引用展开的消息同理。

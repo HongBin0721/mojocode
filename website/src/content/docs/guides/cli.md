@@ -24,7 +24,6 @@ mojocode [options]
 | `-r, --resume [sessionId]` | 按 id 前缀恢复会话,不带参数则交互选择 |
 | `-c, --continue` | 恢复本工作区最近的会话 |
 | `--fork-session` | 配合 `-c` / `-r`:载入历史但写入全新的会话 id |
-| `--attach <url>` | 连接到已运行的 `mojocode serve`,不再自行拉起 |
 | `-V, --version` | 版本号 |
 
 ## 子命令
@@ -37,7 +36,6 @@ mojocode [options]
 | `mojocode sessions [--all]` | 列出当前工作区已保存的会话;`--all` 含其他工作区 |
 | `mojocode config` | 显示生效配置及其来源,密钥自动打码 |
 | `mojocode doctor [--json] [--offline] [-C <dir>]` | 体检:安装、配置与服务商连通性。有 ✗ 项时退出码 1 |
-| `mojocode serve [--host <h>] [--port <p>] [--managed]` | 运行 HTTP + SSE server,见 [server 模式](/guides/server/) |
 | `mojocode install <source> [--local]` | 安装扩展包:`npm:<包名>`、`git:<地址>` 或本地目录 |
 | `mojocode remove <name>` | 卸载扩展包 |
 | `mojocode extensions` | 列出本工作区会加载的扩展与扩展包 |
@@ -51,8 +49,6 @@ mojocode [options]
 | `MOJOCODE_LANG` | 界面语言 `en` / `zh-CN` |
 | `MOJOCODE_SEARCH_BACKEND` / `MOJOCODE_SEARCH_API_KEY` | 搜索后端与专用 key,见[联网搜索](/config/search/) |
 | `MOJOCODE_GOAL_MODEL` / `MOJOCODE_TASK_MODEL` / `MOJOCODE_VISION_MODEL` | `/goal` 评估器、子 agent、`view_image` 各自用的模型 |
-| `MOJOCODE_SERVER_TOKEN` | `--attach` 时的 Bearer token |
-| `MOJOCODE_NO_SERVER=1` | 排障逃生口:TUI 回到单进程模式 |
 | `MOJOCODE_INSTALL_DIR` / `MOJOCODE_VERSION` | 只给 `install.sh` 用 |
 
 优先级:环境变量高于配置文件,低于命令行参数。完整分层见[配置总览](/config/overview/)。

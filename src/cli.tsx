@@ -4,10 +4,6 @@ import process from 'node:process';
 import { bootstrap } from './app/bootstrap.js';
 import { renderHeadless } from './app/headless.js';
 import { detectTuiRuntime, reexecWithFfi } from './app/runtime.js';
-import { spawnManagedServer, type ServerExitInfo, type SpawnedServer } from './app/server-launch.js';
-import type { SessionHandle } from './app/session-handle.js';
-import { connectRemote } from './client/remote.js';
-import { startServer } from './server/serve.js';
 import { ConfigError, MissingKeyError, loadConfig, loadRawConfig, resolveProvider } from './config/load.js';
 import { BUILTIN_PROVIDER_IDS, PROVIDER_PRESETS, providerModelIsVision } from './config/providers.js';
 import { searchBackendSchema, type PartialConfig } from './config/schema.js';
@@ -21,6 +17,7 @@ import { INIT_PROMPT } from './agent/init.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from './app/attachments.js';
 import { parseSlashInvocation } from './skills/invocation.js';
 import { discoverExtensions } from './extensions/loader.js';
+import { parseExtensionFlags } from './extensions/flags.js';
 import { installPackage, nameOf, removePackage, resolvePackages } from './extensions/packages.js';
 
 type TuiModule = typeof import('./ui/tui.js');
@@ -61,7 +58,11 @@ interface GlobalFlags {
   searchBackend?: string;
   /** `-e <path>`(可重复):磁盘扩展的文件或目录。 */
   extension?: string[];
+  /** `-X name[=value]`(可重复):给扩展的 flag(registerFlag / getFlag)。 */
+  flag?: string[];
 }
+
+
 
 /** 根命令特有的 flags(`-p`、会话恢复相关)。 */
 interface MainFlags extends GlobalFlags {
@@ -70,8 +71,6 @@ interface MainFlags extends GlobalFlags {
   resume?: string | boolean;
   continue?: boolean;
   forkSession?: boolean;
-  /** 连接到外部已运行的 server(URL),不再自行拉起受管子进程。 */
-  attach?: string;
 }
 
 function overridesFromFlags(flags: GlobalFlags): PartialConfig {
@@ -143,11 +142,11 @@ program
   .option('--max-steps <n>', t('cli.opt.maxSteps'))
   .option('--no-mcp', t('cli.opt.noMcp'))
   .option('-e, --extension <path>', t('cli.opt.extension'), collectRepeatable, [])
+  .option('-X, --flag <name[=value]>', t('cli.opt.flag'), collectRepeatable, [])
   .option('--search-backend <id>', t('cli.opt.searchBackend'))
   .option('-r, --resume [sessionId]', t('cli.opt.resume'))
   .option('-c, --continue', t('cli.opt.continue'))
   .option('--fork-session', t('cli.opt.forkSession'))
-  .option('--attach <url>', t('cli.opt.attach'))
   .action(async (opts) => {
     await runMain(opts as MainFlags);
   });
@@ -271,19 +270,6 @@ program
     } catch (error) {
       fail(error);
     }
-  });
-
-program
-  .command('serve')
-  .description(t('cli.cmd.serve'))
-  .option('--host <host>', t('cli.opt.serveHost'), '127.0.0.1')
-  .option('--port <port>', t('cli.opt.servePort'), '0')
-  .option('--managed', t('cli.opt.serveManaged'))
-  // 刻意不再声明 `-e`:根命令上已有,commander 会让父级抢先接住(与 `-C`
-  // 同一个行为,见 workspaceRoot),子命令这份**恒为空表**——留着只会让人
-  // 以为 serve 有自己的一路来源。`mojocode serve -e x` 照样生效,值在父级。
-  .action(async (opts: { host: string; port: string; managed?: boolean }) => {
-    await runServe(opts);
   });
 
 program
@@ -447,147 +433,6 @@ async function resolveResume(
   return undefined;
 }
 
-/**
- * 把根命令的 flags 重放成受管 `serve` 子进程的参数。凭据(token)不在此列
- * ——它经环境变量传递;`-r`/`-c` 在父进程已解析成具体会话 id(交互式选择器
- * 只能在 TUI 侧跑),这里传定稿的 `--resume <id>`。
- */
-function serveArgsFrom(flags: MainFlags, root: string, resumeId?: string): string[] {
-  const args: string[] = ['--cwd', root];
-  if (flags.provider) args.push('--provider', flags.provider);
-  if (flags.model) args.push('--model', flags.model);
-  if (flags.maxContext) args.push('--max-context', flags.maxContext);
-  if (flags.maxSteps) args.push('--max-steps', flags.maxSteps);
-  if (flags.mcp === false) args.push('--no-mcp');
-  for (const ext of flags.extension ?? []) args.push('--extension', ext);
-  if (flags.searchBackend) args.push('--search-backend', flags.searchBackend);
-  if (resumeId) args.push('--resume', resumeId);
-  if (flags.forkSession) args.push('--fork-session');
-  return args;
-}
-
-/**
- * `mojocode serve`:bootstrap 一个会话并以 HTTP + SSE 暴露(进程模型对齐
- * opencode)。两种形态:
- *  - `--managed`:TUI 拉起的受管子进程——stdout 单行 JSON 握手,token 经
- *    环境变量注入,父进程退出(stdin 关闭)即自行收尾;
- *  - 独立运行:打印地址与 token,供 `mojocode --attach <url>` 连接。
- *
- * server 侧无 FFI,Node ≥ 22 即可;TUI 的 FFI 运行时门只管 client 进程。
- */
-async function runServe(opts: { host: string; port: string; managed?: boolean }): Promise<void> {
-  // 崩溃兜底:server 进程一死,客户端只看得到「连接断开」,死因全在 stderr
-  // 里(受管模式下进父进程的尾部缓冲,由 onExit 回调倒出)。unhandledRejection
-  // 只记录不退出——agent 循环 / MCP / LSP / store 任何一处漏掉的 catch 不该
-  // 拖垮整个会话;uncaughtException 后进程状态不可信,记录后按惯例退出。
-  process.on('unhandledRejection', (reason) => {
-    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-    process.stderr.write(`[mojocode serve] unhandled rejection: ${detail}\n`);
-  });
-  process.on('uncaughtException', (error) => {
-    process.stderr.write(`[mojocode serve] uncaught exception: ${error.stack ?? String(error)}\n`);
-    process.exit(1);
-  });
-
-  const globals = program.opts() as MainFlags;
-  const root = workspaceRoot();
-  await applyConfigLocale(root);
-
-  // serve 是非交互进程:`-r <id>` 接受显式 id(受管模式下父进程已把选择器
-  // 的结果定稿成 id 传进来);裸 `-r` 与 `-c` 都退化为"本工作区最新"。
-  let resume: SessionStore | undefined;
-  try {
-    if (typeof globals.resume === 'string') {
-      resume = await SessionStore.open(await SessionStore.resolveId(globals.resume, { root }));
-    } else if (globals.resume === true || globals.continue) {
-      resume = await SessionStore.latest(root);
-      if (!resume) process.stderr.write(`${t('cli.noResume')}\n`);
-    }
-  } catch (error) {
-    if (error instanceof AmbiguousSessionError) {
-      return fail(new Error(t('cli.sessionAmbiguous', { id: error.query, list: error.matches.join(', ') })));
-    }
-    if (error instanceof SessionNotFoundError) {
-      return fail(new Error(t('cli.sessionNotFound', { id: error.query })));
-    }
-    return fail(error);
-  }
-
-  const overrides: PartialConfig = overridesFromFlags(globals);
-
-  let loaded;
-  try {
-    // MissingKeyError 直接快速失败:配置向导是交互流程,归 TUI 侧(父进程
-    // 在拉起 server 之前已经跑过一轮 loadConfig + 向导)。
-    loaded = await loadConfig({ root, overrides });
-  } catch (error) {
-    return fail(error);
-  }
-  if (loaded.config.language !== 'auto') {
-    setLocale(detectLocale(loaded.config.language));
-  }
-
-  const session = await bootstrap({
-    root,
-    loaded,
-    resume,
-    fork: globals.forkSession === true,
-    // `--no-mcp` = 不加载 mcp 扩展。连接失败不写 stderr:连接非阻塞,状态在
-    // TUI 挂载之后才落地,裸写会糊进全屏画面;扩展已把失败作为 notice 发上总线。
-    ...(globals.mcp === false ? { disabledExtensions: ['mcp'] } : {}),
-    // 受管子进程从父进程原样收到 `-e`(serveArgsFrom),独立 serve 由用户直接给。
-    extensionPaths: globals.extension ?? [],
-  });
-  for (const warning of loaded.warnings) {
-    process.stderr.write(`! ${warning}\n`);
-  }
-  void SessionStore.cleanup({
-    days: loaded.config.cleanupPeriodDays,
-    keepIds: resume ? [resume.id, session.store.id] : [session.store.id],
-  }).catch(() => {});
-
-  let shuttingDown = false;
-  const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    await server.close().catch(() => {});
-    await session.dispose().catch(() => {});
-    // 受管/独立 server 都要显式退出:stdin 已 resume,事件循环不会自然清空。
-    process.exit(0);
-  };
-  const server = await startServer({
-    session,
-    host: opts.host,
-    port: Number(opts.port),
-    token: process.env.MOJOCODE_SERVER_TOKEN,
-    onShutdown: () => void shutdown(),
-  });
-  process.on('SIGINT', () => void shutdown());
-  process.on('SIGTERM', () => void shutdown());
-
-  if (opts.managed) {
-    // 握手:单行 JSON。token 由父进程生成并经环境变量传入,不回显。
-    process.stdout.write(`${JSON.stringify({ url: server.url })}\n`);
-    // 父进程退出 → stdin 关闭 → 自行收尾,TUI 崩溃也不留孤儿 server。
-    process.stdin.resume();
-    process.stdin.on('end', () => void shutdown());
-    process.stdin.on('close', () => void shutdown());
-    // stdin EOF 在 Bun 下不总是触发(实测被 SIGKILL 的父进程留下过孤儿)。
-    // 兜底:父进程死掉后本进程会被过继给 init/launchd,ppid 变化即收尾——
-    // 运行时无关,轮询开销可忽略。
-    const parentPid = process.ppid;
-    const watchdog = setInterval(() => {
-      if (process.ppid !== parentPid) void shutdown();
-    }, 2000);
-    watchdog.unref?.();
-  } else {
-    process.stdout.write(`${t('cli.serveListening', { url: server.url })}\n`);
-    if (!process.env.MOJOCODE_SERVER_TOKEN) {
-      process.stdout.write(`${t('cli.serveToken', { token: server.token })}\n`);
-    }
-  }
-}
-
 async function runMain(flags: MainFlags): Promise<void> {
   const root = flags.cwd ? (await import('node:path')).resolve(flags.cwd) : process.cwd();
   await applyConfigLocale(root); // 选择器与报错也要本地化,尽早生效
@@ -649,59 +494,6 @@ async function runMain(flags: MainFlags): Promise<void> {
     setLocale(detectLocale(loaded.config.language));
   }
 
-  // 进程模型(对齐 opencode):TUI 默认是瘦客户端,agent 核心跑在受管的
-  // `serve --managed` 子进程里(或经 --attach 连外部实例)。单进程模式只剩
-  // 两条路:`-p` headless(管道语义、零 HTTP 开销),以及 MOJOCODE_NO_SERVER=1
-  // 的排障逃生口。
-  const inProcess = headless || process.env.MOJOCODE_NO_SERVER === '1';
-
-  if (!inProcess) {
-    let spawned: SpawnedServer | undefined;
-    let handle: SessionHandle;
-    try {
-      if (flags.attach) {
-        const token = process.env.MOJOCODE_SERVER_TOKEN;
-        if (!token) return fail(new Error(t('cli.attachNeedsToken')));
-        handle = await connectRemote({
-          url: flags.attach.replace(/\/+$/, ''),
-          token,
-          ownsServer: false,
-        });
-      } else {
-        // 配置警告与 MCP 失败提示由子进程 stderr 在握手前原样转发,这里不重复。
-        let onServerExit: ((info: ServerExitInfo) => void) | undefined;
-        spawned = await spawnManagedServer(serveArgsFrom(flags, root, resume?.id), {
-          onExit: (info) => onServerExit?.(info),
-        });
-        const remote = await connectRemote({
-          url: spawned.url,
-          token: spawned.token,
-          ownsServer: true,
-        });
-        // sidecar 意外退出:立即断线,并把死因(退出码 + stderr 尾部)推进
-        // 时间线,不必等重连白烧几秒;计划内 shutdown 后 remote 已 closed,
-        // notifyServerExit 是无操作。
-        onServerExit = (info) => {
-          const cause = info.code !== null ? `code ${info.code}` : `signal ${info.signal ?? '?'}`;
-          const tail = info.stderrTail.slice(-8).join('\n');
-          remote.notifyServerExit(
-            `${t('notice.serverExited', { code: cause })}${tail ? `\n${tail}` : ''}`,
-          );
-        };
-        handle = remote;
-      }
-    } catch (error) {
-      return fail(error);
-    }
-    await tui!.runTui(handle);
-    await handle.dispose();
-    await spawned?.waitExit();
-    if (handle.agent.history.length > 0) {
-      process.stdout.write(`${t('cli.resumeHint', { id: handle.store.id })}\n`);
-    }
-    return;
-  }
-
   const session = await bootstrap({
     root,
     loaded,
@@ -709,8 +501,10 @@ async function runMain(flags: MainFlags): Promise<void> {
     fork: flags.forkSession === true,
     ...(flags.mcp === false ? { disabledExtensions: ['mcp'] } : {}),
     extensionPaths: flags.extension ?? [],
-    // 同上:失败经 bus notice 呈现(headless 渲染器也认 notice 事件),
-    // 裸 stderr 在进程内 TUI 下会写进 alt-screen。
+    extensionFlags: parseExtensionFlags(flags.flag),
+    mode: headless ? 'print' : 'tui',
+    // MCP 连接失败经 bus notice 呈现(headless 渲染器也认 notice 事件),
+    // 裸 stderr 在 TUI 下会写进 alt-screen。
   });
 
   // 加载期提示。`--json` 下不打:

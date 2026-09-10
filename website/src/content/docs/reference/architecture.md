@@ -3,11 +3,11 @@ title: 架构
 description: 核心不认识 UI,事件总线驱动三个前端。
 ---
 
-核心原则:**agent 核心不 import UI 框架。** `src/core/events.ts` 定义契约,核心把类型化的 `AgentEvent` 发到一个极简的事件总线上,同一套循环同时驱动 OpenTUI 的 TUI、`-p` 的 headless 渲染器和 Electron 桌面端。
+核心原则:**agent 核心不 import UI 框架。** `src/core/events.ts` 定义契约,核心把类型化的 `AgentEvent` 发到一个极简的事件总线上,同一套循环同时驱动 OpenTUI 的 TUI 与 `-p` 的 headless 渲染器。
 
 ## 进程模型
 
-与 opencode 相同的 client-server:TUI 是瘦客户端,默认拉起受管的 `mojocode serve --managed` 子进程,agent 核心、工具、扩展、MCP、LSP、会话存储都在 server 侧,经 REST + SSE 通信。`-p` 保持单进程。细节见 [server 模式](/guides/server/)。
+与 pi 相同的单进程形态:TUI、agent 核心、工具、扩展、MCP、LSP、会话存储都在同一个进程里,扩展因此可以直接把界面组件交给 TUI(`ctx.ui.custom`、`setWidget`、工具的 `renderResult`)。
 
 ```
 src/
@@ -26,7 +26,6 @@ src/
   app/         bootstrap 装配、headless 渲染、doctor、server 拉起
   i18n/        语言目录 en / zh-CN
   ui/          OpenTUI + SolidJS 组件;kit.tsx 是渲染器适配层
-apps/desktop/  Electron 桌面端,独立包,同一套协议
 website/       本文档站,独立包
 ```
 

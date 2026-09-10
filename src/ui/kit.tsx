@@ -45,6 +45,7 @@ import {
 import { createContext, createMemo, children as resolveChildren, onCleanup, splitProps, useContext } from 'solid-js';
 import { hasAnsi, parseAnsiSpans, type AnsiSpan } from './ansi-spans.js';
 import { writeClipboardText } from '../app/clipboard.js';
+import type { ExtensionKey } from '../core/extension-types.js';
 
 export type { JSX };
 
@@ -53,22 +54,12 @@ export type { JSX };
 // ---------------------------------------------------------------------------
 
 /** Ink `useInput` 回调的 key 对象(仅含本项目用到的字段 + 常用补充)。 */
-export interface Key {
-  upArrow: boolean;
-  downArrow: boolean;
-  leftArrow: boolean;
-  rightArrow: boolean;
-  pageUp: boolean;
-  pageDown: boolean;
-  return: boolean;
-  escape: boolean;
-  tab: boolean;
-  backspace: boolean;
-  delete: boolean;
-  ctrl: boolean;
-  shift: boolean;
-  meta: boolean;
-}
+/**
+ * 按键的解析结果。定义住在零依赖的 `core/extension-types.ts`(扩展的组件
+ * 也收这个形状),这里只是取个 TUI 侧的名字——两处各写一份 14 个字段的
+ * 接口,加一个字段而漏改另一边时 `keyToData` / `shortcutOf` 会静默少一路。
+ */
+export type Key = ExtensionKey;
 
 function emptyKey(): Key {
   return {

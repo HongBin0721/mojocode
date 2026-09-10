@@ -16,5 +16,15 @@ export function stubExtensions() {
     extensionsChanged: () => () => {},
     runCommand: async () => {},
     commandOptions: async () => [],
+    uiRequests: [],
+    answerUi: async () => {},
+    attachUi: () => {},
+    runShortcut: () => false,
+    uiCustoms: [],
+    resolveCustom: () => {},
+    uiSurfaces: { widgets: [] },
+    toolRenderers: new Map(),
+    messageRenderers: new Map(),
+    reloadExtensions: async () => ({ loaded: [], failed: [] }),
   };
 }

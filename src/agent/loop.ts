@@ -1,6 +1,7 @@
 import {
   streamText,
   stepCountIs,
+  wrapLanguageModel,
   type JSONValue,
   type LanguageModel,
   type ModelMessage,
@@ -8,7 +9,7 @@ import {
   type UserContent,
 } from 'ai';
 import type { ContextUsage, EventBus, UsageSnapshot } from '../core/events.js';
-import type { HookRegistry } from '../core/hooks.js';
+import type { HookRegistry, ProviderRequestParams } from '../core/hooks.js';
 import { hookTools } from './hooked-tools.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import { deferImagesForModel } from '../app/image-defer.js';
@@ -17,7 +18,13 @@ import type { Config } from '../config/schema.js';
 import { providerModelIsVision } from '../config/providers.js';
 import { summarizeToolResult } from '../tools/index.js';
 import { mergeProviderOptions, providerOptionsKey, reasoningMapping } from '../model/reasoning.js';
-import { compactMessages, estimateTokens, shouldCompact, stripImageParts } from './compact.js';
+import {
+  compactMessages,
+  estimateTokens,
+  shouldCompact,
+  stripImageParts,
+  type CompactionResult,
+} from './compact.js';
 import { errorMessage, toError } from '../core/errors.js';
 import { t } from '../i18n/index.js';
 
@@ -37,7 +44,21 @@ export interface AgentOptions {
   hooks?: HookRegistry;
   /** 这是子 agent(task 工具 / fork 技能)。只进钩子输入的 subagent 标记。 */
   subagent?: boolean;
+  /**
+   * 扩展 `setActiveTools` 选中的工具名。返回 `undefined`(缺省、也是绝大多数
+   * 会话的常态)= 不过滤,`tools` 原对象直达 SDK。**不能写成
+   * `(name) => boolean`**:那样它恒为真函数,`hookedTools` 的零拷贝快路径
+   * 就永远走不到,每次开流都白重建一遍工具集。
+   */
+  activeTools?: () => ReadonlySet<string> | undefined;
 }
+
+/**
+ * 消息的来路:`user` 是用户(TUI/GUI/headless/RPC 的 run 与 inject)——过
+ * `input` 钩子;`extension` 是扩展经 api.run / followUp 发起的——那已经是扩展
+ * 自己的产物,不再给别的扩展改写;`skill` 是斜杠技能展开的正文,同样不过。
+ */
+export type MessageSource = 'user' | 'extension' | 'skill';
 
 /**
  * 运行中插入的引导消息在喂给模型前的包装(与 Claude Code 一致):向模型
@@ -64,6 +85,30 @@ export function unwrapGuidance(text: string): string | undefined {
   const end = text.lastIndexOf(suffixStart);
   if (end < prefix.length) return undefined;
   return text.slice(prefix.length, end);
+}
+
+const CUSTOM_MESSAGE_PREFIX = '[extension message';
+
+/**
+ * 扩展经 sendMessage 放进对话的消息的信封(Pi 的 customType 消息):模型看到
+ * 类型名与正文,回放与时间线据此认出它、按扩展注册的画法画。与 wrapGuidance
+ * 同款的字面量信封——历史里只有文本,没有别处可以挂元数据。
+ */
+export function wrapCustomMessage(customType: string, content: string): string {
+  return `${CUSTOM_MESSAGE_PREFIX}: ${customType}]\n${content}`;
+}
+
+/** wrapCustomMessage 的逆操作;不是自定义消息返回 undefined。 */
+export function unwrapCustomMessage(
+  text: string,
+): { customType: string; content: string } | undefined {
+  if (!text.startsWith(`${CUSTOM_MESSAGE_PREFIX}: `)) return undefined;
+  const close = text.indexOf(']\n');
+  if (close === -1) return undefined;
+  return {
+    customType: text.slice(CUSTOM_MESSAGE_PREFIX.length + 2, close),
+    content: text.slice(close + 2),
+  };
 }
 
 /** 运行中排队的一条引导:文本 + 可选图片。 */
@@ -112,6 +157,7 @@ interface FollowUpEntry {
   text: string;
   display?: string;
   images?: ImageAttachment[];
+  source?: MessageSource;
 }
 
 /**
@@ -180,6 +226,10 @@ export class Agent {
   private chainActive = false;
   /** 两轮之间收到的 abort():下一轮不开,链条以中断收尾。 */
   private chainAbortRequested = false;
+  /** 本轮已开过几个流:before_agent_start 的 `message` 只在首个流注入。 */
+  private streamsThisTurn = 0;
+  /** 本轮的用户文本(给 before_agent_start 的 userText;引导续跑的流为空)。 */
+  private turnUserText: string | undefined;
 
   /**
    * 这一份 Agent 是不是子 agent。每个钩子输入都带它(扩展自己决定要不要区别
@@ -286,8 +336,31 @@ export class Agent {
    * 运行中插入一条引导消息,在下一个步骤边界(当前模型输出/工具调用
    * 完成后)注入对话。空闲时调用返回 false——调用方应转为发起新一轮。
    */
-  async inject(text: string, images?: ImageAttachment[]): Promise<boolean> {
+  async inject(
+    text: string,
+    images?: ImageAttachment[],
+    source: MessageSource = 'user',
+  ): Promise<boolean> {
     if (!this.isRunning) return false;
+    // 用户输入先过 input 钩子(扩展改写/吞掉);扩展与技能发起的消息不过。
+    // `run()` 不走这里——它自己先跑钩子再调 enqueueGuidance,「钩子只跑一次」
+    // 因此是调用图的事实,不是一个要一路传下去的布尔。
+    if (source === 'user' && this.options.hooks?.has('input')) {
+      const hooked = await this.options.hooks.input({
+        text,
+        images,
+        source: 'guidance',
+        subagent: this.subagent,
+      });
+      if (hooked.handled) return true;
+      text = hooked.text;
+      images = hooked.images;
+    }
+    return this.enqueueGuidance(text, images);
+  }
+
+  /** 排一条引导(钩子已由调用方处理)。轮在写盘窗口里收尾时返回 false。 */
+  private async enqueueGuidance(text: string, images?: ImageAttachment[]): Promise<boolean> {
     const prepared = await this.prepareUserMessage(text, images);
     // 降级写盘期间这一轮可能已经收尾——run() 开头会清空 pendingGuidance,
     // 晚到的入队会被静默吞掉,而时间线已显示"引导已排队"。二次检查失败
@@ -313,17 +386,64 @@ export class Agent {
    * 停下,agent 绝不能自己接着跑——这是 `/goal` 一直坚持的边界,搬到这里
    * 成为所有扩展的边界。
    */
-  followUp(text: string, options?: { display?: string; images?: ImageAttachment[] }): void {
+  followUp(
+    text: string,
+    options?: { display?: string; images?: ImageAttachment[]; source?: MessageSource },
+  ): void {
     if (this.isRunning) {
-      this.followUps.push({ text, display: options?.display, images: options?.images });
+      this.followUps.push({
+        text,
+        display: options?.display,
+        images: options?.images,
+        source: options?.source,
+      });
       return;
     }
     void this.run(text, options);
   }
 
+  /**
+   * 扩展放一条自定义消息进对话(Pi 的 sendMessage)。三条路:
+   *  - `triggerTurn`:作为新一轮开跑(运行中则排在链条之后);
+   *  - 运行中且不开轮:作为轮内引导注入(模型下一步就看到);
+   *  - 空闲且不开轮:直接并入历史,不开轮——下一轮模型自然看到。
+   * 后两条路上发 `custom-message` 让时间线画出来;第一条路由 turn-start 带着
+   * 信封,渲染层自己拆。
+   */
+  async sendMessage(
+    customType: string,
+    content: string,
+    options?: { display?: string; triggerTurn?: boolean },
+  ): Promise<void> {
+    const wrapped = wrapCustomMessage(customType, content);
+    const display = options?.display;
+    if (options?.triggerTurn) {
+      // 空闲:与 run 同语义,等整条链跑完;运行中:排在链条之后,立即返回。
+      if (this.isRunning) this.followUp(wrapped, { display: display ?? content, source: 'extension' });
+      else await this.run(wrapped, { display: display ?? content, source: 'extension' });
+      return;
+    }
+    if (this.isRunning) {
+      // 引导信封里再套一层自定义信封:模型两层都看得到,无害。
+      await this.inject(wrapped, undefined, 'extension');
+    } else {
+      // 压缩进行中时先等它:它完成时会整体替换 this.messages,先 push 的消息
+      // 会被无声覆盖掉(runTurn 在开轮前 await 同一个 promise,同一条理由)。
+      if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
+      this.messages.push({ role: 'user', content: wrapped });
+      this.options.onHistoryChange?.(this.messages);
+    }
+    this.options.bus.emit({
+      type: 'custom-message',
+      customType,
+      content,
+      ...(display !== undefined ? { display } : {}),
+    });
+  }
+
   /** 手动触发压缩,例如来自 `/compact` 命令。并发调用共享同一次压缩。 */
-  compact(): Promise<void> {
-    this.compactionInFlight ??= this.doCompact().finally(() => {
+  compact(reason: 'manual' | 'auto' = 'manual'): Promise<void> {
+    this.compactionInFlight ??= this.doCompact(reason).finally(() => {
       this.compactionInFlight = undefined;
     });
     return this.compactionInFlight;
@@ -334,12 +454,74 @@ export class Agent {
     return this.compactionInFlight !== undefined;
   }
 
-  private async doCompact(): Promise<void> {
-    const generation = this.historyGeneration;
-    const result = await compactMessages(this.messages, this.options.model, undefined, (chars) =>
-      this.options.bus.emit({ type: 'compaction-progress', chars }),
+  /**
+   * 等到既没有链条在跑、也没有压缩在跑。已空闲立即兑现。
+   *
+   * **不能靠 bus 事件等压缩**:`doCompact` 有三条不发 `compaction` 的正常
+   * 出路(扩展否决、`removedMessages === 0`——短历史的常态、压缩期间历史
+   * 被换掉),等事件的实现会永远挂住。这里直接 await 那个 promise,再回头
+   * 复查——两种状态可能互相触发(压缩完扩展又开了一轮),所以是循环。
+   */
+  async whenIdle(): Promise<void> {
+    while (this.isRunning || this.isCompacting) {
+      if (this.compactionInFlight) {
+        // 压缩失败不是"没空闲":吞掉错误,由 /compact 的调用方自己呈现。
+        await this.compactionInFlight.catch(() => undefined);
+        continue;
+      }
+      // 订阅在 executor 里同步完成(检查与订阅之间没有 await),run-end 不会漏。
+      await new Promise<void>((resolve) => {
+        const off = this.options.bus.on((event) => {
+          if (event.type !== 'run-end') return;
+          off();
+          resolve();
+        });
+      });
+    }
+  }
+
+  /**
+   * 压缩的公共管线:否决 → 摘要 → 发 `compaction` → `session_compact` 钩子。
+   * 三个调用点(手动 `/compact`、开轮前、轮内步骤边界)只在**拿到结果之后
+   * 做什么**上不同(写回持久历史并守代数,还是只换这一步要发的消息),
+   * 那部分留给各自。返回 undefined = 没压(被否决,或没什么可压)。
+   */
+  private async runCompaction(
+    messages: ModelMessage[],
+    reason: 'manual' | 'auto' | 'in-turn',
+  ): Promise<CompactionResult | undefined> {
+    const { hooks, bus } = this.options;
+    // 扩展可取消(session_before_compact):auto/in-turn 的下一次仍会再问。
+    if (hooks?.has('session_before_compact')) {
+      const veto = await hooks.cancelable('session_before_compact', {
+        reason,
+        messages,
+        subagent: this.subagent,
+      });
+      if (veto.cancel) return undefined;
+    }
+    const result = await compactMessages(messages, this.options.model, undefined, (chars) =>
+      bus.emit({ type: 'compaction-progress', chars }),
     );
-    if (result.removedMessages === 0) return;
+    if (result.removedMessages === 0) return undefined;
+    bus.emit({
+      type: 'compaction',
+      removedMessages: result.removedMessages,
+      summaryChars: result.summaryChars,
+    });
+    await hooks?.notify('session_compact', {
+      reason,
+      removedMessages: result.removedMessages,
+      summaryChars: result.summaryChars,
+      subagent: this.subagent,
+    });
+    return result;
+  }
+
+  private async doCompact(reason: 'manual' | 'auto'): Promise<void> {
+    const generation = this.historyGeneration;
+    const result = await this.runCompaction(this.messages, reason);
+    if (!result) return;
     // 压缩期间历史被换掉了(/new、/clear、恢复会话):这份摘要针对的是
     // 已经不存在的对话,写回去等于让被丢弃的会话复活。
     if (generation !== this.historyGeneration) return;
@@ -348,11 +530,6 @@ export class Agent {
     // 压缩后 lastInputTokens 作废,显示回落也得跟着换算到变短的历史上,
     // 否则计量条会把压缩前的占用一直挂到下一轮 step-end。
     this.estimatedTokens = estimateTokens(result.messages);
-    this.options.bus.emit({
-      type: 'compaction',
-      removedMessages: result.removedMessages,
-      summaryChars: result.summaryChars,
-    });
     this.options.onHistoryChange?.(this.messages);
   }
 
@@ -421,15 +598,39 @@ export class Agent {
    */
   async run(
     userText: string,
-    options?: { display?: string; images?: ImageAttachment[] },
+    options?: { display?: string; images?: ImageAttachment[]; source?: MessageSource },
   ): Promise<void> {
+    const source = options?.source ?? 'user';
+    const { hooks } = this.options;
+    const subagent = this.subagent;
+    let images = options?.images;
+
+    /**
+     * input 钩子**先跑,且只跑一次**:下面转注入的那条路会把结果带过去
+     * (hookApplied)。否则 inject 输给它文档里那个竞态(降级写盘期间轮收尾)
+     * 返回 false 时,这里会拿**原文**再跑一遍钩子,第一次的改写作废,带副作用
+     * 的处理器(计数、去重)双触发。
+     *
+     * source 按此刻的忙闲判:忙 = 这条消息会成为轮内引导。竞态里轮恰好收尾时
+     * 报的是 guidance 而实际开了新一轮——比跑两遍钩子轻得多。
+     */
+    if (source === 'user' && hooks?.has('input')) {
+      const hooked = await hooks.input({
+        text: userText,
+        images,
+        source: this.isRunning ? 'guidance' : 'turn',
+        subagent,
+      });
+      if (hooked.handled) return;
+      userText = hooked.text;
+      images = hooked.images;
+    }
+
     // 防重入兜底:已在运行时转为注入引导,绝不能并发起第二个流
     // (两个流共享 this.messages,controller 也会被覆盖)。inject 的降级
     // 写盘期间轮可能收尾而入队失败——此时 isRunning 必已为 false,顺势
     // 落到下方的正常开轮路径,消息绝不静默丢弃。
-    if (this.isRunning && (await this.inject(userText, options?.images))) return;
-    const { hooks } = this.options;
-    const subagent = this.subagent;
+    if (this.isRunning && (await this.enqueueGuidance(userText, images))) return;
 
     // 链条状态在任何 await 之前就位,理由同 runTurn 里的 controller。
     this.chainActive = true;
@@ -439,14 +640,16 @@ export class Agent {
     let aborted = false;
     let dropped = 0;
     try {
+      await hooks?.notify('agent_start', { userText, subagent });
       let next: FollowUpEntry | typeof GUIDANCE_ONLY | undefined = {
         text: userText,
         display: options?.display,
-        images: options?.images,
+        images,
+        source,
       };
       while (next) {
         const result = await this.runTurn(next);
-        await hooks?.turnEnd({ ...result, subagent });
+        await hooks?.notify('turn_end', { ...result, subagent });
         if (result.outcome !== 'completed' || this.chainAbortRequested) {
           aborted = result.outcome === 'aborted' || this.chainAbortRequested;
           // 两轮之间的 esc:上一轮已正常收尾,补一条 aborted 让时间线知道
@@ -471,7 +674,9 @@ export class Agent {
     // 链条的 bus 信号先于 agent_end 钩子:钩子里若有扩展在空闲时又 followUp
     // 开了新链条,那是下一个链条的 turn-start,不能被这条 run-end 盖掉。
     this.options.bus.emit({ type: 'run-end' });
-    await hooks?.agentEnd({ aborted, followUpsDropped: dropped, subagent });
+    await hooks?.notify('agent_end', { aborted, followUpsDropped: dropped, subagent });
+    // agent_end 里若有扩展又开了链条,那就不算安定。
+    if (!this.isRunning) await hooks?.notify('agent_settled', { subagent });
   }
 
   /** 一轮:用户消息 + 主流 + 引导续跑的流,以 turn-end / aborted / error 收尾。 */
@@ -492,12 +697,14 @@ export class Agent {
     this.injectedThisTurn = [];
     this.contextNoticeSent = false;
     this.abortEmitted = false;
+    this.streamsThisTurn = 0;
+    this.turnUserText = guidanceOnly ? undefined : entry.text;
     this.controller = new AbortController();
     let result: TurnResult = { outcome: 'completed' };
 
     try {
       if (!guidanceOnly) {
-        await hooks?.turnStart({ userText: entry.text, subagent: this.subagent });
+        await hooks?.notify('turn_start', { userText: entry.text, subagent: this.subagent });
       }
       // `/compact` 进行中时等它收尾:它完成时会整体替换 this.messages,
       // 先 push 的用户消息会被无声覆盖掉。压缩失败也必须继续走完这一轮——
@@ -591,7 +798,7 @@ export class Agent {
 
     this.noticeContextNearFull();
     // 同上:开轮压缩失败不该让这一轮无声消失,提示一下继续跑。
-    await this.compact().catch((err: Error) => {
+    await this.compact('auto').catch((err: Error) => {
       this.options.bus.emit({
         type: 'notice',
         level: 'warn',
@@ -607,34 +814,102 @@ export class Agent {
     this.options.bus.emit({ type: 'notice', level: 'info', message: t('notice.contextNearFull') });
   }
 
-  /** 返回这个流的收尾信息(若正常收尾),由 run() 汇总成一次 turn-end。 */
-  /** 系统提示词过一遍 before_agent_start 钩子;没人听就原样返回。 */
-  private async resolveSystemPrompt(base: string): Promise<string> {
+  /**
+   * 系统提示词过一遍 before_agent_start 钩子;没人听就原样返回。`inject` 为真
+   * (本轮首个流)时钩子返回的 `message` 以 user 消息进历史——引导续跑再开
+   * 的流与 prepareStep 的换提示词路径不注入,否则同一条话每个流重复一遍。
+   */
+  private async resolveSystemPrompt(base: string, inject: boolean): Promise<string> {
     const { hooks } = this.options;
     if (!hooks?.has('before_agent_start')) return base;
-    return hooks.beforeAgentStart({ systemPrompt: base, subagent: this.subagent });
+    const result = await hooks.beforeAgentStart({
+      systemPrompt: base,
+      userText: this.turnUserText,
+      subagent: this.subagent,
+    });
+    if (inject) {
+      for (const text of result.messages) this.messages.push({ role: 'user', content: text });
+    }
+    return result.systemPrompt;
   }
 
   /**
-   * 交给 SDK 的工具集:有工具钩子时每次开流现包(tools 会被就地改键,见
-   * hooked-tools.ts);没有就是原对象,零开销。
+   * 交给 SDK 的工具集:先按 toolFilter 过滤(setActiveTools),有工具钩子时
+   * 每次开流现包(tools 会被就地改键,见 hooked-tools.ts);两者都没有就是原
+   * 对象,零开销。
    */
   private hookedTools(): ToolSet {
     const { tools, hooks } = this.options;
-    if (!hooks || (!hooks.has('tool_call') && !hooks.has('tool_result'))) return tools;
-    return hookTools(tools, hooks, { subagent: this.subagent });
+    let base = tools;
+    const active = this.options.activeTools?.();
+    if (active) {
+      base = {};
+      for (const [name, tool] of Object.entries(tools)) if (active.has(name)) base[name] = tool;
+    }
+    if (
+      !hooks ||
+      (!hooks.has('tool_call') &&
+        !hooks.has('tool_result') &&
+        !hooks.has('tool_execution_start') &&
+        !hooks.has('tool_execution_end'))
+    ) {
+      return base;
+    }
+    return hookTools(base, hooks, { subagent: this.subagent });
+  }
+
+  /**
+   * 发给 provider 的模型:有 before_provider_request 钩子时套一层 AI SDK 中间件,
+   * 把请求参数(prompt / tools / providerOptions / headers)交给扩展改写;没有
+   * 就是原模型。字符串形态的模型 id(网关解析)没有可包的对象,原样返回。
+   */
+  private providerModel(): LanguageModel {
+    const { model, hooks } = this.options;
+    if (!hooks || typeof model === 'string') return model;
+    const before = hooks.has('before_provider_request');
+    const after = hooks.has('after_provider_response');
+    if (!before && !after) return model;
+    const subagent = this.subagent;
+    return wrapLanguageModel({
+      model,
+      middleware: {
+        ...(before
+          ? {
+              transformParams: ({ params, type }: { params: ProviderRequestParams; type: 'stream' | 'generate' }) =>
+                hooks.beforeProviderRequest({ params, type, subagent }),
+            }
+          : {}),
+        ...(after
+          ? {
+              wrapStream: async ({ doStream, params }) => {
+                const result = await doStream();
+                await hooks.notify('after_provider_response', { type: 'stream', params, response: result.response, subagent });
+                return result;
+              },
+              wrapGenerate: async ({ doGenerate, params }) => {
+                const result = await doGenerate();
+                await hooks.notify('after_provider_response', { type: 'generate', params, response: result.response, subagent });
+                return result;
+              },
+            }
+          : {}),
+      },
+    });
   }
 
   private async stream(): Promise<TurnFinish | undefined> {
-    const { bus, model, config, provider } = this.options;
+    const { bus, config, provider, hooks } = this.options;
+    const subagent = this.subagent;
+    const model = this.providerModel();
     const signal = this.controller!.signal;
     let finish: TurnFinish | undefined;
+    const firstStream = this.streamsThisTurn++ === 0;
     // streamText 的 system 只在开流时读一次。轮中途换了系统提示词(计划获批
     // → setMode)时,要靠 prepareStep 的 instructions 在下一步补下去,否则整条
     // 流会一直用计划模式那份提示词跑完——模型明明已经能改文件,却还在拒绝动手。
     // 比对的是核心组装的那份(options.systemPrompt),钩子的产物不参与比对。
     const systemAtStart = this.options.systemPrompt;
-    const systemPrompt = await this.resolveSystemPrompt(systemAtStart);
+    const systemPrompt = await this.resolveSystemPrompt(systemAtStart, firstStream);
 
     // 组装 providerOptions:parallel_tool_calls 与思考强度参数都要写进同一个
     // provider 键,分开展开会整体覆盖,必须先合并再传入。provider 按引用持有,
@@ -695,20 +970,18 @@ export class Agent {
 
         if (shouldCompact(this.lastInputTokens, provider.contextWindow, config.compactThreshold)) {
           this.noticeContextNearFull();
-          const compacted = await compactMessages(next, model, undefined, (chars) =>
-            bus.emit({ type: 'compaction-progress', chars }),
-          );
-          if (compacted.removedMessages > 0) {
+          const compacted = await this.runCompaction(next, 'in-turn');
+          if (compacted) {
             this.lastInputTokens = undefined;
             this.historyNeedsCompact = true;
-            bus.emit({
-              type: 'compaction',
-              removedMessages: compacted.removedMessages,
-              summaryChars: compacted.summaryChars,
-            });
             next = compacted.messages;
           }
         }
+
+        // 每一步都是一次调模型:context 钩子对每步要发的消息各过一遍。
+        // **这是它唯一的触发点**:prepareStep 第一步也会跑,开流前再跑一次
+        // 等于第一步被改写两遍。
+        if (hooks?.has('context')) next = await hooks.context({ messages: next, subagent });
 
         // 系统提示词没换过时保持返回 {} 的快路径——这是每步都要走的最热的
         // 一段,不为计划模式这一个场景给所有人加开销。
@@ -717,7 +990,7 @@ export class Agent {
         return {
           ...(next === messages ? {} : { messages: next }),
           ...(changedSystem
-            ? { instructions: await this.resolveSystemPrompt(this.options.systemPrompt) }
+            ? { instructions: await this.resolveSystemPrompt(this.options.systemPrompt, false) }
             : {}),
         };
       },
@@ -815,7 +1088,14 @@ export class Agent {
     // 工具调用和结果,下一轮看到的 assistant 就像什么都没做过一样。)
     // 引导消息放在 assistant 消息之前:它们已在轮中被模型看到并处理过,
     // 排在响应之后会像一条未回应的新消息,下一轮模型会再答一遍。
-    this.messages.push(...this.injectedThisTurn, ...(await result.responseMessages));
+    let responses: ModelMessage[] = await result.responseMessages;
+    // message_end:每条定稿的 assistant / tool 消息在并入历史前给扩展过一遍。
+    if (hooks?.has('message_end')) {
+      const rewritten: ModelMessage[] = [];
+      for (const message of responses) rewritten.push(await hooks.messageEnd({ message, subagent }));
+      responses = rewritten;
+    }
+    this.messages.push(...this.injectedThisTurn, ...responses);
     this.injectedThisTurn = [];
 
     const finishReason = await result.finishReason;

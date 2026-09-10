@@ -12,6 +12,7 @@ import {
   newSession,
   resume,
   skills,
+  reload,
 } from './session-cmds.js';
 import { simplify } from './simplify-cmds.js';
 import { runExtensionCommand, runSkillCommand } from './extension-cmds.js';
@@ -38,6 +39,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   provider,
   models,
   skills,
+  reload,
   doctor,
   cost,
   resume,
@@ -68,7 +70,7 @@ export async function dispatch(ctx: CommandContext, raw: string): Promise<void> 
     return;
   }
 
-  // 不是内置命令:先查扩展命令表(会话进程侧执行,见 extension-cmds),再查技能表
+  // 不是内置命令:先查扩展命令表(见 extension-cmds),再查技能表
   // (命中则整轮交给 runSkill)。
   if (name && (await runExtensionCommand(ctx, name, arg))) return;
   if (name && (await runSkillCommand(ctx, name, arg, raw))) return;

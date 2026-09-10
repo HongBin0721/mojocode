@@ -15,6 +15,13 @@
   "bin": {
     "mojocode": "dist/cli.js"
   },
+  "exports": {
+    "./extension": {
+      "types": "./dist/extension.d.ts",
+      "import": "./dist/extension.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist"
   ],

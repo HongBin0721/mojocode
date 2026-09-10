@@ -5,40 +5,49 @@ import { discoverExtensions, loadExtension } from '../extensions/loader.js';
 import { resolvePackages } from '../extensions/packages.js';
 import { LSP_RUNTIME_KEY } from '../extensions/lsp/index.js';
 import { MCP_RUNTIME_KEY } from '../extensions/mcp/index.js';
-import type {
-  ExtensionAPI,
-  ExtensionCommand,
-  ExtensionCommandInfo,
-  ExtensionStatusEntry,
-  ExtensionCommandOption,
-  ExtensionToolFactory,
-  ToolScope,
+import {
+  ExtensionEvents,
+  type ExtensionAPI,
+  type ExtensionCommand,
+  type ExtensionCommandInfo,
+  type ExtensionContext,
+  type ExtensionFlagOptions,
+  type ExtensionStatusEntry,
+  type ExtensionCommandOption,
+  type ExtensionToolDefinition,
+  type ExtensionToolFactory,
+  type ExtensionToolMeta,
+  type ExtensionSurface,
+  type ExtensionUI,
+  type MessageRenderer,
+  type ToolRenderers,
+  type ToolScope,
+  type UiAnswer,
+  type UiRequest,
 } from '../core/extension.js';
+import type {
+  ComponentHost,
+  ExtensionComponent,
+  UiCustomRequest,
+  UiHost,
+  UiSurfaces,
+} from '../core/extension-types.js';
+import { normalizeShortcut, RESERVED_SHORTCUTS } from '../core/extension-types.js';
+import type { ExtensionShortcutOptions } from '../core/extension.js';
+import path from 'node:path';
+import { adaptToolDefinition } from '../extensions/tool-adapter.js';
+import { execa } from 'execa';
 import { buildSystemPrompt, gatherEnvironment, type EnvironmentInfo } from '../agent/prompt.js';
 import { resolveProvider, type LoadedConfig, type ResolvedProvider } from '../config/load.js';
 import { imagesDir } from '../config/paths.js';
 import { providerModelIsVision, resolveVisionModelId } from '../config/providers.js';
 import { createViewImageTool } from '../tools/view-image.js';
-import {
-  providerConfigSchema,
-  type Config,
-  type ProviderConfig,
-  type ReasoningEffort,
-} from '../config/schema.js';
-import { deleteProviderEntry, saveProviderEntry } from '../config/save.js';
+import type { Config, ReasoningEffort } from '../config/schema.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus } from '../core/events.js';
 import { errorMessage } from '../core/errors.js';
 import { HookRegistry } from '../core/hooks.js';
-import {
-  createModel,
-  listModels,
-  listProviderModels,
-  testModel as testModelConnection,
-  type ModelInfo,
-  type ModelTestResult,
-  type ProviderModels,
-} from '../model/registry.js';
+import { createModel, listProviderModels, type ProviderModels } from '../model/registry.js';
 import { capabilitiesFor, createCatalogSource, type ModelCapabilities } from '../model/catalog.js';
 import { effectiveEfforts } from '../model/reasoning.js';
 import type { McpStatus } from '../mcp/client.js';
@@ -52,21 +61,7 @@ import {
   type TaskMode,
   type TaskToolDeps,
 } from '../tools/task.js';
-import {
-  SessionStore,
-  type ChangedFileEntry,
-  type SessionMeta,
-  type SessionState,
-} from '../session/store.js';
-import { listWorkspaceFiles } from './file-index.js';
-import { readWorkspaceFile, type FileContent } from './workspace-read.js';
-import {
-  commitAll as gitCommitAll,
-  discardAll as gitDiscardAll,
-  switchBranch as gitSwitchBranch,
-  undoCommit as gitUndoCommit,
-  type GitOpResult,
-} from '../agent/workspace-write.js';
+import { SessionStore } from '../session/store.js';
 import { t } from '../i18n/index.js';
 import fs from 'node:fs/promises';
 import { SkillManager } from '../skills/manager.js';
@@ -74,11 +69,7 @@ import { createSkillTool } from '../skills/tool.js';
 import { readSkillBody, type SkillCommandInfo } from '../skills/discovery.js';
 import { substituteArgs } from '../skills/substitute.js';
 import { wrapSkillPrompt } from '../skills/invocation.js';
-import {
-  collectReviewSummary,
-  collectReviewTargets,
-  type ReviewTargets,
-} from '../agent/review.js';
+import { collectReviewSummary } from '../agent/review.js';
 import {
   buildSimplifyApplyPrompt,
   parseSimplifyArg,
@@ -124,66 +115,22 @@ export interface Session {
    */
   forkSession: () => Promise<SessionStore>;
   /**
-   * 归档/取消归档任意会话(GUI 任务列表)。目标是当前活跃会话时同步内存
-   * meta——save() 每轮用内存 meta 重写记录,只改磁盘会在下一轮被冲掉。
-   */
-  archiveSession: (id: string, archived: boolean) => Promise<SessionMeta>;
-  /** 重命名任意会话(设 title);活跃会话同步内存 meta,理由同上。 */
-  renameSession: (id: string, title: string) => Promise<SessionMeta>;
-  /** 真删磁盘文件。当前活跃会话拒绝删除(serve 正拿着它写)。 */
-  deleteSession: (id: string) => Promise<void>;
-  /** GUI 文件树的数据源:工作区扁平文件清单(git ls-files 优先)。 */
-  listFiles: () => Promise<{ files: string[]; truncated: boolean }>;
-  /** GUI 文件预览:server 侧读文件(--attach 时仓库在 server 那台机器)。 */
-  readFile: (path: string) => Promise<FileContent>;
-  /** 本会话经 write/edit 落地过的文件(任务视角变更索引,进 StateSnapshot)。 */
-  readonly changedFiles: ChangedFileEntry[];
-  /**
-   * 工作区 git 写操作(GUI 上的显式操作,不是模型工具;见 workspace-write.ts
-   * 的信任模型)。commit/discard 成功后清空 changedFiles(pending 已结清)。
-   */
-  switchBranch: (name: string) => Promise<GitOpResult>;
-  commitAll: (message: string) => Promise<GitOpResult>;
-  undoCommit: () => Promise<GitOpResult>;
-  discardAll: () => Promise<GitOpResult>;
-  /**
    * 会话中途切换模型和/或 provider;返回新解析的 provider。apiKey 只在
    * "TUI 就地输入了新 key"的切换里出现,由实现并入配置后再解析。
-   * 远程会话(client-server 模式)下是异步的,调用方一律 await。
    */
-  switch: (change: { provider?: string; model?: string; apiKey?: string }) => ResolvedProvider | Promise<ResolvedProvider>;
+  switch: (change: { provider?: string; model?: string; apiKey?: string }) => ResolvedProvider;
   /**
-   * GUI 模型设置的保存入口:把一次编辑(baseURL / apiKey / label / models
-   * 的任意子集)并入内存 `config.providers[id]` 并落盘全局配置。patch 只含
-   * 用户真正改过的键——GUI 拿到的配置是脱敏副本,整对象回写会用空值覆盖
-   * 真 key。编辑的是当前 provider 时尽力重解析,让 label / 逐模型
-   * contextWindow 立即生效。
+   * 调整当前 provider 的思考档位(`/think`)。收进 Session 契约而不是让 UI
+   * 直接改字段:扩展的 setThinkingLevel 与 /think 走同一条路,钩子才发得出。
    */
-  saveProvider: (id: string, patch: ProviderConfig) => void | Promise<void>;
-  /** GUI 模型设置的删除入口:整条移除 `providers.<id>`。当前激活的 provider 拒绝删除。 */
-  deleteProvider: (id: string) => void | Promise<void>;
-  /**
-   * 调整当前 provider 的思考档位(`/think`)。直接改 provider/config 字段的
-   * 老写法在 client-server 模式下改的只是本地镜像,必须收进 Session 契约
-   * 才能落到真正跑模型的那个进程。
-   */
-  setReasoningEffort: (level: ReasoningEffort) => void | Promise<void>;
+  setReasoningEffort: (level: ReasoningEffort) => void;
   /**
    * 拉取**所有已配置厂商**的模型列表(`/models` 分组选择器):并发探测,
-   * 单组失败不抛错、就地带回原因。收进契约:凭据只存在于 server 侧。
+   * 单组失败不抛错、就地带回原因。
    */
   listProviderModels: () => Promise<ProviderModels[]>;
-  /** GUI「测试模型」:向对话端点发一次最小补全,验证 baseURL/key/模型 id。 */
-  testModel: (providerId: string, modelId: string) => Promise<ModelTestResult>;
   /** 逐模型能力(models.dev 目录),见 src/model/catalog.ts。 */
   modelCapabilities: (providerId: string, modelId: string) => Promise<ModelCapabilities | undefined>;
-  /**
-   * 只拉**当前厂商**的模型列表。新代码用 listProviderModels,这个方法
-   * 只剩 server 的 listModels 兼容垫片在调(旧 --attach 客户端的版本偏差
-   * 路径)——垫片转发到 listProviderModels 会把 1 次探测放大成全厂商并发
-   * 探测,还得等最慢的一个,旧语义必须保住单厂商。
-   */
-  listModels: () => Promise<ModelInfo[]>;
   /**
    * 会话内体检(`/doctor`):读会话此刻的配置、采信已连上的 MCP 状态、
    * 复用已拉起的 LSP——收进契约后 TUI 不必再摸 session.lsp / mcpStatuses。
@@ -206,9 +153,9 @@ export interface Session {
    * 原文,进时间线;缺省按 name/args 重组。
    */
   runSkill: (name: string, args: string, options?: { display?: string }) => Promise<void>;
-  /** 扩展注册的斜杠命令投影(菜单用),同步读取(远程侧走 SSE 镜像)。 */
+  /** 扩展注册的斜杠命令投影(菜单用),同步读取。 */
   readonly extensionCommands: ExtensionCommandInfo[];
-  /** 扩展贴在输入框上方的状态行,同步读取(远程侧走 SSE 镜像)。 */
+  /** 扩展贴在输入框上方的状态行,同步读取。 */
   readonly extensionStatus: ExtensionStatusEntry[];
   /** 扩展发布的结构化状态(key → 值,如 todo 清单),同步读取。 */
   readonly extensionState: Record<string, unknown>;
@@ -222,34 +169,38 @@ export interface Session {
    */
   runCommand: (name: string, args: string) => Promise<void>;
   /**
-   * 本地分支列表(server 侧跑 git:当前分支 + 其余本地分支,按最近提交
-   * 排序)。远程侧普通 RPC——快、小、不跑 agent。
-   *
-   * `/review` 的选择器不再经它——那条命令是扩展,自己在会话进程里跑 git;
-   * 留下这条是给 GUI 顶栏的**分支切换器**用的,它与评审无关。
+   * 扩展向用户提的、尚未回答的问题(`ctx.ui.select / confirm / input`)。TUI
+   * 把第一条画成提示框;变化经 extensionsChanged 通知。
    */
-  reviewTargets: () => Promise<ReviewTargets>;
+  readonly uiRequests: UiRequest[];
+  /** 回答一个 ui 请求(未知 id 静默忽略——已经答过或已取消)。 */
+  answerUi: (id: string, answer: UiAnswer) => void;
+  /**
+   * TUI 挂上会话:有没有人在看、读写输入框草稿(见 UiHost)。App 挂载时调,
+   * 卸载时传 undefined;headless 从不调——扩展的提问立即按缺省兑现。
+   */
+  attachUi: (host: UiHost | undefined) => void;
+  /** TUI 按到带修饰键的组合时问一声:有扩展认领就跑它的处理器并返回 true。 */
+  runShortcut: (key: string) => boolean;
+  /** `ui.custom` 挂出来、还没 done 的组件(TUI 画第一条,独占键盘)。 */
+  readonly uiCustoms: UiCustomRequest[];
+  /** 组件 done 之后 TUI 调它把 value 交回扩展;未知 id 静默。 */
+  resolveCustom: (id: string, value: unknown) => void;
+  /** 扩展占用的界面区域(widget / header / footer / title),变化经 extensionsChanged。 */
+  readonly uiSurfaces: UiSurfaces;
+  /** 工具在时间线里的自定义画法(registerTool 的 renderCall / renderResult),按工具名。 */
+  readonly toolRenderers: ReadonlyMap<string, ToolRenderers>;
+  /** 自定义消息的画法(registerMessageRenderer),按 customType。 */
+  readonly messageRenderers: ReadonlyMap<string, MessageRenderer>;
+  /** `/reload`:卸载全部磁盘扩展、换一代模块缓存、重新装载。一方扩展不动。 */
+  reloadExtensions: () => Promise<{ loaded: string[]; failed: string[] }>;
   /**
    * 以用户身份跑一轮代码清理(`/simplify`,对齐 Claude Code):解析目标 →
    * 复用 review.ts 的收集器 → 组稿清理提示词交给 agent.run,模型在这一轮里
-   * 直接应用修复(编辑工作区、保持未提交)。失败同样以 reason 代码返回;
-   * 远程侧 deferred RPC(包 agent.run)。
+   * 直接应用修复(编辑工作区、保持未提交)。失败同样以 reason 代码返回。
    */
   startSimplify: (targetArg: string, options?: { display?: string }) => Promise<SimplifyStartResult>;
   dispose: () => Promise<void>;
-}
-
-/**
- * 旧版 server 的 `resumeSession` 会尝试切回会话记录的 provider/model,失败时
- * 抛出这个标记错误("历史已恢复,只是没切成模型")。现在恢复不再动模型,
- * 本进程不会再抛它;类保留是为了 `--attach` 到旧版 server 时 wire 上的
- * ProviderSwitchError 仍能复原类型、走降级提示而不是整次恢复报失败。
- */
-export class ProviderSwitchError extends Error {
-  constructor(cause: Error) {
-    super(cause.message);
-    this.name = 'ProviderSwitchError';
-  }
 }
 
 export interface BootstrapOptions {
@@ -267,6 +218,13 @@ export interface BootstrapOptions {
   disabledExtensions?: string[];
   /** 命令行 `-e <path>` 指定的磁盘扩展(文件或目录),在目录发现之后装。 */
   extensionPaths?: string[];
+  /**
+   * 命令行 `-X name[=value]` 给扩展的 flag(Pi 的 registerFlag):不带 `=`
+   * 是 true,带了是字符串;扩展按自己声明的类型经 `getFlag` 读。
+   */
+  extensionFlags?: Record<string, string | boolean>;
+  /** `tui`(默认)或 `print`(`-p`),进 ctx.mode。 */
+  mode?: 'tui' | 'print';
 }
 
 /** explore 子 agent 的只读白名单(内置工具);扩展工具由各自的工厂决定。 */
@@ -292,6 +250,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
   const bus = new EventBus();
   // 扩展钩子(core/hooks.ts)。处理器出错只上报成 notice,绝不冒泡到循环里。
+  // 不传兜底 ctx:每条注册自带自己那份(`api.on` 传 extCtx),只有 bootstrap
+  // 自己注册的那几个内部钩子用注册表的空实现,它们本来就不读 ctx。
   const hooks = new HookRegistry(({ hook, error }) => {
     bus.emit({
       type: 'notice',
@@ -299,44 +259,227 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       message: t('notice.hookFailed', { hook, message: error.message }),
     });
   });
-  // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
-  const catalogSource = createCatalogSource();
 
-  /**
-   * 本会话经 write/edit 落地过的文件(任务视角的变更索引,进 StateSnapshot
-   * 与 SessionState)。局限写在明面上:bash 里的 git checkout / rm / 脚本生成
-   * 不会进列表也不会失效既有条目——GUI 的权威 pending 视图仍是
-   * workspaceStatus(git 真相),这份列表只回答「这个任务改过哪些文件」。
-   * 封顶 1000 条,超出丢弃(极端会话的快照体积保护)。
-   */
-  const changedFiles = new Map<string, { kind: 'created' | 'modified'; count: number }>();
-  const CHANGED_FILES_MAX = 1000;
-  const changedFilesList = (): Array<{ path: string; kind: 'created' | 'modified'; count: number }> =>
-    // 按 path 排序输出:snapshotKey 靠整份快照 stringify 去重,插入序抖动
-    // 会产生伪推送。
-    [...changedFiles.entries()]
-      .map(([path, entry]) => ({ path, ...entry }))
-      .sort((a, b) => a.path.localeCompare(b.path));
-  const restoreChangedFiles = (
-    entries: Array<{ path: string; kind: 'created' | 'modified'; count: number }> | undefined,
-  ): void => {
-    changedFiles.clear();
-    for (const entry of entries ?? []) {
-      changedFiles.set(entry.path, { kind: entry.kind, count: entry.count });
-    }
-  };
-
-  // 会话状态快照:目前只有变更索引。store 在下方才创建,闭包按绑定取值。
-  const snapshotState = (): SessionState => ({
-    // 空时整个字段不出现:老会话的状态记录 JSON 保持一字不差,脏检查不会
-    // 平白多写一条记录。
-    ...(changedFiles.size > 0 ? { changedFiles: changedFilesList() } : {}),
-  });
-  const persistState = (): void => {
-    void store.saveState(snapshotState()).catch(() => {
-      // 状态是尽力而为的附属信息,失败不打扰用户(消息保存失败才提示)。
+  // ---- 扩展向用户提问(ctx.ui):请求记进 uiRequests,答案经 answerUi 回来 ----
+  //
+  // 「有没有前端在看」由宿主注入(attachUi):TUI 的 App 挂载时给恒真,
+  // headless 从不注入。没人看时立即按缺省兑现——扩展的 select 拿到
+  // undefined、confirm 拿到 false,与用户按 esc 是同一个结局,扩展不必分辨。
+  let uiHost: UiHost | undefined;
+  const uiAvailable = (): boolean => uiHost?.available() ?? false;
+  let uiCounter = 0;
+  const uiPending = new Map<
+    string,
+    { request: UiRequest; resolve: (answer: UiAnswer) => void; owner?: string }
+  >();
+  type UiRequestSpec = UiRequest extends infer R ? (R extends UiRequest ? Omit<R, 'id'> : never) : never;
+  const askUi = (request: UiRequestSpec, owner?: string): Promise<UiAnswer> => {
+    if (!uiAvailable()) return Promise.resolve(undefined);
+    const id = `ui-${++uiCounter}`;
+    const full = { ...request, id } as UiRequest;
+    return new Promise<UiAnswer>((resolve) => {
+      uiPending.set(id, { request: full, resolve, ...(owner ? { owner } : {}) });
+      // 先通知订阅者(TUI 据 uiRequests 画框),再上总线(headless --json 的
+      // 事件流与扩展的 onEvent 看得到)。
+      extensionsChanged();
+      bus.emit({ type: 'ui-request', request: full });
     });
   };
+  const answerUi = (id: string, answer: UiAnswer): void => {
+    const entry = uiPending.get(id);
+    if (!entry) return; // 已经答过,或已被取消
+    uiPending.delete(id);
+    entry.resolve(answer);
+    bus.emit({ type: 'ui-resolved', id });
+    extensionsChanged();
+  };
+  // ---- 渲染区域与自定义组件(Pi 的 ctx.ui.custom / setWidget …) ----
+  //
+  // 与提问同一套形状:核心只存「待画的东西」并通知订阅者,TUI 读出来画;
+  // 没有前端时 custom 立即以 undefined 兑现、区域设置照记不误(挂上 TUI 时
+  // 就能画出来,headless 永远不画)。
+  let uiCustomCounter = 0;
+  const uiCustoms = new Map<
+    string,
+    { request: UiCustomRequest; resolve: (value: unknown) => void; owner?: string }
+  >();
+  const resolveCustom = (id: string, value: unknown): void => {
+    const entry = uiCustoms.get(id);
+    if (!entry) return;
+    uiCustoms.delete(id);
+    entry.resolve(value);
+    extensionsChanged();
+  };
+  /**
+   * 界面区域与两张画法表都是**换引用**而不是就地改:TUI 侧靠身份判断
+   * "有没有变"(Solid 信号的默认相等是 `===`)。就地改会让读取方永远看到
+   * 同一个对象——除非每次读都复制一份,而那又反过来让每次读都"变了",于是
+   * `extensionsChanged` 每跳一次(todo 每次工具调用都跳)就重算整条时间线的
+   * 自定义画法。换引用两头都对:内容没变身份就没变。
+   */
+  let uiSurfaces: UiSurfaces = { widgets: [] };
+  const setSurface = (slot: 'header' | 'footer', surface: ExtensionSurface | undefined): void => {
+    if (surface === undefined) {
+      if (uiSurfaces[slot] === undefined) return;
+      const next = { ...uiSurfaces };
+      delete next[slot];
+      uiSurfaces = next;
+    } else {
+      if (uiSurfaces[slot] === surface) return;
+      uiSurfaces = { ...uiSurfaces, [slot]: surface };
+    }
+    extensionsChanged();
+  };
+  /** 工具的自定义画法,registerTool 时登记、unregister 时删。 */
+  let toolRenderers: ReadonlyMap<string, ToolRenderers> = new Map();
+  /** 自定义消息的画法(registerMessageRenderer),按 customType。 */
+  let messageRenderers: ReadonlyMap<string, MessageRenderer> = new Map();
+  const setRenderer = <T,>(
+    table: ReadonlyMap<string, T>,
+    key: string,
+    value: T | undefined,
+  ): ReadonlyMap<string, T> => {
+    if (value === undefined) {
+      if (!table.has(key)) return table;
+      const next = new Map(table);
+      next.delete(key);
+      return next;
+    }
+    return new Map(table).set(key, value);
+  };
+
+  /** 界面区域的三个原语(下面的 ctx 工厂在它们外面加"记在谁名下")。 */
+  const setWidgetImpl = (key: string, surface: ExtensionSurface | undefined): void => {
+    const index = uiSurfaces.widgets.findIndex((w) => w.key === key);
+    if (surface === undefined) {
+      if (index === -1) return;
+      uiSurfaces = { ...uiSurfaces, widgets: uiSurfaces.widgets.filter((w) => w.key !== key) };
+    } else if (index === -1) {
+      uiSurfaces = { ...uiSurfaces, widgets: [...uiSurfaces.widgets, { key, surface }] };
+    } else {
+      if (uiSurfaces.widgets[index]!.surface === surface) return;
+      const widgets = [...uiSurfaces.widgets];
+      widgets[index] = { key, surface };
+      uiSurfaces = { ...uiSurfaces, widgets };
+    }
+    extensionsChanged();
+  };
+  const setTitleImpl = (title: string | undefined): void => {
+    if (uiSurfaces.title === title) return;
+    if (title === undefined) {
+      const next = { ...uiSurfaces };
+      delete next.title;
+      uiSurfaces = next;
+    } else {
+      uiSurfaces = { ...uiSurfaces, title };
+    }
+    extensionsChanged();
+  };
+
+  /**
+   * 空闲 = 没有链条在跑、也没有压缩在跑。`isIdle()` 与 `waitForIdle()` 必须
+   * 是同一个判据——两者曾经一个只看 isRunning、另一个连压缩也等,于是
+   * `if (ctx.isIdle()) …` 会在压缩进行中放行,而那正是消息会被覆盖的窗口。
+   * 真正的等待逻辑在 Agent.whenIdle(见那边关于"不能靠 bus 事件"的注释)。
+   */
+  const isIdle = (): boolean => !agent.isRunning && !agent.isCompacting;
+  const waitForIdle = (): Promise<void> => agent.whenIdle();
+
+  /**
+   * 一个扩展的 ctx 与 ui(Pi 同形)。**每个扩展一份,由这一个工厂建**:
+   *
+   *  - `hasUI` 必须是**真 getter**。曾经的写法是建一份全局 ctx 再
+   *    `{ ...extensionContext, ui }` 覆盖 ui——展开会在建 API 的那一刻
+   *    (bootstrap 期、attachUi 之前)把 getter 求值成 false 钉死,扩展从此
+   *    永远以为没有界面。工厂里逐字段构造,这个坑结构上不存在。
+   *  - 提问与界面区域要**记在谁名下**:`/reload` 卸载时才撤得掉(挂着的框
+   *    要按"没答"兑现,widget 要收回)。`undoOnce` 由调用方给。
+   *
+   * 成员按引用晚绑定:agent / provider / 会话操作在下方才就绪。
+   */
+  const createExtensionContext = (
+    owner: string,
+    undoOnce: (key: string, undo: () => void) => void,
+  ): ExtensionContext => {
+    const ui: ExtensionUI = {
+      custom: <T,>(
+        factory: (host: ComponentHost, done: (value: T) => void) => ExtensionComponent,
+      ): Promise<T | undefined> => {
+        if (!uiAvailable()) return Promise.resolve(undefined);
+        const id = `custom-${++uiCustomCounter}`;
+        return new Promise<T | undefined>((resolve) => {
+          uiCustoms.set(id, {
+            request: { id, factory: factory as UiCustomRequest['factory'] },
+            resolve: (value) => resolve(value as T | undefined),
+            owner,
+          });
+          extensionsChanged();
+        });
+      },
+      setWidget: (key, surface) => {
+        undoOnce(`widget:${key}`, () => setWidgetImpl(key, undefined));
+        setWidgetImpl(key, surface);
+      },
+      setHeader: (surface) => {
+        undoOnce('header', () => setSurface('header', undefined));
+        setSurface('header', surface);
+      },
+      setFooter: (surface) => {
+        undoOnce('footer', () => setSurface('footer', undefined));
+        setSurface('footer', surface);
+      },
+      setTitle: (title) => {
+        undoOnce('title', () => setTitleImpl(undefined));
+        setTitleImpl(title);
+      },
+      getEditorText: () => uiHost?.getEditorText?.() ?? '',
+      setEditorText: (text) => uiHost?.setEditorText?.(text),
+      select: async (title, items) => {
+        const answer = await askUi({ kind: 'select', title, items }, owner);
+        // 答案必须是列表里的一项:提示框只会发这些,但 answerUi 谁都能调。
+        return typeof answer === 'string' && items.includes(answer) ? answer : undefined;
+      },
+      confirm: async (title, message) =>
+        (await askUi({ kind: 'confirm', title, message }, owner)) === true,
+      input: async (title, placeholder) => {
+        const answer = await askUi(
+          { kind: 'input', title, ...(placeholder !== undefined ? { placeholder } : {}) },
+          owner,
+        );
+        return typeof answer === 'string' ? answer : undefined;
+      },
+      notify: (message, level = 'info') => bus.emit({ type: 'notice', level, message }),
+    };
+    return {
+      cwd: root,
+      get hasUI() {
+        return uiAvailable();
+      },
+      mode: options.mode ?? 'tui',
+      isIdle,
+      abort: () => agent.abort(),
+      waitForIdle,
+      newSession: async () => {
+        await newSessionImpl();
+      },
+      fork: async () => ({ id: (await forkSessionImpl()).id }),
+      switchSession: async (idOrPrefix) => {
+        await resumeSessionImpl(idOrPrefix);
+      },
+      model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
+      config,
+      ui,
+    };
+  };
+  /** 扩展注册的快捷键(normalizeShortcut 后的键 → 处理器)。 */
+  const shortcuts = new Map<
+    string,
+    ExtensionShortcutOptions & { owner: string; ctx: ExtensionContext }
+  >();
+  /** 扩展之间的事件总线(与 AgentEvent 的 bus 无关),所有扩展共用一份。 */
+  const extensionEvents = new ExtensionEvents();
+  // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
+  const catalogSource = createCatalogSource();
 
   /**
    * 技能的会话态:pendingUserSkills 是本轮用户斜杠点名的技能(skill 工具
@@ -392,6 +535,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    * 子 agent 的工具集每次现建,直接从这张表现算。
    */
   const extensionTools = new Map<string, ExtensionToolFactory>();
+  /** 扩展工具的自述(promptSnippet / promptGuidelines),宿主拼进系统提示词。 */
+  const extensionToolMeta = new Map<string, ExtensionToolMeta>();
+  /**
+   * setActiveTools 选中的工具名:undefined = 全部。工具本身仍注册着(tools
+   * 对象不动),过滤**只在开流边界做一次**——主 agent 与子 agent 都经
+   * `AgentOptions.activeTools`,所以这里只需把这个访问器交出去。
+   */
+  let activeTools: Set<string> | undefined;
+  const activeToolsOf = (): ReadonlySet<string> | undefined => activeTools;
+  const isToolActive = (name: string): boolean => !activeTools || activeTools.has(name);
   const materializeExtensionTools = (scope: ToolScope): ToolSet => {
     const out: ToolSet = {};
     for (const [name, factory] of extensionTools) {
@@ -429,6 +582,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     }
     // 扩展工具由工厂按作用域自己决定给不给(MCP 在 explore 里就不给),
     // 所以不参与上面那张内置白名单;每次现建,注册即刻生效。
+    // 停用规则不在这里筛:它由 AgentOptions.activeTools 在开流边界统一应用。
     return { ...builtin, ...materializeExtensionTools({ subagent: true, mode }) };
   };
 
@@ -450,6 +604,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   /** task 工具与 skill 工具的 fork 通道共用同一份子代理依赖。 */
   const taskDeps: TaskToolDeps = {
     config,
+    activeTools: activeToolsOf,
     bus,
     hooks,
     // 惰性取值:/models、/provider 之后 provider 是新对象,提前建好的模型
@@ -571,11 +726,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     tools,
     bus,
     hooks,
+    activeTools: activeToolsOf,
     onHistoryChange: (messages: ModelMessage[]) => {
       void store.save(messages).catch((err: Error) => {
         bus.emit({ type: 'notice', level: 'warn', message: t('notice.sessionSaveFailed', { message: err.message }) });
       });
-      persistState(); // 轮界兜底;脏检查保证状态没变时不产生记录
     },
   });
 
@@ -583,19 +738,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // 跳过)。缓存命中率与成本核算都靠逐轮数据,而消息流里无从还原。取当下的
   // provider:/models 换过之后统计要记到实际服务的那个模型头上。尽力而为,
   // 失败只静默——统计缺一轮远好过打断一次会话。
-  // 聚合 write/edit 落地的文件(见 changedFiles 声明处的语义与局限)。
+
+  // 工具的流式增量 → tool_execution_update 钩子(只有主 agent 的经主总线)。
   bus.on((event) => {
-    if (event.type !== 'tool-end' || event.isError) return;
-    if (event.toolName !== 'write' && event.toolName !== 'edit') return;
-    const out = event.output as { path?: string; changed?: boolean; created?: boolean } | undefined;
-    if (!out?.path || out.changed === false) return; // write 的"内容相同"短路不算变更
-    const prev = changedFiles.get(out.path);
-    if (prev) {
-      // created 只在首次为真;后续 edit 不把 kind 降级回 modified 之外的状态。
-      changedFiles.set(out.path, { kind: prev.kind, count: prev.count + 1 });
-    } else if (changedFiles.size < CHANGED_FILES_MAX) {
-      changedFiles.set(out.path, { kind: out.created ? 'created' : 'modified', count: 1 });
-    }
+    if (event.type !== 'tool-output-delta' || !hooks.has('tool_execution_update')) return;
+    void hooks.notify('tool_execution_update', { callId: event.callId, chunk: event.chunk, subagent: false });
   });
 
   bus.on((event) => {
@@ -612,7 +759,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   });
 
   // ---- 扩展(core/extension.ts):命令表、状态行,以及给每个扩展的 API ----
-  const extensionCommands = new Map<string, { info: ExtensionCommandInfo; command: ExtensionCommand }>();
+  const extensionCommands = new Map<
+    string,
+    { info: ExtensionCommandInfo; command: ExtensionCommand; ctx: ExtensionContext }
+  >();
   const extensionStatus = new Map<string, ExtensionStatusEntry>();
   /** 扩展发布给客户端的结构化状态(见 ExtensionAPI.setState),随快照过线。 */
   const extensionState = new Map<string, unknown>();
@@ -621,12 +771,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     for (const listener of extensionListeners) listener();
   };
   /**
-   * 值没变就不通知。一次 extensionsChanged 在 serve 侧要走完
-   * `computeState()`(重建 redactConfig 的两张表、排一遍变更文件、四个扩展
-   * 投影)再对整份快照做一次 `JSON.stringify` 去重——比在这里把一个小值
-   * 序列化一遍贵得多。重复发布是常态而非例外:todo 每次工具调用都重发整份
-   * 清单(哪怕只是把一项从 pending 挪到 in_progress),而那次调用自己的
-   * tool-end 已经推过一帧了。
+   * 值没变就不通知。一次 extensionsChanged 会让 TUI 重算命令菜单、状态行与
+   * todo 面板;重复发布是常态而非例外:todo 每次工具调用都重发整份清单
+   * (哪怕只是把一项从 pending 挪到 in_progress)。
    */
   const sameJson = (a: unknown, b: unknown): boolean =>
     a !== undefined && JSON.stringify(a) === JSON.stringify(b);
@@ -644,71 +791,339 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    */
   const runtimeOf = async <T>(key: string): Promise<T | undefined> =>
     (await extensionRuntime.get(key)?.()) as T | undefined;
-  const createExtensionApi = (id: string): ExtensionAPI => ({
-    id,
-    root,
-    on: (name, handler) => hooks.on(name, handler),
-    onEvent: (handler) => bus.on(handler),
-    registerCommand: (name, command) => {
-      extensionCommands.set(name, {
-        info: {
-          name,
-          description: command.description,
-          ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
-          ...(command.options ? { hasOptions: true } : {}),
-          ...(command.selectorTitle ? { selectorTitle: command.selectorTitle } : {}),
-        },
-        command,
-      });
-      extensionsChanged();
-    },
-    setStatus: (text, opts) => {
-      if (text === undefined) {
-        if (!extensionStatus.delete(id)) return;
-      } else {
-        const next = { id, text, ...(opts?.since !== undefined ? { since: opts.since } : {}) };
-        if (sameJson(extensionStatus.get(id), next)) return;
-        extensionStatus.set(id, next);
+
+  /**
+   * 扩展声明的命令行 flag(registerFlag)与命令行实际给的值(`-X name[=value]`)。
+   * 值按声明的类型解析:boolean 认 `-X name` / `=true` / `=1`,string 原样。
+   */
+  const flagDecls = new Map<string, ExtensionFlagOptions>();
+  const flagValues = options.extensionFlags ?? {};
+  const getFlag = (name: string): string | boolean | undefined => {
+    const decl = flagDecls.get(name);
+    if (!decl) return undefined;
+    const raw = flagValues[name];
+    if (raw === undefined) return decl.default;
+    if (decl.type === 'boolean') return raw === true || raw === 'true' || raw === '1' || raw === '';
+    return raw === true ? (typeof decl.default === 'string' ? decl.default : '') : raw;
+  };
+
+  /**
+   * 扩展工具的自述拼成系统提示词的一节(Pi 的 promptSnippet / promptGuidelines):
+   * 只列此刻真在主工具集里、且未被 setActiveTools 停掉的——提示词与实际交给
+   * 模型的工具永远一致。第一次有工具带自述时才装这个钩子,没有就零开销。
+   */
+  const extensionToolPromptSection = (): string | undefined => {
+    const lines: string[] = [];
+    const guidelines: string[] = [];
+    for (const [name, meta] of extensionToolMeta) {
+      if (!(name in tools) || !isToolActive(name)) continue;
+      if (meta.promptSnippet) lines.push(`- ${name}: ${meta.promptSnippet}`);
+      for (const rule of meta.promptGuidelines ?? []) guidelines.push(`- ${rule}`);
+    }
+    if (lines.length === 0 && guidelines.length === 0) return undefined;
+    const sections = ['## Extension tools'];
+    if (lines.length > 0) sections.push(lines.join('\n'));
+    if (guidelines.length > 0) sections.push(`Guidelines:\n${guidelines.join('\n')}`);
+    return sections.join('\n\n');
+  };
+  let toolPromptHookInstalled = false;
+  const ensureToolPromptHook = (): void => {
+    if (toolPromptHookInstalled) return;
+    toolPromptHookInstalled = true;
+    hooks.on('before_agent_start', ({ systemPrompt }) => {
+      const section = extensionToolPromptSection();
+      return section ? { systemPrompt: `${systemPrompt}\n\n${section}` } : undefined;
+    });
+  };
+  const registerToolImpl = (
+    id: string,
+    name: string,
+    factory: ExtensionToolFactory,
+    meta: ExtensionToolMeta | undefined,
+  ): void => {
+    if (BUILTIN_TOOL_NAMES.has(name)) {
+      throw new Error(`Extension "${id}" cannot register the builtin tool "${name}".`);
+    }
+    extensionTools.set(name, factory);
+    if (meta && (meta.promptSnippet || meta.promptGuidelines?.length)) {
+      extensionToolMeta.set(name, meta);
+      ensureToolPromptHook();
+    } else {
+      extensionToolMeta.delete(name);
+    }
+    toolRenderers = setRenderer(
+      toolRenderers,
+      name,
+      meta && (meta.renderCall || meta.renderResult)
+        ? {
+            ...(meta.renderCall ? { renderCall: meta.renderCall } : {}),
+            ...(meta.renderResult ? { renderResult: meta.renderResult } : {}),
+          }
+        : undefined,
+    );
+    syncExtensionTool(name);
+    extensionsChanged();
+  };
+
+  /**
+   * 一个扩展注册过的东西,`/reload` 卸载时倒序撤销。
+   *
+   * **只有一个 `undo` 栈,不是十二个分类字段**:每个注册成员在**注册那一行**
+   * 就近把自己的反操作压进来,「加一个 API 成员」与「让它可重载」因此是同一处
+   * 编辑。原来按种类分字段的写法要求作者记得在两个相隔三十行的地方各写一笔,
+   * 漏一个就多一份幽灵注册——而它确实已经漏了:扩展挂起的提问与 `ui.custom`
+   * 组件当时没人记,`/reload` 后屏幕上会留下一个 resolver 已被丢弃的框。
+   * `shutdown` 单列:它要先跑、要 await,且是扩展自己的收尾而不是宿主的撤销。
+   */
+  interface Registrations {
+    undo: Array<() => void>;
+    shutdown: Array<() => void | Promise<void>>;
+  }
+  const registrations = new Map<string, Registrations>();
+  const unloadExtension = async (id: string): Promise<void> => {
+    const reg = registrations.get(id);
+    if (!reg) return;
+    registrations.delete(id);
+    for (const fn of reg.shutdown) {
+      try {
+        await fn();
+      } catch {
+        /* 卸载路上的错误不打扰:扩展马上就被换掉了 */
       }
-      extensionsChanged();
-    },
-    setState: (key, value) => {
-      if (value === undefined) {
-        if (!extensionState.delete(key)) return;
-      } else {
-        if (sameJson(extensionState.get(key), value)) return;
-        // 存副本:扩展后续原地改自己的数组不该悄悄改变已发布的快照。
-        extensionState.set(key, structuredClone(value));
+    }
+    // 倒序:后注册的先撤,与注册顺序对称(同名工具被后者覆盖时才撤得对)。
+    for (const fn of reg.undo.splice(0).reverse()) {
+      try {
+        fn();
+      } catch {
+        /* 同上 */
       }
-      extensionsChanged();
-    },
-    notify: (level, message) => bus.emit({ type: 'notice', level, message }),
-    publishRuntime: (key, get) => extensionRuntime.set(key, get),
-    registerTool: (name, factory) => {
-      if (BUILTIN_TOOL_NAMES.has(name)) {
-        throw new Error(`Extension "${id}" cannot register the builtin tool "${name}".`);
-      }
-      extensionTools.set(name, factory);
-      syncExtensionTool(name);
-    },
-    unregisterTool: (name) => {
+    }
+    extensionsChanged();
+  };
+
+  const createExtensionApi = (id: string): ExtensionAPI => {
+    const reg: Registrations = { undo: [], shutdown: [] };
+    registrations.set(id, reg);
+    const track = (off: () => void): (() => void) => {
+      reg.undo.push(off);
+      return off;
+    };
+    /** 同一把钥匙只压一条撤销(setStatus / setState / setWidget 会被反复调用)。 */
+    const undoKeys = new Set<string>();
+    const registerUndoOnce = (key: string, undo: () => void): void => {
+      if (undoKeys.has(key)) return;
+      undoKeys.add(key);
+      reg.undo.push(undo);
+    };
+    // 卸载时把这个扩展挂着的提问与组件按「没答」兑现——等着它们的是已经被
+    // 换掉的那份模块,不收尾就永远挂在 await 上,框也留在屏幕上。
+    reg.undo.push(() => {
+      for (const [pid, entry] of [...uiPending]) if (entry.owner === id) answerUi(pid, undefined);
+      for (const [cid, entry] of [...uiCustoms]) if (entry.owner === id) resolveCustom(cid, undefined);
+    });
+    /** 工具的撤销:名字可能被后装的扩展顶掉,撤之前先确认还是自己那份工厂。 */
+    const dropTool = (name: string): void => {
       extensionTools.delete(name);
+      extensionToolMeta.delete(name);
+      toolRenderers = setRenderer(toolRenderers, name, undefined);
       syncExtensionTool(name);
-    },
-    run: (text, opts) => agent.run(text, opts),
-    followUp: (text, opts) => agent.followUp(text, opts),
-    isRunning: () => agent.isRunning,
-    abort: () => agent.abort(),
-    history: () => agent.history,
-    // store 是可变绑定(/new、/resume 换掉它),闭包现读才写进当前会话。
-    appendEntry: (type, data) => store.saveCustom(type, data),
-    entries: (type) => store.custom(type),
-    config,
-    // 现取而不是提前建好:`/models`、`/provider` 换过之后 provider 是个新对象,
-    // 提前建的模型会一直打向已经被换掉的那个服务端。createModel 只是本地
-    // 构造,没有网络往返。
-    model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
-  });
+    };
+    const trackTool = (name: string): void => {
+      registerUndoOnce(`tool:${name}`, () => dropTool(name));
+    };
+    /**
+     * 这个扩展的 ui 与 ctx:`createExtensionContext` 建的,提问与界面区域
+     * 都记在它名下(卸载时才撤得干净)。**它必须一路传到处理器手上**——
+     * 钩子、命令、快捷键、Pi 形状工具的 execute 收到的都是这一份。
+     */
+    const extCtx = createExtensionContext(id, registerUndoOnce);
+    const ui = extCtx.ui;
+    return {
+      id,
+      root,
+      // 每条注册自带自己的 ctx(见 HookRegistry.on):不必包一层匿名函数换
+      // ctx——那既废掉注册表按处理器身份的去重,也在扩展的调用栈里塞一帧。
+      on: (name, handler) => {
+        if (name === 'session_shutdown') reg.shutdown.push(handler as () => void | Promise<void>);
+        return track(hooks.on(name, handler, extCtx));
+      },
+      onEvent: (handler) => track(bus.on(handler)),
+      events: {
+        on: (type, handler) => track(extensionEvents.on(type, handler)),
+        emit: (type, data) => extensionEvents.emit(type, data),
+      },
+      ui,
+      get hasUI() {
+        return uiAvailable();
+      },
+      ctx: extCtx,
+      mode: extCtx.mode,
+      waitForIdle: extCtx.waitForIdle,
+      newSession: extCtx.newSession,
+      fork: extCtx.fork,
+      switchSession: extCtx.switchSession,
+      getCommands: () => [...extensionCommands.keys()],
+      registerShortcut: (key, opts) => {
+        const normalized = normalizeShortcut(key);
+        if (!/^(ctrl|meta)\+/.test(normalized)) {
+          throw new Error(`Extension "${id}" shortcut "${key}" must include ctrl or meta.`);
+        }
+        if (RESERVED_SHORTCUTS.has(normalized)) {
+          throw new Error(`Extension "${id}" cannot register the reserved shortcut "${normalized}".`);
+        }
+        shortcuts.set(normalized, { ...opts, owner: id, ctx: extCtx });
+        extensionsChanged();
+        return track(() => {
+          if (shortcuts.get(normalized)?.owner !== id) return;
+          shortcuts.delete(normalized);
+          extensionsChanged();
+        });
+      },
+      registerCommand: (name, command) => {
+        extensionCommands.set(name, {
+          info: {
+            name,
+            description: command.description,
+            ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+            ...(command.options ? { hasOptions: true } : {}),
+            ...(command.selectorTitle ? { selectorTitle: command.selectorTitle } : {}),
+          },
+          command,
+          ctx: extCtx,
+        });
+        reg.undo.push(() => {
+          if (extensionCommands.get(name)?.ctx === extCtx) extensionCommands.delete(name);
+        });
+        extensionsChanged();
+      },
+      setStatus: (text, opts) => {
+        registerUndoOnce('status', () => extensionStatus.delete(id));
+        if (text === undefined) {
+          if (!extensionStatus.delete(id)) return;
+        } else {
+          const next = { id, text, ...(opts?.since !== undefined ? { since: opts.since } : {}) };
+          if (sameJson(extensionStatus.get(id), next)) return;
+          extensionStatus.set(id, next);
+        }
+        extensionsChanged();
+      },
+      setState: (key, value) => {
+        registerUndoOnce(`state:${key}`, () => extensionState.delete(key));
+        if (value === undefined) {
+          if (!extensionState.delete(key)) return;
+        } else {
+          if (sameJson(extensionState.get(key), value)) return;
+          // 存副本:扩展后续原地改自己的数组不该悄悄改变已发布的快照。
+          extensionState.set(key, structuredClone(value));
+        }
+        extensionsChanged();
+      },
+      notify: (level, message) => bus.emit({ type: 'notice', level, message }),
+      publishRuntime: (key, get) => {
+        extensionRuntime.set(key, get);
+        registerUndoOnce(`runtime:${key}`, () => {
+          if (extensionRuntime.get(key) === get) extensionRuntime.delete(key);
+        });
+      },
+      sendMessage: (message, opts) =>
+        agent.sendMessage(message.customType, message.content, {
+          ...(message.display !== undefined ? { display: message.display } : {}),
+          ...(opts?.triggerTurn ? { triggerTurn: true } : {}),
+        }),
+      registerMessageRenderer: (customType, renderer) => {
+        messageRenderers = setRenderer(messageRenderers, customType, renderer);
+        reg.undo.push(() => {
+          if (messageRenderers.get(customType) !== renderer) return;
+          messageRenderers = setRenderer(messageRenderers, customType, undefined);
+        });
+        extensionsChanged();
+      },
+      // 两种形状(见 ExtensionAPI.registerTool):Pi 的定义对象经适配器转成工厂。
+      registerTool: (
+        nameOrDefinition: string | ExtensionToolDefinition,
+        factory?: ExtensionToolFactory,
+        meta?: ExtensionToolMeta,
+      ) => {
+        if (typeof nameOrDefinition === 'object') {
+          const definition = nameOrDefinition;
+          trackTool(definition.name);
+          registerToolImpl(
+            id,
+            definition.name,
+            adaptToolDefinition(definition, { bus, ctx: () => extCtx }),
+            {
+              promptSnippet: definition.promptSnippet,
+              promptGuidelines: definition.promptGuidelines,
+              ...(definition.renderCall ? { renderCall: definition.renderCall.bind(definition) } : {}),
+              ...(definition.renderResult ? { renderResult: definition.renderResult.bind(definition) } : {}),
+            },
+          );
+          return;
+        }
+        trackTool(nameOrDefinition);
+        registerToolImpl(id, nameOrDefinition, factory!, meta);
+      },
+      unregisterTool: (name) => {
+        dropTool(name);
+        extensionsChanged();
+      },
+      getAllTools: () => Object.keys(tools),
+      getActiveTools: () => Object.keys(tools).filter(isToolActive),
+      setActiveTools: (names) => {
+        activeTools = names ? new Set(names) : undefined;
+      },
+      registerFlag: (name, opts) => {
+        flagDecls.set(name, opts);
+        registerUndoOnce(`flag:${name}`, () => {
+          if (flagDecls.get(name) === opts) flagDecls.delete(name);
+        });
+      },
+      getFlag,
+      // 扩展发起的消息标 source: 'extension'——不再过别的扩展的 input 钩子。
+      run: (text, opts) => agent.run(text, { ...opts, source: 'extension' }),
+      followUp: (text, opts) => agent.followUp(text, { ...opts, source: 'extension' }),
+      isRunning: () => agent.isRunning,
+      abort: () => agent.abort(),
+      history: () => agent.history,
+      compact: () => agent.compact(),
+      getContextUsage: () => {
+        const { used, window } = agent.contextUsage;
+        return { used, window, percent: window > 0 ? (used / window) * 100 : 0 };
+      },
+      // store 是可变绑定(/new、/resume 换掉它),闭包现读才写进当前会话。
+      appendEntry: (type, data) => store.saveCustom(type, data),
+      entries: (type) => store.custom(type),
+      getSessionName: () => store.meta.title,
+      setSessionName: async (name) => {
+        await SessionStore.rename(store.id, name);
+        store.setTitle(name);
+      },
+      config,
+      // 现取而不是提前建好:`/models`、`/provider` 换过之后 provider 是个新对象,
+      // 提前建的模型会一直打向已经被换掉的那个服务端。createModel 只是本地
+      // 构造,没有网络往返。
+      model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
+      getModel: () => ({ provider: provider.id, model: provider.model }),
+      setModel: async (change) => {
+        switchProvider(change);
+      },
+      getThinkingLevel: () => provider.reasoningEffort,
+      setThinkingLevel: async (level) => {
+        setReasoningEffort(level);
+      },
+      exec: async (command, args, opts) => {
+        const result = await execa(command, [...args], {
+          cwd: opts?.cwd ?? root,
+          reject: false,
+          ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+          ...(opts?.signal ? { cancelSignal: opts.signal } : {}),
+          ...(opts?.env ? { env: opts.env } : {}),
+        });
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? -1 };
+      },
+    };
+  };
   const disabled = new Set(options.disabledExtensions ?? []);
   const loadedIds = new Set<string>();
   for (const extension of BUILTIN_EXTENSIONS) {
@@ -717,53 +1132,139 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     loadedIds.add(extension.id);
   }
   /**
-   * 磁盘扩展(包 / 全局目录 / 项目目录 / `-e`)。与一方扩展的差别只有一条
-   * 纪律:**任何一个装不上都不能拖垮会话**——文件解析失败、setup 抛错、id
-   * 与已装的撞车,一律变成一条 startup notice 然后跳过。一方扩展装不上则
-   * 照常抛(那是我们自己的 bug,该在 CI 里红)。
+   * 磁盘扩展(包 / 全局目录 / 项目目录 / 配置 / `-e`)。与一方扩展的差别只有
+   * 一条纪律:**任何一个装不上都不能拖垮会话**——文件解析失败、setup 抛错、
+   * id 与已装的撞车,一律变成一条提示然后跳过(启动时进 startupNotices,
+   * `/reload` 时直接上 bus)。一方扩展装不上则照常抛(那是我们自己的 bug,
+   * 该在 CI 里红)。
    */
-  const { extensions: discovered, notFound } = await discoverExtensions({
-    root,
-    extraPaths: options.extensionPaths ?? [],
-    packages: resolved.packages,
-  });
-  for (const file of notFound) {
-    startupNotices.push({ level: 'warn', message: t('notice.extensionPathMissing', { file }) });
-  }
-  for (const entry of discovered) {
-    if (disabled.has(entry.id)) continue;
-    try {
-      const extension = await loadExtension(entry);
-      if (disabled.has(extension.id)) continue;
-      if (loadedIds.has(extension.id)) {
-        startupNotices.push({
-          level: 'warn',
-          message: t('notice.extensionDuplicate', { id: extension.id, file: entry.file }),
-        });
-        continue;
+  const diskExtensionIds = new Set<string>();
+  let extensionGeneration = 0;
+  const loadDiskExtensions = async (
+    report: (level: 'warn' | 'info', message: string) => void,
+  ): Promise<{ loaded: string[]; failed: string[] }> => {
+    const loaded: string[] = [];
+    const failed: string[] = [];
+    const { extensions: discovered, notFound } = await discoverExtensions({
+      root,
+      extraPaths: options.extensionPaths ?? [],
+      configPaths: config.extensions,
+      packages: resolved.packages,
+    });
+    for (const file of notFound) report('warn', t('notice.extensionPathMissing', { file }));
+    // **先并发 import,再按序 setup**:import/jiti 转译是这里最贵的一步,而
+    // 每个文件互不相干(发现那一步早就是并发的);顺序语义全在 setup 那一遍
+    // (后装的同名覆盖先装的、按 id 去重),所以并发装载不影响它。
+    const modules = await Promise.all(
+      discovered.map(async (entry) => {
+        if (disabled.has(entry.id)) return undefined;
+        try {
+          return { entry, extension: await loadExtension(entry, { generation: extensionGeneration }) };
+        } catch (err) {
+          return { entry, error: err };
+        }
+      }),
+    );
+    for (const item of modules) {
+      if (!item) continue;
+      const { entry } = item;
+      try {
+        if ('error' in item) throw item.error;
+        const { extension } = item;
+        if (disabled.has(extension.id)) continue;
+        if (loadedIds.has(extension.id)) {
+          report('warn', t('notice.extensionDuplicate', { id: extension.id, file: entry.file }));
+          failed.push(extension.id);
+          continue;
+        }
+        await extension.setup(createExtensionApi(extension.id));
+        loadedIds.add(extension.id);
+        diskExtensionIds.add(extension.id);
+        loaded.push(extension.id);
+      } catch (err) {
+        report('warn', t('notice.extensionLoadFailed', { id: entry.id, file: entry.file, message: errorMessage(err) }));
+        failed.push(entry.id);
       }
-      await extension.setup(createExtensionApi(extension.id));
-      loadedIds.add(extension.id);
-    } catch (err) {
-      startupNotices.push({
-        level: 'warn',
-        message: t('notice.extensionLoadFailed', { id: entry.id, file: entry.file, message: errorMessage(err) }),
-      });
+    }
+    return { loaded, failed };
+  };
+  await loadDiskExtensions((level, message) => startupNotices.push({ level, message }));
+  /**
+   * `/reload`:只动磁盘扩展——逐个撤销注册、换一代模块缓存、重新发现与装载。
+   * 一方扩展不动(它们是代码库的一部分,改了就该重启)。失败的照旧变提示。
+   */
+  const reloadExtensions = async (): Promise<{ loaded: string[]; failed: string[] }> => {
+    for (const id of [...diskExtensionIds]) {
+      await unloadExtension(id);
+      loadedIds.delete(id);
+      diskExtensionIds.delete(id);
+    }
+    extensionGeneration += 1;
+    return loadDiskExtensions((level, message) => bus.emit({ type: 'notice', level, message }));
+  };
+
+  // 扩展贡献的技能目录(resources_discover):追加后重扫一次,skill 工具随之重建。
+  {
+    const { skillPaths } = await hooks.resourcesDiscover();
+    if (skillPaths.length > 0) {
+      skillManager.addDirs(skillPaths.map((p) => path.resolve(root, p)));
+      await skillManager.list().catch(() => {});
+      syncSkillTool();
     }
   }
 
   const runCommand = async (name: string, args: string): Promise<void> => {
     const entry = extensionCommands.get(name);
     if (!entry) throw new Error(`Unknown command: ${name}`);
-    await entry.command.handler(args);
+    await entry.command.handler(args, entry.ctx);
   };
 
   if (options.resume) {
     agent.setHistory([...options.resume.messages]);
-    restoreChangedFiles(options.resume.state.changedFiles);
   }
   // 扩展从会话记录恢复自己的状态(如 /goal 的条件)。在历史与状态换好之后。
-  await hooks.sessionStart({ reason: 'startup' });
+  await hooks.notify('session_start', { reason: 'startup' });
+
+  // ---- 会话切换(/new、/resume、/fork 与扩展的 ctx.newSession / switchSession / fork 共用) ----
+  const newSessionImpl = async (): Promise<SessionStore> => {
+    store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
+    agent.clear();
+    resetSkillActivation();
+    await hooks.notify('session_start', { reason: 'new' });
+    bus.emit({ type: 'session-changed', reason: 'new', id: store.id });
+    return store;
+  };
+  const resumeSessionImpl = async (idOrPrefix: string): Promise<SessionStore> => {
+    // 扩展可取消(session_before_switch);取消以错误呈现,调用方按失败提示。
+    if ((await hooks.cancelable('session_before_switch', { id: idOrPrefix })).cancel) {
+      throw new Error('Session switch cancelled by an extension.');
+    }
+    const id = await SessionStore.resolveId(idOrPrefix, { root });
+    const opened = await SessionStore.open(id);
+    store = opened;
+    // 上一段对话点名的技能不能漂进另一段对话。
+    resetSkillActivation();
+    // 换的是另一段对话:累计用量一并归零(见 setHistory 的注释)。
+    agent.setHistory([...opened.messages], { resetSpend: true });
+    // 刻意不切回会话记录的 provider/model:恢复的是对话内容,模型始终
+    // 沿用当前正在用的那一个。反过来把 meta 更新成当前模型,列表里那一行
+    // 才不会继续宣称一个这段对话往后都不会再用的模型。
+    opened.setModel(provider.id, provider.model);
+    await hooks.notify('session_start', { reason: 'resume' });
+    bus.emit({ type: 'session-changed', reason: 'resume', id: opened.id });
+    return opened;
+  };
+  const forkSessionImpl = async (): Promise<SessionStore> => {
+    if ((await hooks.cancelable('session_before_fork', undefined)).cancel) {
+      throw new Error('Session fork cancelled by an extension.');
+    }
+    // 与 --fork-session 同一条路:eager 拷贝进新文件,源会话从此不再被写。
+    // 内存里的历史一概不动——分叉的意义就是"一切照旧,换个 id"。
+    store = await store.fork({ provider: provider.id, model: provider.model });
+    await hooks.notify('session_start', { reason: 'fork' });
+    bus.emit({ type: 'session-changed', reason: 'fork', id: store.id });
+    return store;
+  };
 
   const switchProvider = (change: {
     provider?: string;
@@ -795,7 +1296,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // meta 的 provider/model 现在纯粹是给会话列表看的("这段对话用的什么
     // 模型"),不跟着切就会一直停在创建时的值。
     store.setModel(next.id, next.model);
+    // 通知型钩子,不等它:切换本身是同步语义,扩展的反应在后台跑。
+    void hooks.notify('model_select', { provider: next.id, model: next.model });
     return next;
+  };
+
+  const setReasoningEffort = (level: ReasoningEffort): void => {
+    // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
+    // streamText 生效;同时写回内存配置,使 /models、/provider 重新 resolve
+    // 时不丢失本次选择。(从 App.tsx 的 /think 分支原样收编。)
+    provider.reasoningEffort = level;
+    config.providers[provider.id] = {
+      ...(config.providers[provider.id] ?? {}),
+      reasoningEffort: level,
+    };
+    void hooks.notify('thinking_level_select', { level });
   };
 
   /**
@@ -823,7 +1338,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         ', then relay its report to the user.';
       skillActivation.pendingUserSkills.add(meta.name);
       try {
-        await agent.run(wrapSkillPrompt(display, directive), { display });
+        await agent.run(wrapSkillPrompt(display, directive), { display, source: 'skill' });
       } finally {
         skillActivation.pendingUserSkills.delete(meta.name);
       }
@@ -831,7 +1346,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     }
 
     const body = await readSkillBody(meta);
-    await agent.run(wrapSkillPrompt(display, substituteArgs(body, args)), { display });
+    await agent.run(wrapSkillPrompt(display, substituteArgs(body, args)), {
+      display,
+      source: 'skill',
+    });
   };
 
   /**
@@ -864,7 +1382,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
 
     await agent.run(
       wrapSkillPrompt(display, buildSimplifyApplyPrompt(scope, collected.summary, sections)),
-      { display },
+      { display, source: 'skill' },
     );
     return { ok: true };
   };
@@ -885,134 +1403,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     get store() {
       return store;
     },
-    newSession: async () => {
-      store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
-      agent.clear();
-      changedFiles.clear();
-      resetSkillActivation();
-      persistState();
-      await hooks.sessionStart({ reason: 'new' });
-      return store;
-    },
-    resumeSession: async (idOrPrefix: string) => {
-      const id = await SessionStore.resolveId(idOrPrefix, { root });
-      const opened = await SessionStore.open(id);
-      store = opened;
-      // 上一段对话点名的技能不能漂进另一段对话。
-      resetSkillActivation();
-      // 换的是另一段对话:累计用量一并归零(见 setHistory 的注释)。
-      agent.setHistory([...opened.messages], { resetSpend: true });
-      restoreChangedFiles(opened.state.changedFiles);
-      // 刻意不切回会话记录的 provider/model:恢复的是对话内容,模型始终
-      // 沿用当前正在用的那一个。反过来把 meta 更新成当前模型,列表里那一行
-      // 才不会继续宣称一个这段对话往后都不会再用的模型。
-      opened.setModel(provider.id, provider.model);
-      await hooks.sessionStart({ reason: 'resume' });
-      return opened;
-    },
-    forkSession: async () => {
-      // 与 --fork-session 同一条路:eager 拷贝进新文件,源会话从此不再被写。
-      // 内存里的历史/todos/权限一概不动——分叉的意义就是"一切照旧,换个 id"。
-      store = await store.fork({ provider: provider.id, model: provider.model });
-      // 与 newSession 同理:fork 带过来的是源 store 里*已落盘*的 state_,若它
-      // 落后于内存(saveState 静默失败过),分叉的 lastStateJson 也初始化成了
-      // 同一份旧值,脏检查会一直压住重写。这里按当前真实状态补一次。
-      persistState();
-      await hooks.sessionStart({ reason: 'fork' });
-      return store;
-    },
-    archiveSession: async (id, archived) => {
-      // 先落盘(静态路径是权威写入),再同步活跃实例的内存 meta——顺序反过来
-      // 也行,关键是两边一致;这里选"磁盘成功才改内存",失败时内存不脏。
-      const meta = await SessionStore.setArchived(id, archived);
-      if (id === store.id) store.setArchivedFlag(archived);
-      return meta;
-    },
-    renameSession: async (id, title) => {
-      const meta = await SessionStore.rename(id, title);
-      if (id === store.id) store.setTitle(title);
-      return meta;
-    },
-    deleteSession: async (id) => {
-      // 拒绝删除活跃会话:serve 正拿着它写,删了下一轮 save 会凭空重建文件。
-      // 措辞对齐 deleteProvider 的先例(英文过线,GUI 自己本地化)。
-      if (id === store.id) {
-        throw new Error(`Session "${id}" is active. Switch to another session first.`);
-      }
-      await SessionStore.remove(id);
-    },
-    listFiles: async () => {
-      // GUI 文件树要的清单比 @ 补全菜单全:limit 提到 20000,打满视为截断。
-      const limit = 20_000;
-      const files = await listWorkspaceFiles(root, limit);
-      return { files, truncated: files.length >= limit };
-    },
-    readFile: (filePath) => readWorkspaceFile(root, filePath),
-    get changedFiles() {
-      return changedFilesList();
-    },
-    switchBranch: (name) => gitSwitchBranch(root, name),
-    commitAll: async (message) => {
-      const result = await gitCommitAll(root, message);
-      // pending 已结清,任务级变更索引一并清空(不发 notice:这是 GUI 发起的
-      // 操作,结果走 RPC 返回值,广播会打扰同 server 的其他客户端)。
-      if (result.ok) {
-        changedFiles.clear();
-        persistState();
-      }
-      return result;
-    },
-    undoCommit: () => gitUndoCommit(root),
-    discardAll: async () => {
-      const result = await gitDiscardAll(root);
-      if (result.ok) {
-        changedFiles.clear();
-        persistState();
-      }
-      return result;
-    },
+    newSession: newSessionImpl,
+    resumeSession: resumeSessionImpl,
+    forkSession: forkSessionImpl,
     switch: switchProvider,
-    saveProvider: async (id, patch) => {
-      // 经 schema 过一遍:剥掉未知键(wire 上的 args 没有类型约束)、校验
-      // 字段形状;再滤掉 undefined——只合并用户真正改过的键。
-      const parsed = providerConfigSchema.parse(patch);
-      const cleaned: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(parsed)) {
-        if (value !== undefined) cleaned[key] = value;
-      }
-      config.providers[id] = { ...config.providers[id], ...(cleaned as ProviderConfig) };
-      await saveProviderEntry(id, cleaned);
-      // 编辑的是当前 provider 时重解析(空 change 的 switch 即"按当前配置
-      // 重算"),label / 逐模型 contextWindow 立即生效;失败不回滚保存——
-      // 条目被改坏的真实错误留给下一次显式切换报告。
-      if (id === provider.id) {
-        try {
-          switchProvider({});
-        } catch {
-          /* 保存已完成;解析问题在下一次显式 switch 时浮现。 */
-        }
-      }
-    },
-    deleteProvider: async (id) => {
-      // 拒绝删除激活条目:agent 正拿着它跑,删了内存与落盘立刻分叉。
-      if (id === provider.id) {
-        throw new Error(`Provider "${id}" is active. Switch to another provider first.`);
-      }
-      delete config.providers[id];
-      await deleteProviderEntry(id);
-    },
-    setReasoningEffort: (level: ReasoningEffort) => {
-      // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
-      // streamText 生效;同时写回内存配置,使 /models、/provider 重新 resolve
-      // 时不丢失本次选择。(从 App.tsx 的 /think 分支原样收编。)
-      provider.reasoningEffort = level;
-      config.providers[provider.id] = {
-        ...(config.providers[provider.id] ?? {}),
-        reasoningEffort: level,
-      };
-    },
+    setReasoningEffort,
     listProviderModels: () => listProviderModels(config),
-    testModel: (providerId, modelId) => testModelConnection(config, providerId, modelId),
     // 返回**生效可选集**,不是目录原文:回退与 wire 可表达性过滤都做在这里,
     // 三个前端(TUI /think 选择器与校验、GUI 思考菜单、模型弹窗)直接渲染。
     // 放前端做过两次都是错的——家族表是 server-only 模块,renderer 摸不到,
@@ -1032,7 +1428,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       }
       return { ...caps, efforts: effectiveEfforts(target, caps?.efforts) };
     },
-    listModels: () => listModels(provider),
     doctor: async ({ offline }) => {
       // 会话内已经拉起来的子进程直接采信状态,doctor 不再自己连/拉一份。两份
       // 都由扩展发布(publishRuntime),扩展没装时为 undefined——那不是"一个
@@ -1091,10 +1486,54 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       };
     },
     runCommand,
-    reviewTargets: () => collectReviewTargets(root),
+    get uiRequests() {
+      return [...uiPending.values()].map((entry) => entry.request);
+    },
+    answerUi,
+    attachUi: (host) => {
+      uiHost = host;
+    },
+    runShortcut: (key) => {
+      // 常态是一个扩展快捷键都没注册:早退,别为每次 ctrl/meta 按键白算一遍。
+      // key 由调用方给出归一形态(TUI 的 shortcutOf),这里不再归一第二遍。
+      if (shortcuts.size === 0) return false;
+      const entry = shortcuts.get(key);
+      if (!entry) return false;
+      // 处理器可能是异步的;失败经 notice 呈现,绝不掀掉键盘处理器。
+      void Promise.resolve(entry.handler(entry.ctx)).catch((err: unknown) => {
+        bus.emit({
+          type: 'notice',
+          level: 'warn',
+          message: t('notice.hookFailed', { hook: `shortcut ${key}`, message: errorMessage(err) }),
+        });
+      });
+      return true;
+    },
+    get uiCustoms() {
+      return [...uiCustoms.values()].map((entry) => entry.request);
+    },
+    resolveCustom,
+    // 三份都**换引用不就地改**(见各自声明处),所以这里原样交出去:内容
+    // 没变身份就没变,TUI 侧的信号不会被每次 extensionsChanged 白唤醒一遍
+    // (todo 每次工具调用都会跳一次,而它一跳就要重算整条时间线的画法)。
+    get uiSurfaces() {
+      return uiSurfaces;
+    },
+    get toolRenderers() {
+      return toolRenderers;
+    },
+    get messageRenderers() {
+      return messageRenderers;
+    },
+    reloadExtensions,
     startSimplify,
     // 子进程(MCP 的 stdio server、LSP 的语言服务器)由各自的扩展在
     // session_shutdown 里关,包括「连接还在路上时会话就关了」的孤儿竞态。
-    dispose: () => hooks.sessionShutdown(),
+    // 还挂着的提问先按「没答」兑现,等它的扩展才不会永远挂在 await 上。
+    dispose: async () => {
+      for (const id of [...uiPending.keys()]) answerUi(id, undefined);
+      for (const id of [...uiCustoms.keys()]) resolveCustom(id, undefined);
+      await hooks.notify('session_shutdown', undefined);
+    },
   };
 }

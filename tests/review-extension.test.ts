@@ -43,7 +43,7 @@ function setup(root: string): Harness {
      */
     run: async (args) => {
       const before = followUps.length + notices.length;
-      await command.handler(args);
+      await command.handler(args, api.ctx);
       await vi.waitFor(() => expect(followUps.length + notices.length).toBeGreaterThan(before), {
         timeout: 10_000,
       });
@@ -220,7 +220,7 @@ describe('/review 扩展', () => {
     // 返回时收集还在后台跑——handler 里 await 几秒的 git 会把客户端的串行
     // RPC 队列整个堵住(用户随后的 run/abort/switch 全排在后面),而请求本身
     // 还要冒 HTTP 超时的风险。
-    await commands.get('review')!.handler('uncommitted');
+    await commands.get('review')!.handler('uncommitted', api.ctx);
     expect(followUp).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(followUp).toHaveBeenCalledOnce(), { timeout: 10_000 });
   });

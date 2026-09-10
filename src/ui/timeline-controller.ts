@@ -6,6 +6,7 @@ import type { SessionHandle } from '../app/session-handle.js';
 import { COMPACT_EXPECTED_SUMMARY_CHARS } from './commands/registry.js';
 import { splitCommitted } from './preview.js';
 import { replayTimeline } from '../session/replay.js';
+import { unwrapCustomMessage } from '../agent/loop.js';
 import { t } from '../i18n/index.js';
 
 /**
@@ -23,6 +24,20 @@ import { t } from '../i18n/index.js';
 let itemCounter = 0;
 /** 时间线条目 key 的唯一来源(App 的 bannerItem/回退回放与 controller 共用)。 */
 export const nextKey = () => `item-${itemCounter++}`;
+
+/**
+ * 自定义消息的时间线条目。两条路各自构造过一遍(`custom-message` 事件,
+ * 以及 `sendMessage(triggerTurn)` 那一轮 turn-start 里的信封),字段与
+ * "display 与正文相同就不带"这条规则因此写了两遍。
+ */
+function customItem(customType: string, content: string, display?: string): NewTimelineItem {
+  return {
+    kind: 'custom',
+    customType,
+    content,
+    ...(display !== undefined && display !== content ? { display } : {}),
+  };
+}
 
 /**
  * 启动横幅条目:字段取自 session 的当前值。会话中途 /models 改掉的值走
@@ -116,8 +131,8 @@ export function createTimelineController(
   // 工作状态:undefined 表示空闲(状态行隐藏)。since 在整轮工作中保持
   // 不变,阶段切换只更新文字和颜色,已用时连续累计。
   const [work, setWork] = createSignal<WorkState | undefined>(undefined);
-  // 挂载初值取 contextUsage(--attach 到跑到一半的 server 时立即有读数,
-  // 而不是等下一个 step-end),本地新会话自然是 0。
+  // 挂载初值取 contextUsage(恢复会话时立即有估算读数,而不是等下一个
+  // step-end),新会话自然是 0。
   const [usage, setUsage] = createSignal<UsageMirror>({ ...session.agent.contextUsage, total: 0 });
 
   // 本段思考的起始时刻,定稿那一行的耗时由它算出。undefined 表示当前没有
@@ -132,8 +147,8 @@ export function createTimelineController(
   /**
    * 本轮到此刻的 token 增量,给状态行。每个 step-end 刷新一次 usage,所以
    * 它按步跳而不是按 delta 连续涨——够说明"还在往前走"了。turnStartedAt
-   * 为 0(没见过本轮的 turn-start,如 --attach 半途接入)时不报数,免得把
-   * 整个会话的累计量当成这一轮的开销。
+   * 为 0(没见过本轮的 turn-start)时不报数,免得把整个会话的累计量当成
+   * 这一轮的开销。
    */
   const turnTokens = () => (turnStartedAt ? Math.max(0, usage().total - turnStartTokens()) : 0);
 
@@ -193,13 +208,37 @@ export function createTimelineController(
       // batch:一条事件往往连着改好几个信号,合并成一次渲染刷新。
       batch(() => {
         switch (event.type) {
-          case 'turn-start':
-            push({ kind: 'user', text: event.display ?? event.userText });
+          // 会话换了(扩展经 ctx.newSession / switchSession,或斜杠命令):重建
+          // 时间线。命令路径自己也会重建一次,重复是幂等的。fork 不动时间线。
+          case 'session-changed':
+            if (event.reason === 'new') {
+              setItems([sessionBanner(session)]);
+              setUsage((prev) => ({ ...prev, used: session.agent.contextUsage.used, total: 0 }));
+            } else if (event.reason === 'resume') {
+              setItems([sessionBanner(session), ...buildResumeItems(session)]);
+              setUsage({ ...session.agent.contextUsage, total: 0 });
+            }
+            break;
+
+          case 'custom-message':
+            push(customItem(event.customType, event.content, event.display));
+            break;
+
+          case 'turn-start': {
+            // 扩展 sendMessage(triggerTurn) 开的轮:userText 带着自定义信封,
+            // 按 customType 画,而不是当普通用户消息。
+            const custom = unwrapCustomMessage(event.userText);
+            if (custom) {
+              push(customItem(custom.customType, custom.content, event.display));
+            } else {
+              push({ kind: 'user', text: event.display ?? event.userText });
+            }
             turnStartedAt = Date.now();
             setTurnStartTokens(usage().total);
             // 新一轮从零开始计时,不沿用上一轮残留的 since。
             setWork({ phase: 'thinking', since: Date.now() });
             break;
+          }
 
           case 'text-delta': {
             const combined = activeText() + event.text;
@@ -295,10 +334,9 @@ export function createTimelineController(
             // 某一轮花了多久、烧了多少——这一行补的正是这个。中断与出错各自
             // 走 aborted/error 分支(那里没有可信的用量),不画这一行。
             //
-            // 没见过本轮的 turn-start 就不画:`--attach` 连上跑到一半的
-            // server、或重连时重放缓冲已滚过 turn-start(server 回 gap),
-            // 都会只收到 turn-end。那时基准是 0,耗时会写成 0ms,更糟的是
-            // 整个会话的累计量会被当成这一轮的开销报出来。
+            // 没见过本轮的 turn-start 就不画(扩展在链条中途 followUp
+            // 之类只收到 turn-end 的情形):那时基准是 0,耗时会写成 0ms,
+            // 更糟的是整个会话的累计量会被当成这一轮的开销报出来。
             if (turnStartedAt) {
               push({
                 kind: 'turn',

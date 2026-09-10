@@ -45,7 +45,7 @@ export interface ReviewCommit {
   date: string;
 }
 
-/** 选择器数据源(server 侧跑 git;--attach 时仓库在 server 机器上)。 */
+/** 选择器数据源(跑 git 列本地分支)。 */
 export interface ReviewTargets {
   isRepo: boolean;
   /** detached HEAD 时为真(uncommitted / commit 仍可用)。 */
@@ -65,7 +65,7 @@ export type ReviewFailure =
   | 'no-merge-base'
   | 'unknown-commit'
   | 'git-error'
-  /** 参数不认识(UI 侧已拦 usage;server 侧权威再解析一次的防御性兜底)。 */
+  /** 参数不认识(UI 侧已拦 usage;收集侧权威再解析一次的防御性兜底)。 */
   | 'bad-arg';
 
 export interface ReviewFailureInfo {
@@ -133,8 +133,8 @@ const SHA_TOKEN = /^[0-9a-f]{7,40}$/i;
 export const ARG_SCOPE_KEYWORDS: readonly string[] = ['base', 'commit', 'custom'];
 
 /**
- * 解析 `/review <arg>` 的参数。App 侧先解析一次给 usage 提示,server 侧
- * (bootstrap.startReview)权威再解析一次——不认识的一律 undefined,由调用方
+ * 解析 `/review <arg>` 的参数。App 侧先解析一次给 usage 提示,扩展的
+ * handler 权威再解析一次——不认识的一律 undefined,由调用方
  * 决定展示什么。分支名只做形状校验,真伪交给 rev-parse --verify。裸的
  * `base`/`commit`/`custom` 在这里不成范围:App 拦下它们去开选择器/预填。
  */

@@ -76,7 +76,7 @@ describe('MCP 扩展', () => {
 
     let turnStarted = false;
     const turn = host.hooks
-      .turnStart({ userText: 'hi', subagent: false })
+      .notify('turn_start', { userText: 'hi', subagent: false })
       .then(() => (turnStarted = true));
     await new Promise((r) => setTimeout(r, 10));
     expect(turnStarted).toBe(false); // 还卡在连接上
@@ -96,7 +96,7 @@ describe('MCP 扩展', () => {
       },
     );
     const host = makeHost();
-    await host.hooks.turnStart({ userText: 'hi', subagent: false });
+    await host.hooks.notify('turn_start', { userText: 'hi', subagent: false });
     expect(host.notices).toEqual([
       { level: 'warn', message: t('cli.mcpFailed', { name: 'broken', error: 'spawn failed' }) },
     ]);
@@ -106,7 +106,7 @@ describe('MCP 扩展', () => {
     const { connection, callTool } = fakeConnection('local');
     mockConnect.mockResolvedValue({ connections: [connection] });
     const host = makeHost();
-    await host.hooks.turnStart({ userText: 'hi', subagent: false });
+    await host.hooks.notify('turn_start', { userText: 'hi', subagent: false });
 
     const factory = host.tools.get('mcp__local__search')!;
     const tool = factory(MAIN) as Tool & { execute: (i: unknown, o: unknown) => Promise<unknown> };
@@ -120,7 +120,7 @@ describe('MCP 扩展', () => {
   it('explore 子 agent 拿不到 MCP 工具(不透明、可能有副作用);general 子 agent 拿得到', async () => {
     mockConnect.mockResolvedValue({ connections: [fakeConnection('local').connection] });
     const host = makeHost();
-    await host.hooks.turnStart({ userText: 'hi', subagent: false });
+    await host.hooks.notify('turn_start', { userText: 'hi', subagent: false });
     const factory = host.tools.get('mcp__local__search')!;
 
     expect(factory({ subagent: true, mode: 'explore' })).toBeUndefined();
@@ -134,7 +134,7 @@ describe('MCP 扩展', () => {
       connections: [fakeConnection('a').connection, fakeConnection('b').connection],
     });
     const host = makeHost();
-    await host.hooks.turnStart({ userText: 'hi', subagent: false });
+    await host.hooks.notify('turn_start', { userText: 'hi', subagent: false });
     expect([...host.tools.keys()].sort()).toEqual(['mcp__a__search', 'mcp__b__search']);
   });
 
@@ -142,12 +142,12 @@ describe('MCP 扩展', () => {
     const a = fakeConnection('a');
     mockConnect.mockResolvedValue({ connections: [a.connection] });
     const host = makeHost();
-    await host.hooks.turnStart({ userText: 'hi', subagent: false });
+    await host.hooks.notify('turn_start', { userText: 'hi', subagent: false });
     expect(host.tools.size).toBe(1);
 
     // 断言的是**子进程被关掉**。工具表不必注销:dispose 只在进程收尾时跑,
     // 那张表马上就跟着进程一起没了。
-    await host.hooks.sessionShutdown();
+    await host.hooks.notify('session_shutdown', undefined);
     expect(a.close).toHaveBeenCalledTimes(1);
   });
 
@@ -159,7 +159,7 @@ describe('MCP 扩展', () => {
     const host = makeHost();
     const late = fakeConnection('late');
 
-    const shutdown = host.hooks.sessionShutdown();
+    const shutdown = host.hooks.notify('session_shutdown', undefined);
     settle({ connections: [late.connection] });
     await shutdown;
 
@@ -191,7 +191,7 @@ describe('MCP 扩展', () => {
   it('/mcp 列出连接状态;没有 server 时说没有', async () => {
     mockConnect.mockResolvedValue({ connections: [] });
     const empty = makeHost({});
-    await empty.commands.get('mcp')!.handler('');
+    await empty.commands.get('mcp')!.handler('', empty.api.ctx);
     expect(empty.notices.at(-1)).toEqual({ level: 'info', message: t('notice.mcpNone') });
 
     mockConnect.mockImplementation(
@@ -202,7 +202,7 @@ describe('MCP 扩展', () => {
       },
     );
     const host = makeHost();
-    await host.commands.get('mcp')!.handler('');
+    await host.commands.get('mcp')!.handler('', host.api.ctx);
     const message = host.notices.at(-1)!.message;
     expect(message).toContain('ok');
     expect(message).toContain(t('notice.mcpTools', { n: 3 }));

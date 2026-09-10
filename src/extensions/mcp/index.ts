@@ -36,8 +36,8 @@ export const mcpExtension: Extension = {
     const connecting = connectMcpServers(api.config.mcpServers, (status) => {
       statuses.push(status);
       // 失败即刻上总线:连接非阻塞之后,状态是在**握手之后**才落地的,
-      // 调用方写 stderr 已经晚了(受管 sidecar 里进不可见的尾部缓冲,
-      // 进程内 TUI 里直接糊进全屏画面)。bus 是三个前端都收得到的通道。
+      // 调用方写 stderr 已经晚了(TUI 下直接糊进全屏画面)。bus 是 TUI 与
+      // headless 都收得到的通道。
       if (!status.connected) {
         api.notify('warn', t('cli.mcpFailed', { name: status.name, error: status.error ?? '?' }));
       }

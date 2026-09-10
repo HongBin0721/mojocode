@@ -57,7 +57,7 @@ GLM 的端点是 `/api/paas/v4`,**不要**在后面再拼 `/v1`,否则 404。
 
 ### 逐模型条目
 
-`providers.<id>.models` 是一个数组,每项 `{ id, label?, contextWindow?, maxOutputTokens?, reasoning? }`。配置了它之后模型选择器直接读它(不再探测 `/models` 端点),`contextWindow` 按模型覆盖服务商级的值,`maxOutputTokens` 直接传给请求。桌面 GUI 的模型设置维护的就是这张表。
+`providers.<id>.models` 是一个数组,每项 `{ id, label?, contextWindow?, maxOutputTokens?, reasoning? }`。配置了它之后模型选择器直接读它(不再探测 `/models` 端点),`contextWindow` 按模型覆盖服务商级的值,`maxOutputTokens` 直接传给请求。
 
 ## 思考档位
 

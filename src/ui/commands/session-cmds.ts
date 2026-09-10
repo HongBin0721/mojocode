@@ -1,7 +1,6 @@
 import { t } from '../../i18n/index.js';
 import { INIT_PROMPT } from '../../agent/init.js';
 import { formatDoctor } from '../../app/doctor.js';
-import { ProviderSwitchError } from '../../app/bootstrap.js';
 import { formatCommandLabel } from '../Input.js';
 import { buildResumeItems, sessionBanner } from '../timeline-controller.js';
 import { buildCommands } from './registry.js';
@@ -98,25 +97,17 @@ export const resume: CommandHandler = async (ctx, arg) => {
     ctx.push({ kind: 'notice', level: 'info', message: t('cli.noSessions') });
     return;
   }
-  let providerWarn: string | undefined;
   try {
     await session.resumeSession(arg);
   } catch (err) {
-    if (err instanceof ProviderSwitchError) {
-      // 仅旧版 server(--attach)会抛:历史已恢复,只是没切到会话
-      // 记录的 provider/model。新版恢复不再动模型。
-      providerWarn = err.message;
-    } else {
-      ctx.push({
-        kind: 'notice',
-        level: 'warn',
-        message: t('notice.resumeFailed', { message: (err as Error).message }),
-      });
-      return;
-    }
+    ctx.push({
+      kind: 'notice',
+      level: 'warn',
+      message: t('notice.resumeFailed', { message: (err as Error).message }),
+    });
+    return;
   }
-  // provider/model 不会被恢复改写(始终沿用当前模型),但旧版 server 仍可能
-  // 切,照样同步一遍。
+  // provider/model 不会被恢复改写(始终沿用当前模型),照样同步一遍镜像信号。
   ctx.setItems([sessionBanner(session), ...buildResumeItems(session)]);
   // 同步 UI 状态:上下文用量取恢复历史的估算(lastInputTokens 已随
   // setHistory 作废),下一轮 step-end 会带回真实值。todos 由订阅自动更新。
@@ -124,17 +115,30 @@ export const resume: CommandHandler = async (ctx, arg) => {
   ctx.setModel(session.provider.model);
   ctx.setThink(session.provider.reasoningEffort);
   ctx.setUsage({ ...session.agent.contextUsage, total: 0 });
-  if (providerWarn) {
+};
+
+// 重载磁盘扩展(一方扩展不动);装不上的扩展的提示由会话直接上 bus。
+export const reload: CommandHandler = async (ctx) => {
+  try {
+    const result = await ctx.session.reloadExtensions();
+    ctx.push({
+      kind: 'notice',
+      level: result.failed.length > 0 ? 'warn' : 'info',
+      message: t('notice.reloaded', {
+        loaded: result.loaded.length > 0 ? result.loaded.join(', ') : '-',
+        failed: result.failed.length,
+      }),
+    });
+  } catch (err) {
     ctx.push({
       kind: 'notice',
       level: 'warn',
-      message: t('notice.resumeProviderFailed', { message: providerWarn }),
+      message: t('notice.reloadFailed', { message: (err as Error).message }),
     });
   }
 };
 
-// 强制重扫技能目录并列出(名字、参数提示、描述)。远程模式下这也是
-// 把 server 侧刚出现的技能立刻拉进 `/` 菜单的手动通道(平时靠 TTL)。
+// 强制重扫技能目录并列出(名字、参数提示、描述)。
 export const skills: CommandHandler = async (ctx) => {
   try {
     const list = await ctx.session.refreshSkills();
@@ -169,8 +173,8 @@ export const doctor: CommandHandler = async (ctx, arg) => {
   const offline = arg.trim() === 'offline';
   ctx.push({ kind: 'notice', level: 'info', message: t('notice.doctorRunning') });
   try {
-    // 体检在会话所在的进程里跑(远程会话时是 server 侧):读的是会话
-    // 此刻的配置,MCP 采信已连上的状态,已拉起的 LSP 不再重复握手。
+    // 体检读的是会话此刻的配置,MCP 采信已连上的状态,已拉起的 LSP 不再
+    // 重复握手。
     const report = await ctx.session.doctor({ offline });
     ctx.push({
       kind: 'notice',

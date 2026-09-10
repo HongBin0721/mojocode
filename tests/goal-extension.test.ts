@@ -132,7 +132,7 @@ function makeHost(configOverrides: Record<string, unknown> = {}) {
   });
   goalExtension.setup(api);
 
-  const goal = (args: string) => commands.get('goal')!.handler(args);
+  const goal = (args: string) => commands.get('goal')!.handler(args, api.ctx);
   /** 等下一个链条收尾(followUp 空闲开跑是 fire-and-forget,只能这样等)。 */
   const runEnd = () =>
     new Promise<void>((resolve) => {
@@ -302,7 +302,7 @@ describe('目标循环', () => {
     await host.goal('x');
     await host.runEnd();
     const before = mockGenerateText.mock.calls.length;
-    await host.hooks.turnEnd({ outcome: 'completed', finishReason: 'stop', subagent: true });
+    await host.hooks.notify('turn_end', { outcome: 'completed', finishReason: 'stop', subagent: true });
     expect(mockGenerateText.mock.calls.length).toBe(before);
   });
 });
@@ -312,7 +312,7 @@ describe('恢复与会话切换', () => {
     verdicts('VERDICT: MET\nREASON: ok');
     const host = makeHost();
     host.entries.push({ type: GOAL_ENTRY, data: { condition: '让测试全绿' }, at: 'x' });
-    await host.hooks.sessionStart({ reason: 'resume' });
+    await host.hooks.notify('session_start', { reason: 'resume' });
     expect(host.notices.at(-1)).toBe(t('notice.goalRestored', { condition: '让测试全绿' }));
     expect(host.status()).toEqual({ id: 'goal', text: `${glyphs.goal} ${t('goal.pending')}` });
     expect(calls).toHaveLength(0);
@@ -330,7 +330,7 @@ describe('恢复与会话切换', () => {
     const host = makeHost();
     host.entries.push({ type: GOAL_ENTRY, data: { condition: 'a' }, at: 'x' });
     host.entries.push({ type: GOAL_ENTRY, data: null, at: 'y' });
-    await host.hooks.sessionStart({ reason: 'resume' });
+    await host.hooks.notify('session_start', { reason: 'resume' });
     expect(host.status()).toBeUndefined();
     expect(host.notices).toEqual([]);
   });
@@ -351,7 +351,7 @@ describe('恢复与会话切换', () => {
     expect(host.entries.map((e) => e.data)).toEqual([{ condition: 'x' }]);
 
     host.entries.length = 0; // 模拟换成新会话的记录
-    await host.hooks.sessionStart({ reason: 'new' });
+    await host.hooks.notify('session_start', { reason: 'new' });
     expect(host.notices.at(-1)).toBe(t('notice.goalStopCleared'));
     expect(host.entries).toEqual([]);
     resolveVerdict({ text: 'VERDICT: NOT_MET\nREASON: 晚到', usage: { totalTokens: 1 } });
@@ -362,10 +362,10 @@ describe('恢复与会话切换', () => {
   it('恢复目标时原目标也有交代(replaced)', async () => {
     const host = makeHost();
     host.entries.push({ type: GOAL_ENTRY, data: { condition: 'A' }, at: 'x' });
-    await host.hooks.sessionStart({ reason: 'startup' });
+    await host.hooks.notify('session_start', { reason: 'startup' });
     host.entries.length = 0;
     host.entries.push({ type: GOAL_ENTRY, data: { condition: 'B' }, at: 'y' });
-    await host.hooks.sessionStart({ reason: 'resume' });
+    await host.hooks.notify('session_start', { reason: 'resume' });
     expect(host.notices).toEqual([
       t('notice.goalRestored', { condition: 'A' }),
       t('notice.goalStopReplaced'),

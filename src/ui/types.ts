@@ -53,6 +53,8 @@ export type TimelineItem =
   | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string }
+  /** 扩展经 sendMessage 放进对话的自定义消息;画法按 customType 找扩展注册的渲染器。 */
+  | { key: string; kind: 'custom'; customType: string; content: string; display?: string }
   /** /focus 折叠档位下,一段被隐藏的工具调用的占位(见 src/ui/focus.ts)。 */
   | { key: string; kind: 'collapsed'; count: number }
   | {

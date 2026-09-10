@@ -25,8 +25,8 @@ function notifyKeyOf(index: SkillIndex): string {
 
 export class SkillManager {
   private readonly root: string;
-  /** 扩展包带来的技能目录(优先级最低),见 discovery.ts。 */
-  private readonly packageDirs: readonly string[];
+  /** 扩展包带来的技能目录(优先级最低),见 discovery.ts;扩展经 resources_discover 还能再加。 */
+  private packageDirs: readonly string[];
   private readonly ttlMs: number;
   private cached: Promise<SkillIndex> | undefined;
   private fetchedAt = 0;
@@ -39,6 +39,13 @@ export class SkillManager {
     this.root = options.root;
     this.packageDirs = options.packageDirs ?? [];
     this.ttlMs = options.ttlMs ?? 15_000;
+  }
+
+  /** 追加技能目录(扩展的 resources_discover);作废缓存,下一次 list 重扫。 */
+  addDirs(dirs: readonly string[]): void {
+    if (dirs.length === 0) return;
+    this.packageDirs = [...this.packageDirs, ...dirs];
+    this.cached = undefined;
   }
 
   /** TTL 内复用同一个 promise;扫描失败不缓存,下次重试(同 createFileLister)。 */

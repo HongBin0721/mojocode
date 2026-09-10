@@ -51,6 +51,9 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
       case 'notice':
         errStream.write(`  ${event.level === 'warn' ? '!' : '·'} ${event.message}\n`);
         break;
+      case 'custom-message':
+        errStream.write(`  · [${event.customType}] ${event.display ?? event.content}\n`);
+        break;
       case 'error':
         errStream.write(`  ✗ ${event.error.message}\n`);
         break;

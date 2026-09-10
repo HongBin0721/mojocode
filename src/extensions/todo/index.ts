@@ -44,7 +44,7 @@ export const todoExtension: Extension = {
         return;
       }
       // 清单是**每轮重写**的:模型每次规划都把整份发回来,其中大量是原样
-      // 重发或只翻了一个状态位。原来的落点 `SessionState.todos` 走 saveState,
+      // 重发或只翻了一个状态位。原来的落点是会话的 `state` 记录,
       // 它对内容相同提前返回;custom 记录没有这道闸,不补上就是每次 todo
       // 调用一条 JSONL 追加 + 一次 flush,而 `/fork` 还要把这些记录逐条重放
       // 进新文件——只为重建一份清单。

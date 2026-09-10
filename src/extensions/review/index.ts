@@ -12,9 +12,7 @@
  * 惯例(pi / opencode / Claude Code / Codex / Cline 无一例外)留在宿主。
  *
  * 收集器(`collectReviewTargets` / `collectReviewCommits` / `collectReviewSummary`)
- * 留在 `src/agent/review.ts`:`/simplify` 共用它们,且 git 要在**会话进程**里跑
- * ——`--attach` 时仓库在 server 那台机器上。扩展本来就跑在会话进程里,所以它
- * 直接调,不再需要 `reviewCommits` 这类 RPC(已随本次拆分退役)。
+ * 留在 `src/agent/review.ts`:`/simplify` 共用它们。扩展直接调它们。
  */
 
 import {
@@ -166,10 +164,8 @@ export const reviewExtension: Extension = {
       selectorTitle: t('reviewopt.selectorTitle'),
       options,
       /**
-       * **同步返回,git 在后台跑。** `runCommand` 是即时 RPC,而客户端的
-       * RPC 是串行队列:在 handler 里 await 几秒的 git(大仓库、`--attach`
-       * 跨网络)会把用户随后的每一条 run/abort/switch 都堵在后面,请求本身
-       * 还要冒 HTTP 超时的风险。收集完再 `followUp` 语义不变——它本来就排在
+       * **同步返回,git 在后台跑。** 在 handler 里 await 几秒的 git(大仓库)
+       * 会让 `/` 菜单卡在提交上。收集完再 `followUp` 语义不变——它本来就排在
        * 用户那一轮之后作为新的一轮。
        */
       handler: (args) => {

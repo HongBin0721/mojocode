@@ -117,10 +117,11 @@ function mergeLayers(layers: PartialConfig[]): PartialConfig {
               }
             : {}),
         } as PartialConfig['lsp'];
-      } else if (key === 'packages') {
-        // 装了的包取并集:项目层 `install --local` 的包不该把全局层的顶掉。
-        const prev = (out.packages ?? []) as string[];
-        out.packages = [...new Set([...prev, ...(value as string[])])];
+      } else if (key === 'packages' || key === 'extensions') {
+        // 装了的包 / 声明的扩展路径取并集:项目层 `install --local` 的包不该
+        // 把全局层的顶掉,项目层列的扩展也不该顶掉全局层列的。
+        const prev = ((out as Record<string, unknown>)[key] ?? []) as string[];
+        (out as Record<string, unknown>)[key] = [...new Set([...prev, ...(value as string[])])];
       } else if (key === 'providers' || key === 'mcpServers' || key === 'search') {
         const prev = (out as Record<string, unknown>)[key];
         (out as Record<string, unknown>)[key] = {

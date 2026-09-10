@@ -64,7 +64,6 @@ export default defineConfig({
             { slug: 'guides/headless' },
             { slug: 'guides/sessions' },
             { slug: 'guides/cli' },
-            { slug: 'guides/server' },
           ],
         },
         {

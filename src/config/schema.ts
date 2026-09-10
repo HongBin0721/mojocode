@@ -202,6 +202,11 @@ export const configSchema = z.object({
    * 技能。分层合并时两层**取并集**(项目层装的包不该把全局层的顶掉)。
    */
   packages: z.array(z.string()).default([]),
+  /**
+   * 额外要装载的扩展文件或目录(Pi 的 settings `extensions`),与 `-e` 同义
+   * 但可持久化;相对路径按工作区根解析。分层合并同 `packages` 取并集。
+   */
+  extensions: z.array(z.string()).default([]),
   mcpServers: z.record(z.string(), mcpServerSchema).default({}),
   /** web_search 的后端与凭据,见 config/search.ts。 */
   search: searchConfigSchema.default({ backend: 'auto' }),
@@ -289,6 +294,7 @@ export const partialConfigSchema = z.object({
   model: z.string().optional(),
   providers: z.record(z.string(), providerConfigSchema).optional(),
   packages: z.array(z.string()).optional(),
+  extensions: z.array(z.string()).optional(),
   mcpServers: z.record(z.string(), mcpServerSchema).optional(),
   // 见 searchLayerSchema 的注释:默认值埋在子 schema 里,剥顶层不够。
   search: searchLayerSchema.optional(),

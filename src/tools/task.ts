@@ -53,6 +53,8 @@ export interface TaskToolDeps {
   systemPrompt: (mode: TaskMode) => string;
   /** 子 agent 的工具集:按类型给,见 TaskMode。 */
   tools: (mode: TaskMode) => ToolSet;
+  /** 扩展 setActiveTools 选中的工具名(见 AgentOptions.activeTools);子 agent 同一条规则。 */
+  activeTools?: () => ReadonlySet<string> | undefined;
   /**
    * 扩展钩子,与主 agent 同一份:权限、结果改写这类扩展对子 agent 同样生效
    * (钩子输入带 subagent: true,扩展自己决定要不要区别对待)。
@@ -127,6 +129,9 @@ export async function runTaskSubagent(deps: TaskToolDeps, opts: RunTaskOptions):
     config: { ...deps.config, maxSteps },
     systemPrompt: deps.systemPrompt(mode),
     tools: deps.tools(mode),
+    // 停用规则在开流边界统一应用(主 agent 与子 agent 同一处),subagentTools
+    // 因此不必自己再筛一遍。
+    ...(deps.activeTools ? { activeTools: deps.activeTools } : {}),
     bus: innerBus,
     hooks: deps.hooks,
     subagent: true,

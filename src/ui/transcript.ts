@@ -11,12 +11,14 @@ import {
 } from './theme.js';
 import type { TimelineItem } from './types.js';
 import { APP_NAME } from '../config/paths.js';
+import { extensionTheme } from './extension-theme.js';
 import { t } from '../i18n/index.js';
 
-const DIM = (s: string) => `\x1b[2m${s}\x1b[22m`;
-const CYAN = (s: string) => `\x1b[36m${s}\x1b[39m`;
-const RED = (s: string) => `\x1b[31m${s}\x1b[39m`;
-const YELLOW = (s: string) => `\x1b[33m${s}\x1b[39m`;
+// 与扩展拿到的是同一张色表(extension-theme.ts):"dim 是什么颜色"只有一处答案。
+const DIM = (s: string) => extensionTheme.dim(s);
+const CYAN = (s: string) => extensionTheme.fg('accent', s);
+const RED = (s: string) => extensionTheme.fg('error', s);
+const YELLOW = (s: string) => extensionTheme.fg('warn', s);
 
 /**
  * 把时间线序列化成纯文本(带少量 ANSI 着色),供 TUI 退出后写回主屏。
@@ -110,6 +112,9 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         break;
       case 'divider':
         out.push('', DIM(`── ${item.label} ──`));
+        break;
+      case 'custom':
+        out.push('', DIM(`[${item.customType}]`), item.display ?? item.content);
         break;
       case 'collapsed':
         // dump 用的是全量 items,不含 /focus 的占位条目;留个空分支保证

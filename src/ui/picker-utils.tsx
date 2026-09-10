@@ -3,12 +3,19 @@ import { Box, Text, type JSX, type Key } from './kit.js';
 import { theme } from './theme.js';
 import { t } from '../i18n/index.js';
 
+// 窗口起点住在零依赖的 core/ui-kit(扩展画的列表也要用同一份,而那个模块
+// 不能 import solid/kit);这里原样再导出,TUI 侧的 import 路径不变。
+export { centeredWindowStart } from '../core/ui-kit.js';
+
 /**
- * 围绕光标居中的窗口起点。所有窗口化列表(选择器、菜单)共用这一份,
- * 滚动手感才是同一个:光标尽量居中,列表两端各自贴边。
+ * 一行文本输入的按键语义:退格删一个,可打印字符追加(粘贴去掉换行)。
+ * 抽出来是因为它有三个用户——手动输入态、扩展提问的 input 框、`ui-kit`
+ * 的 textInput,而"IME、粘贴怎么处理"这件事只允许有一处答案。
  */
-export function centeredWindowStart(cursor: number, rowCount: number, window: number): number {
-  return Math.max(0, Math.min(cursor - Math.floor(window / 2), rowCount - window));
+export function applyTextKey(buffer: string, input: string, key: Key): string {
+  if (key.backspace || key.delete) return buffer.slice(0, -1);
+  if (!key.ctrl && !key.meta && input) return buffer + input.replace(/[\r\n]/g, '');
+  return buffer;
 }
 
 export interface ManualEntry {
@@ -53,10 +60,8 @@ export function createManualEntry(onSubmit: (value: string) => void): ManualEntr
       } else if (key.return) {
         const trimmed = buffer().trim();
         if (trimmed) onSubmit(trimmed);
-      } else if (key.backspace || key.delete) {
-        setBuffer((b) => b.slice(0, -1));
-      } else if (!key.ctrl && !key.meta && input) {
-        setBuffer((b) => b + input.replace(/[\r\n]/g, ''));
+      } else {
+        setBuffer((b) => applyTextKey(b, input, key));
       }
       return true;
     },

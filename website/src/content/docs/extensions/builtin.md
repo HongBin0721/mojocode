@@ -9,7 +9,7 @@ description: goal / review / todo / web / mcp / lsp 六个一方扩展。
 |---|---|---|
 | `goal` | `/goal` 目标模式:`turn_end` 里评估、`followUp` 续跑、状态行显示轮数与已用时、custom 记录持久化 | `on` `registerCommand` `setStatus` `followUp` `appendEntry` `model` |
 | `review` | `/review` 与四个预设的多级选择器,组一段提示词后 `followUp` 一轮 | `registerCommand`(`options` 多级)`followUp` `notify` |
-| `todo` | `todo` 工具与任务清单:模型写清单,客户端按 key 渲染面板(TUI 的 `ctrl+t`、GUI 右上角浮层);子 agent 不给 | `registerTool` `setState` `appendEntry` |
+| `todo` | `todo` 工具与任务清单:模型写清单,TUI 按 key 渲染面板(`ctrl+t`);子 agent 不给 | `registerTool` `setState` `appendEntry` |
 | `web` | `web_fetch` 恒有,`web_search` 拿得到 key 时才有;系统提示词里「你有哪些联网工具」那句由它自己追加 | `registerTool` `before_agent_start` |
 | `mcp` | 连接 MCP 服务器、桥接工具、`/mcp` 命令;连接不阻塞启动,`turn_start` 里才等收尾 | `registerTool` `registerCommand` `on` `publishRuntime` |
 | `lsp` | `write` / `edit` 之后回喂 LSP 诊断,`tool_result` 钩子的标准示例:干净时不加任何字段 | `on('tool_result')` `publishRuntime` |

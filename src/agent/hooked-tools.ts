@@ -1,5 +1,6 @@
 /**
- * 把 tool_call / tool_result 钩子包到每个工具的 execute 外面。
+ * 把 tool_call / tool_execution_start / tool_execution_end / tool_result 钩子包到
+ * 每个工具的 execute 外面。
  *
  * 包装发生在 **streamText 边界、每次开流现包**(Agent.stream 调用它),而不是
  * 工具创建时:tools 对象会被就地改键(MCP 连上后并入、skill 工具重建、
@@ -42,7 +43,11 @@ function hookTool(name: string, tool: AnyTool, hooks: HookRegistry, info: HookAg
       const veto = await hooks.toolCall({ callId, toolName: name, input, ...info });
       if (veto) throw new Error(veto.reason);
     }
+    if (hooks.has('tool_execution_start')) {
+      await hooks.notify('tool_execution_start', { callId, toolName: name, input, ...info });
+    }
 
+    const startedAt = Date.now();
     let output: unknown;
     let isError = false;
     try {
@@ -50,6 +55,18 @@ function hookTool(name: string, tool: AnyTool, hooks: HookRegistry, info: HookAg
     } catch (err) {
       output = err;
       isError = true;
+    }
+    // 原始结果(tool_result 改写之前)的通知;错误给消息文本,与 tool_result 同款。
+    if (hooks.has('tool_execution_end')) {
+      await hooks.notify('tool_execution_end', {
+        callId,
+        toolName: name,
+        input,
+        output: isError ? errorMessage(output) : output,
+        isError,
+        durationMs: Date.now() - startedAt,
+        ...info,
+      });
     }
 
     if (!hooks.has('tool_result')) {

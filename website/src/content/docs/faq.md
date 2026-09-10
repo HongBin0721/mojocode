@@ -35,10 +35,6 @@ TUI 需要 Node ≥ 26.1 的原生 FFI,`-p` 与子命令只需 22。装单二进
 
 需要终端支持 kitty 键盘协议(iTerm2 3.5+ / kitty / WezTerm / Ghostty)。任何终端可用的兜底:`option+enter`、`ctrl+j`,或行尾 `\` 再回车。
 
-### TUI 显示「无法启动 mojocode server」
-
-受管的 server 子进程启动即退出。先 `mojocode serve` 手动跑一次看 stderr;`MOJOCODE_NO_SERVER=1 mojocode` 可以先回到单进程模式继续工作。
-
 ### 粘贴的图片被忽略了
 
 DeepSeek 的官方 SDK 不支持图片,会被忽略并提示。其他模型不能直接收图时图片会降级为文件引用,配置 `visionModel` 后模型可以调 `view_image` 读图,见[视觉模型](/config/providers/#视觉模型)。

@@ -102,6 +102,12 @@ interface Props {
    */
   onPrefillConsumed?: () => void;
   /**
+   * 草稿的**拉取口**:挂载时把取值函数写进 `ref.read`(扩展的
+   * `ui.getEditorText` 经它现读)。不用"每次变化回调"——那要在每个按键上
+   * 多跑一个响应式节点,只为镜像一个几乎没人读的字符串。
+   */
+  editorRef?: { read?: () => string };
+  /**
    * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
    * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
    * 不传则完全关闭 @ 补全。
@@ -165,6 +171,7 @@ export function Input(props: Props): JSX.Element {
   // 铺满整行,一个过期的列数就是一行折行。
   const size = useTerminalSize();
   const [value, setValue] = createSignal('');
+  if (props.editorRef) props.editorRef.read = value;
   const [cursor, setCursor] = createSignal(0);
   const [history, setHistory] = createSignal<string[]>([]);
   const [historyIndex, setHistoryIndex] = createSignal<number | undefined>(undefined);

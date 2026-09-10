@@ -8,37 +8,67 @@
  * 在测试里就成了运行期才炸的 undefined。
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionCommand,
-  ExtensionToolFactory,
+import {
+  ExtensionEvents,
+  type ExtensionAPI,
+  type ExtensionCommand,
+  type ExtensionToolDefinition,
+  type ExtensionToolFactory,
 } from '../../src/core/extension.js';
 import type { SessionCustomRecord } from '../../src/session/store.js';
 import type { Config } from '../../src/config/schema.js';
-import { HookRegistry } from '../../src/core/hooks.js';
+import { HookRegistry, noopExtensionContext } from '../../src/core/hooks.js';
 
 export function fakeExtensionApi(overrides: Partial<ExtensionAPI> = {}): ExtensionAPI {
+  const ctx = noopExtensionContext();
   return {
     id: 'test',
     root: '/tmp/workspace',
     on: () => () => {},
     onEvent: () => () => {},
+    events: new ExtensionEvents(),
+    ui: ctx.ui,
+    hasUI: false,
+    ctx,
+    mode: 'print',
+    waitForIdle: async () => {},
+    newSession: async () => {},
+    fork: async () => ({ id: '' }),
+    switchSession: async () => {},
     registerCommand: () => {},
+    getCommands: () => [],
+    registerShortcut: () => () => {},
+    sendMessage: async () => {},
+    registerMessageRenderer: () => {},
     setStatus: () => {},
     setState: () => {},
     notify: () => {},
     publishRuntime: () => {},
     registerTool: () => {},
     unregisterTool: () => {},
+    getAllTools: () => [],
+    getActiveTools: () => [],
+    setActiveTools: () => {},
+    registerFlag: () => {},
+    getFlag: () => undefined,
     run: async () => {},
     followUp: () => {},
     isRunning: () => false,
     abort: () => {},
     history: () => [],
+    compact: async () => {},
+    getContextUsage: () => ({ used: 0, window: 0, percent: 0 }),
     appendEntry: async () => {},
     entries: () => [],
+    getSessionName: () => '',
+    setSessionName: async () => {},
     config: {} as Config,
     model: () => ({}) as never,
+    getModel: () => ({ provider: 'test', model: 'test-model' }),
+    setModel: async () => {},
+    getThinkingLevel: () => 'auto',
+    setThinkingLevel: async () => {},
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     ...overrides,
   };
 }
@@ -89,7 +119,11 @@ export function recordingExtensionApi(
   const statuses: RecordingHost['statuses'] = [];
   const api = fakeExtensionApi({
     on: (name, handler) => hooks.on(name, handler),
-    registerTool: (name, factory) => tools.set(name, factory),
+    // 两种形状都记成工厂:Pi 定义对象这里不适配(那是 bootstrap 的事),只记名字。
+    registerTool: (nameOrDefinition: string | ExtensionToolDefinition, factory?: ExtensionToolFactory) => {
+      if (typeof nameOrDefinition === 'object') tools.set(nameOrDefinition.name, () => undefined);
+      else tools.set(nameOrDefinition, factory!);
+    },
     unregisterTool: (name) => tools.delete(name),
     registerCommand: (name, command) => commands.set(name, command),
     setState: (key, value) => {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ModelMessage } from 'ai';
 import { collectRewindEntries, replayTimeline } from '../src/session/replay.js';
-import { wrapGuidance, unwrapGuidance } from '../src/agent/loop.js';
+import { wrapCustomMessage, wrapGuidance, unwrapGuidance } from '../src/agent/loop.js';
 import { INIT_PROMPT, INIT_PROMPT_MARKER } from '../src/agent/init.js';
 import { wrapSkillPrompt } from '../src/skills/invocation.js';
 import { expandAtReferences } from '../src/app/attachments.js';
@@ -18,6 +18,17 @@ describe('replayTimeline', () => {
     expect(items).toEqual([
       { kind: 'user', text: '第一问' },
       { kind: 'user', text: '第二问' },
+    ]);
+  });
+
+  it('扩展的自定义消息(裸的或套在引导信封里)还原为 custom 条目', () => {
+    const items = replayTimeline([
+      { role: 'user', content: wrapCustomMessage('note', 'hello') },
+      { role: 'user', content: wrapGuidance(wrapCustomMessage('steer', 'mid')) },
+    ] as ModelMessage[]);
+    expect(items).toEqual([
+      { kind: 'custom', customType: 'note', content: 'hello' },
+      { kind: 'custom', customType: 'steer', content: 'mid' },
     ]);
   });
 

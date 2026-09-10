@@ -23,10 +23,13 @@ export interface SessionMeta {
   archivedAt?: string;
 }
 
-/** 消息之外需要跨会话恢复的东西:目前只有变更索引。
- * 扩展自己的状态(todo 清单、`/goal` 的条件)走 custom 记录,不在这里。
- * 旧文件里的会话级授权规则、两轴权限、`goal` 等字段被当作未知键忽略——
- * 权限系统整套已去掉。 */
+/**
+ * 老会话文件里的 `kind: 'state'` 记录。**只读不写**:唯一的写入方是 GUI 的
+ * 任务级变更索引,它随 GUI 一起删掉了;记录形状与读回留着,老文件才不会
+ * 因为一条认不出的记录整个读失败。扩展自己的状态(todo 清单、`/goal` 的
+ * 条件)走 custom 记录,从来不在这里。旧文件里的会话级授权规则、两轴权限、
+ * `goal` 等字段被当作未知键忽略——权限系统整套已去掉。
+ */
 export interface SessionState {
   /**
    * 本会话经 write/edit 落地过的文件(任务视角的变更索引)。可选:空时
@@ -251,7 +254,6 @@ export class AmbiguousSessionError extends Error {
 export class SessionStore {
   /** 所有磁盘写入串行排队:rewind 的 snapshot 与轮末的 append 不允许交错。 */
   private writeChain: Promise<void> = Promise.resolve();
-  private lastStateJson: string;
   /**
    * 上一次写入失败过,下次必须落全量 snapshot。
    *
@@ -272,7 +274,6 @@ export class SessionStore {
     /** 扩展的自定义记录,按写入顺序;只在写成功后入列(与 state 同理)。 */
     private customRecords: SessionCustomRecord[],
   ) {
-    this.lastStateJson = JSON.stringify(this.state_);
   }
 
   get id(): string {
@@ -615,7 +616,6 @@ export class SessionStore {
           ...(displayDiffers ? { display: forked.display } : {}),
         });
       }
-      prologue.push({ kind: 'state', at: now, state: forked.state_ });
       // 扩展记录原样(含原 at)带过去,顺序不变。
       for (const record of forked.customRecords) {
         prologue.push({ kind: 'custom', at: record.at, type: record.type, data: record.data });
@@ -687,7 +687,7 @@ export class SessionStore {
 
   /**
    * 追加一条附属记录(子任务过程 / 轮末用量这类不属于对话历史的记录)。
-   * 尽力而为:失败不打扰用户(与 saveState 同理)。
+   * 尽力而为:失败不打扰用户(统计缺一轮远好过打断一次会话)。
    */
   private async appendExtra(record: TaskRecord | UsageRecord | CustomRecord): Promise<void> {
     this.enqueue(async () => {
@@ -783,23 +783,6 @@ export class SessionStore {
     return SessionStore.readExtraRecords(id, dir, (record) =>
       record.kind === 'task' ? { ...record.task, at: record.at } : undefined,
     );
-  }
-
-  /** 只有状态真的变了才追加记录,避免每轮一条重复 state。 */
-  async saveState(state: SessionState): Promise<void> {
-    const json = JSON.stringify(state);
-    if (json === this.lastStateJson) return;
-    const snapshot = JSON.parse(json) as SessionState; // 深拷贝,防调用方后续原地修改
-
-    const record: StateRecord = { kind: 'state', at: new Date().toISOString(), state: snapshot };
-    this.enqueue(async () => {
-      await this.appendRecord(record);
-      // 写成功后才认账:失败时保持旧值,下次同样的状态还会重试而不是被
-      // 脏检查跳过。
-      this.lastStateJson = json;
-      this.state_ = snapshot;
-    });
-    await this.flush();
   }
 
   private enqueue(job: () => Promise<void>): void {

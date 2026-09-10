@@ -5,6 +5,8 @@
  * 也驱动非交互式的 `-p` 模式。
  */
 
+import type { UiRequest } from './extension-types.js';
+
 export interface UsageSnapshot {
   inputTokens: number;
   outputTokens: number;
@@ -93,7 +95,26 @@ export type AgentEvent =
   | { type: 'run-end' }
   | { type: 'aborted' }
   | { type: 'error'; error: Error; recoverable: boolean }
-  | { type: 'notice'; level: 'info' | 'warn'; message: string };
+  | { type: 'notice'; level: 'info' | 'warn'; message: string }
+  /**
+   * 扩展向用户提问(见 extension-types.ts 的 UiRequest):前端弹提示框,答案
+   * 经 `answerUi` 送回;`ui-resolved` 表示已有答案(别的客户端答的、或超时/
+   * 取消),所有前端据此关掉同一 id 的提示框。
+   */
+  | { type: 'ui-request'; request: UiRequest }
+  | { type: 'ui-resolved'; id: string }
+  /**
+   * 会话换了(`/new`、`/resume`、`/fork`,或扩展经 ctx.newSession / fork /
+   * switchSession):渲染层据此重建时间线——命令路径自己也会重建,重复
+   * 一次是幂等的;扩展路径只有这条通知。
+   */
+  | { type: 'session-changed'; reason: 'new' | 'resume' | 'fork'; id: string }
+  /**
+   * 扩展经 sendMessage 放进对话的一条自定义消息(不开轮或运行中注入的那两
+   * 条路;开轮的那条路由 turn-start 的 userText 带着自定义信封)。渲染层按
+   * customType 找扩展注册的画法。
+   */
+  | { type: 'custom-message'; customType: string; content: string; display?: string };
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 

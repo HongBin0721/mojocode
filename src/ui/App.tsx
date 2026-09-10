@@ -24,13 +24,23 @@ import type { CommandContext } from './commands/types.js';
 import type { TimelineItem } from './types.js';
 import type { SessionHandle } from '../app/session-handle.js';
 import { SessionStore } from '../session/store.js';
+import { APP_NAME } from '../config/paths.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
+import { UiPrompt } from './UiPrompt.js';
+import { CustomHost, SurfaceView } from './ExtensionSurface.js';
+import { shortcutOf } from './extension-theme.js';
+import { setMessageRenderers, setToolRenderers } from './tool-renderers.js';
 import { SettingsPanel } from './SettingsPanel.js';
 import { parseTodos, type TodoItem } from './timeline-data.js';
 // 两个 state key 从零依赖的 wire 模块取:静态 import 扩展实现模块会把
 // `ai` + `zod` 整个拉进 TUI chunk,而这里只要两个字符串。
-import { TODO_STATE_KEY } from '../core/extension-types.js';
+import {
+  TODO_STATE_KEY,
+  type ExtensionSurface,
+  type UiCustomRequest,
+  type UiRequest,
+} from '../core/extension-types.js';
 import {
   TIMELINE_MODES,
   type ReasoningEffort,
@@ -122,6 +132,8 @@ export function App(props: Props): JSX.Element {
    * 卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
    */
   const overlayOpen = () =>
+    uiCustom() !== undefined ||
+    uiPrompt() !== undefined ||
     rewind() !== undefined ||
     settingsOpen() ||
     modelsPicker() !== undefined ||
@@ -182,6 +194,57 @@ export function App(props: Props): JSX.Element {
     return session.extensionStatus;
   });
   /**
+   * 扩展向用户提的问题(ctx.ui.*):队列里还挂着的第一条就是当前提示框。
+   * `answerUi` 同步把它从队列里摘掉并通知,所以这里不需要"答过的 id"去重——
+   * 那是远程时代(下一帧快照要几拍才到)的补丁,单进程之后是纯负担。
+   */
+  const uiPrompt = createMemo((): UiRequest | undefined => {
+    extensionsTick();
+    return session.uiRequests[0];
+  });
+  /**
+   * 扩展的渲染层(Pi 的 ctx.ui.custom / setWidget / setHeader / setFooter /
+   * setTitle,以及工具的 renderCall / renderResult)。挂载即告诉会话「有人在看」
+   * ——扩展的提问从此真的等人答;卸载后回到缺省兑现。
+   */
+  // 草稿是**拉取式**的:Input 挂载时把自己的取值函数放进来。推送式(每次
+  // 按键回调一次)要为一个几乎没人读的镜像在最热的输入路径上多跑一个
+  // 响应式节点。
+  const editor: { read?: () => string } = {};
+  session.attachUi({
+    available: () => true,
+    getEditorText: () => editor.read?.() ?? '',
+    setEditorText: (text) => setPrefill({ text }),
+  });
+  onCleanup(() => session.attachUi(undefined));
+  const uiCustom = createMemo((): UiCustomRequest | undefined => {
+    extensionsTick();
+    return session.uiCustoms[0];
+  });
+  const uiSurfaces = createMemo(() => {
+    extensionsTick();
+    return session.uiSurfaces;
+  });
+  createEffect(() => {
+    extensionsTick();
+    setToolRenderers(session.toolRenderers);
+    setMessageRenderers(session.messageRenderers);
+  });
+  /**
+   * 终端窗口标题:OSC 0。**自己一个 memo**:effect 直接读 uiSurfaces() 的话,
+   * 任何一块 widget 变化都会重写一遍标题(todo 每跳一次就是一次终端写入),
+   * 而 memo 按字符串比较,标题没变就不唤醒 effect。只在真终端上写,且只在
+   * 扩展设过标题之后才动它——测试的 stdout 不是 TTY。
+   */
+  const uiTitle = createMemo(() => uiSurfaces().title);
+  let titleTouched = false;
+  createEffect(() => {
+    const title = uiTitle();
+    if (title === undefined && !titleTouched) return;
+    titleTouched = true;
+    if (process.stdout.isTTY) process.stdout.write(`\x1b]0;${title ?? APP_NAME}\x07`);
+  });
+  /**
    * todo 清单由 todo 扩展经 setState 发布(核心不再有 TodoStore):形状不对
    * 一律当没有——扩展没装、或换了别的实现时,面板与底栏摘要各自消失即可。
    *
@@ -235,7 +298,13 @@ export function App(props: Props): JSX.Element {
         setCtrlCArmed(true);
         ctrlCTimer = setTimeout(() => setCtrlCArmed(false), 2000);
       }
+      return;
     }
+    // 扩展的快捷键(registerShortcut)排在**全部内置分支之后**:注册那头已经
+    // 按 RESERVED_SHORTCUTS 拒过 ctrl+c/t/o/r,这里的顺序是第二道防线——
+    // 一个绕过注册闸门的键也绝不能把「双 ctrl+c 退出」吃掉。覆盖层打开时
+    // 不派发:那时键盘归覆盖层。
+    if ((key.ctrl || key.meta) && !overlayOpen()) session.runShortcut(shortcutOf(input, key));
   });
 
   // 全部定时器都要清:cli.tsx 只设 process.exitCode 而不调 process.exit(),
@@ -555,8 +624,8 @@ export function App(props: Props): JSX.Element {
     skillsTick();
     extensionsTick();
     const taken = new Set(builtin.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
-    // 扩展注册的命令排在内置之后、技能之前:它们是会话进程里的代码,比磁盘
-    // 上的一个 SKILL.md 更接近内置;同名规则与技能一致——内置优先。
+    // 扩展注册的命令排在内置之后、技能之前:它们是代码,比磁盘上的一个
+    // SKILL.md 更接近内置;同名规则与技能一致——内置优先。
     const extensionCommands = session.extensionCommands
       .filter((c) => !taken.has(c.name))
       .map((c) => {
@@ -566,7 +635,7 @@ export function App(props: Props): JSX.Element {
           description: c.argumentHint ? `${c.description} · ${c.argumentHint}` : c.description,
           ...(c.selectorTitle ? { selectorTitle: c.selectorTitle } : {}),
           // 取值每次现取(档位要标当前生效的那一档,分支列表要跑 git),
-          // 所以是一次 RPC 而不是随快照过线的静态表。
+          // 所以是一次调用而不是静态表。
           ...(c.hasOptions ? { options: (path: string[]) => session.commandOptions(c.name, path) } : {}),
         };
       });
@@ -614,6 +683,7 @@ export function App(props: Props): JSX.Element {
       {/* 扩展的状态行贴在输入框正上方靠右(如 /goal 的「目标 3/10 · 1m04s」):
           一眼能看到进度而不必敲命令去问。回退选择器或设置面板打开时不渲染
           (它们走的是那串互斥分支的其他支)。 */}
+      <For each={uiSurfaces().widgets}>{(widget) => <SurfaceView surface={widget.surface} />}</For>
       <ExtensionStatusLine entries={extensionStatus} columns={size.columns} />
       <Input
         onSubmit={handleSubmit}
@@ -627,35 +697,44 @@ export function App(props: Props): JSX.Element {
         onEscape={handleEscape}
         prefill={prefill()}
         onPrefillConsumed={clearPrefill}
+        editorRef={editor}
         fileIndex={fileLister}
         readClipboardImage={readClipboardImage}
         onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
       />
-      <Footer
-        contextUsed={usage().used}
-        contextWindow={usage().window}
-        cumulativeTokens={usage().total}
-        // 实时面板已在上方展开时,底栏不再重复一行摘要。
-        todos={todoPanelVisible() ? [] : todos()}
-        model={model()}
-        root={session.root}
-        think={think()}
-        segments={statusSegments()}
-        columns={size.columns}
-        notice={
-          ctrlCArmed()
-            ? t('status.ctrlcAgain')
-            : escArmed()
-              ? t('status.escAgainRewind')
-              : focusFlash()
-                ? t('status.focusCycled', { mode: focusFlash()! })
-                : expandFlash() !== undefined
-                  ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
-                  : copyFlash() !== undefined
-                    ? t('status.selectionCopied', { n: copyFlash()! })
-                    : undefined
+      {/* 扩展的 setFooter 整个替换底栏(Pi 同款:换了就由扩展负责画全)。 */}
+      <Show
+        when={uiSurfaces().footer}
+        fallback={
+          <Footer
+            contextUsed={usage().used}
+            contextWindow={usage().window}
+            cumulativeTokens={usage().total}
+            // 实时面板已在上方展开时,底栏不再重复一行摘要。
+            todos={todoPanelVisible() ? [] : todos()}
+            model={model()}
+            root={session.root}
+            think={think()}
+            segments={statusSegments()}
+            columns={size.columns}
+            notice={
+              ctrlCArmed()
+                ? t('status.ctrlcAgain')
+                : escArmed()
+                  ? t('status.escAgainRewind')
+                  : focusFlash()
+                    ? t('status.focusCycled', { mode: focusFlash()! })
+                    : expandFlash() !== undefined
+                      ? t(expandFlash() ? 'status.detailsShown' : 'status.detailsHidden')
+                      : copyFlash() !== undefined
+                        ? t('status.selectionCopied', { n: copyFlash()! })
+                        : undefined
+            }
+          />
         }
-      />
+      >
+        {(footer: () => ExtensionSurface) => <SurfaceView surface={footer()} />}
+      </Show>
     </Box>
   );
 
@@ -665,6 +744,10 @@ export function App(props: Props): JSX.Element {
   // Input 的草稿/历史清空、滚动位置回到粘底——对一个改语言的显式操作可接受。
   const body = () => (
     <Box flexDirection="column" width="100%" height="100%">
+      {/* 扩展的 setHeader:屏幕顶部、时间线之上的一块。 */}
+      <Show when={uiSurfaces().header}>
+        {(header: () => ExtensionSurface) => <SurfaceView surface={header()} />}
+      </Show>
       {/* 时间线:粘底滚动,流式期间自动跟随,上滚回看自动解粘。条目定稿后
           不可变,<For> 按引用复用,Solid 细粒度更新下无重渲染开销;markdown
           按 (key, width) 缓存。 */}
@@ -714,10 +797,26 @@ export function App(props: Props): JSX.Element {
         </Show>
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
-            回退选择器 > 设置面板 > 模型/厂商选择器 > 常态输入框,按这个优先级
+            扩展组件 > 扩展提问 > 回退选择器 > 设置面板 > 模型/厂商选择器 > 常态输入框,按这个优先级
             取第一个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者每
             加一个覆盖层就多一级缩进,还得改上一个人的那支。 */}
         <Switch fallback={<InputArea />}>
+          <Match when={uiCustom()} keyed>
+            {(request: UiCustomRequest) => (
+              <CustomHost
+                request={request}
+                onDone={(value) => session.resolveCustom(request.id, value)}
+              />
+            )}
+          </Match>
+          <Match when={uiPrompt()} keyed>
+            {(request: UiRequest) => (
+              <UiPrompt
+                request={request}
+                onAnswer={(answer) => session.answerUi(request.id, answer)}
+              />
+            )}
+          </Match>
           <Match when={rewind()} keyed>
             {(entries: RewindEntry[]) => (
               <RewindPicker

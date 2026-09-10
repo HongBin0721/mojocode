@@ -66,7 +66,7 @@ describe('todo 扩展', () => {
       { type: TODO_ENTRY, data: [{ content: '旧的', status: 'pending' }], at: 'x' },
       { type: TODO_ENTRY, data: LIST, at: 'y' },
     ]);
-    await host.hooks.sessionStart({ reason: 'resume' });
+    await host.hooks.notify('session_start', { reason: 'resume' });
 
     expect(host.published()).toEqual(LIST);
     // 恢复出来的东西属于这个会话的记录本身,再 append 一遍只是把它抄两份。
@@ -75,13 +75,13 @@ describe('todo 扩展', () => {
 
   it('没有记录(新会话)时发布空清单,面板不残留', async () => {
     const host = makeHost();
-    await host.hooks.sessionStart({ reason: 'new' });
+    await host.hooks.notify('session_start', { reason: 'new' });
     expect(host.published()).toEqual([]);
   });
 
   it('记录形状不对(旧格式、别的实现)当作没有,不炸', async () => {
     const host = makeHost([{ type: TODO_ENTRY, data: { nope: 1 }, at: 'x' }]);
-    await host.hooks.sessionStart({ reason: 'startup' });
+    await host.hooks.notify('session_start', { reason: 'startup' });
     expect(host.published()).toEqual([]);
   });
 

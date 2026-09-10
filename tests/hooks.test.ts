@@ -13,6 +13,11 @@ const { mockStreamText, mockCompactMessages, mockShouldCompact, mockEstimateToke
 vi.mock('ai', () => ({
   streamText: mockStreamText,
   stepCountIs: (n: number) => ({ stepCountIs: n }),
+  // 中间件只记在模型对象上,测试自己调 transformParams 验证钩子接上了。
+  wrapLanguageModel: ({ model, middleware }: { model: object; middleware: unknown }) => ({
+    ...model,
+    middleware,
+  }),
 }));
 
 vi.mock('../src/agent/compact.js', async (importOriginal) => ({
@@ -22,7 +27,7 @@ vi.mock('../src/agent/compact.js', async (importOriginal) => ({
   estimateTokens: mockEstimateTokens,
 }));
 
-import { Agent, wrapGuidance } from '../src/agent/loop.js';
+import { Agent, unwrapCustomMessage, wrapCustomMessage, wrapGuidance } from '../src/agent/loop.js';
 
 type ToolLike = { execute: (input: unknown, options: { toolCallId: string }) => Promise<unknown> };
 
@@ -31,6 +36,7 @@ interface Call {
   system: string;
   tools: Record<string, ToolLike>;
   messages: string[];
+  model: unknown;
 }
 const calls: Call[] = [];
 /** 第 n 次流要"模拟模型"调用的工具(mock 像 SDK 一样自己去 execute)。 */
@@ -40,16 +46,37 @@ let onStream: ((call: number) => void | Promise<void>) | undefined;
 
 function installStream() {
   mockStreamText.mockImplementation(
-    (opts: { system: string; tools: Record<string, ToolLike>; messages: Array<{ content: unknown }> }) => {
-      calls.push({
+    (opts: {
+      system: string;
+      tools: Record<string, ToolLike>;
+      messages: Array<{ content: unknown }>;
+      model: unknown;
+      prepareStep?: (o: {
+        messages: Array<{ content: unknown }>;
+        stepNumber: number;
+        steps: unknown[];
+      }) => Promise<{ messages?: Array<{ content: unknown }> } | undefined>;
+    }) => {
+      const entry: Call = {
         system: opts.system,
         tools: opts.tools,
         messages: opts.messages.map((m) => String(m.content)),
-      });
+        model: opts.model,
+      };
+      calls.push(entry);
       const n = calls.length;
       const script = scripts[n - 1] ?? {};
       return {
         fullStream: (async function* () {
+          // 像真 SDK 一样先过 prepareStep(实测:第一步之前也调用,返回的
+          // messages 就是真正发出去的那份)。不模拟的话,只在 prepareStep 里
+          // 跑的钩子(context、轮内压缩)在测试里全是隐形的。
+          const prepared = await opts.prepareStep?.({
+            messages: opts.messages,
+            stepNumber: 0,
+            steps: [],
+          });
+          if (prepared?.messages) entry.messages = prepared.messages.map((m) => String(m.content));
           for (const [i, call] of (script.toolCalls ?? []).entries()) {
             const toolCallId = `call-${n}-${i}`;
             yield { type: 'tool-call', toolCallId, toolName: call.name, input: call.input };
@@ -179,7 +206,9 @@ describe('HookRegistry', () => {
     hooks.on('before_agent_start', ({ systemPrompt }) => ({ systemPrompt: `${systemPrompt}\nA` }));
     hooks.on('before_agent_start', () => undefined);
     hooks.on('before_agent_start', ({ systemPrompt }) => ({ systemPrompt: `${systemPrompt}\nB` }));
-    expect(await hooks.beforeAgentStart({ systemPrompt: 'base', subagent: false })).toBe('base\nA\nB');
+    expect((await hooks.beforeAgentStart({ systemPrompt: 'base', subagent: false })).systemPrompt).toBe(
+      'base\nA\nB',
+    );
   });
 
   it('has() 反映是否有人在听;注销后为 false', () => {
@@ -201,7 +230,7 @@ describe('HookRegistry', () => {
     hooks.on('turn_end', () => {
       ran.push('second');
     });
-    await hooks.turnEnd({ outcome: 'completed', subagent: false });
+    await hooks.notify('turn_end', { outcome: 'completed', subagent: false });
     expect(ran).toEqual(['second']);
     expect(failures).toHaveLength(1);
   });
@@ -422,11 +451,11 @@ describe('Agent × followUp 链', () => {
     await agent.run('开始');
     await secondRun;
 
-    // mock 不调 prepareStep,引导要等续跑轮的流结束后再以一个流补上:
-    // 三个流、两个 turn-start——用户的话以引导形式进了链条,没有并发起第二个链条。
-    expect(calls).toHaveLength(3);
-    expect(calls[1]!.messages).toEqual(['开始', '回复1', '续跑']);
-    expect(calls[2]!.messages).toEqual(['开始', '回复1', '续跑', '回复2', wrapGuidance('用户此刻发的话')]);
+    // 两个流、两个 turn-start:用户的话以引导形式搭上了续跑那一轮(mock 像
+    // 真 SDK 一样在开流前过 prepareStep,引导在那个步骤边界就注入了),没有
+    // 并发起第二个链条。
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.messages).toEqual(['开始', '回复1', '续跑', wrapGuidance('用户此刻发的话')]);
     expect(types(events).filter((t) => t === 'turn-start')).toHaveLength(2);
   });
 
@@ -465,5 +494,339 @@ describe('Agent × followUp 链', () => {
       { outcome: 'error', finishReason: undefined, error: 'boom' },
       { outcome: 'aborted', finishReason: undefined, error: undefined },
     ]);
+  });
+});
+
+describe('Agent × Pi 对齐的钩子', () => {
+  it('input:transform 换掉进对话的文本;handled 则这一轮根本不开', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('input', ({ text }) =>
+      text.startsWith('!') ? { action: 'handled' } : { action: 'transform', text: `${text} (改写)` },
+    );
+    const { agent, events } = makeAgent({ hooks });
+    await agent.run('hi');
+    expect(calls[0]!.messages).toEqual(['hi (改写)']);
+    await agent.run('!swallow');
+    expect(calls).toHaveLength(1);
+    expect(types(events).filter((t) => t === 'turn-start')).toHaveLength(1);
+  });
+
+  it('input:扩展经 followUp 发起的消息(source extension)不过钩子;引导注入过 guidance', async () => {
+    const hooks = new HookRegistry();
+    const seen: string[] = [];
+    hooks.on('input', ({ text, source }) => {
+      seen.push(`${source}:${text}`);
+      return undefined;
+    });
+    const { agent } = makeAgent({ hooks });
+    onStream = async (n) => {
+      if (n === 1) await agent.inject('steer');
+    };
+    let followed = false;
+    hooks.on('turn_end', () => {
+      if (followed) return;
+      followed = true;
+      agent.followUp('ext', { source: 'extension' });
+    });
+    await agent.run('first');
+    expect(calls).toHaveLength(3); // first / steer 续跑 / ext
+    expect(seen).toEqual(['turn:first', 'guidance:steer']);
+  });
+
+  it('context:改写的是这次发出去的消息,持久历史不动;每步只跑一次', async () => {
+    const hooks = new HookRegistry();
+    let fired = 0;
+    hooks.on('context', ({ messages }) => {
+      fired += 1;
+      return { messages: messages.slice(-1) };
+    });
+    const { agent } = makeAgent({ hooks });
+    await agent.run('one');
+    await agent.run('two');
+    expect(calls[1]!.messages).toEqual(['two']);
+    expect(agent.history).toHaveLength(4); // one / 回复1 / two / 回复2
+    // 一步一次:开流前再跑一遍会把第一步的消息改写两次。
+    expect(fired).toBe(2);
+  });
+
+  it('message_end:并入历史前替换定稿消息', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('message_end', ({ message }) =>
+      message.role === 'assistant' ? { message: { role: 'assistant', content: '被替换' } } : undefined,
+    );
+    const { agent } = makeAgent({ hooks });
+    await agent.run('hi');
+    expect(agent.history[1]).toEqual({ role: 'assistant', content: '被替换' });
+  });
+
+  it('before_agent_start 的 message 只在本轮首个流注入,进历史', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('before_agent_start', ({ userText }) => ({ message: `context for ${userText}` }));
+    const { agent } = makeAgent({ hooks });
+    onStream = async (n) => {
+      if (n === 1) await agent.inject('steer'); // 触发第二个流
+    };
+    await agent.run('hi');
+    const texts = calls.map((c) => c.messages);
+    expect(texts[0]).toEqual(['hi', 'context for hi']);
+    // 第二个流不再注入。
+    expect(texts[1]!.filter((m) => m.startsWith('context for'))).toHaveLength(1);
+  });
+
+  it('session_before_compact 可取消手动与开轮压缩;session_compact 报结果', async () => {
+    const hooks = new HookRegistry();
+    let cancel = true;
+    const done: string[] = [];
+    hooks.on('session_before_compact', () => ({ cancel }));
+    hooks.on('session_compact', ({ reason, removedMessages }) => {
+      done.push(`${reason}:${removedMessages}`);
+    });
+    mockCompactMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'summary' }],
+      removedMessages: 3,
+      summaryChars: 7,
+    });
+    const { agent } = makeAgent({ hooks });
+    await agent.run('a');
+    await agent.compact();
+    expect(mockCompactMessages).not.toHaveBeenCalled();
+    cancel = false;
+    await agent.compact();
+    expect(mockCompactMessages).toHaveBeenCalledTimes(1);
+    expect(done).toEqual(['manual:3']);
+  });
+
+  it('tool_execution_start / end 在 tool_call 之后、tool_result 之前,带原始结果', async () => {
+    const hooks = new HookRegistry();
+    const order: string[] = [];
+    hooks.on('tool_call', () => {
+      order.push('call');
+    });
+    hooks.on('tool_execution_start', ({ toolName }) => {
+      order.push(`start:${toolName}`);
+    });
+    hooks.on('tool_execution_end', ({ output, isError }) => {
+      order.push(`end:${String(output)}:${isError}`);
+    });
+    hooks.on('tool_result', () => {
+      order.push('result');
+      return { output: 'rewritten' };
+    });
+    scripts = [{ toolCalls: [{ name: 'a', input: {} }] }];
+    const { agent } = makeAgent({ tools: { a: { execute: async () => 'raw' } }, hooks });
+    await agent.run('go');
+    expect(order).toEqual(['call', 'start:a', 'end:raw:false', 'result']);
+  });
+
+  it('只注册 tool_execution_end 也会触发包装', async () => {
+    const hooks = new HookRegistry();
+    const seen: string[] = [];
+    hooks.on('tool_execution_end', ({ toolName }) => {
+      seen.push(toolName);
+    });
+    scripts = [{ toolCalls: [{ name: 'a', input: {} }] }];
+    const { agent } = makeAgent({ tools: { a: { execute: async () => 1 } }, hooks });
+    await agent.run('go');
+    expect(seen).toEqual(['a']);
+  });
+
+  it('agent_start 在首轮 turn-start 之前,一次链条只发一次', async () => {
+    const hooks = new HookRegistry();
+    const order: string[] = [];
+    hooks.on('agent_start', () => {
+      order.push('agent_start');
+    });
+    hooks.on('turn_start', () => {
+      order.push('turn_start');
+    });
+    hooks.on('turn_end', () => {
+      if (order.filter((o) => o === 'turn_start').length === 1) agent.followUp('more');
+    });
+    const { agent } = makeAgent({ hooks });
+    await agent.run('go');
+    expect(order).toEqual(['agent_start', 'turn_start', 'turn_start']);
+  });
+
+  it('activeTools:停用的工具不交给 SDK,tools 对象本身不动;没停用时原对象直达(零拷贝)', async () => {
+    const tools = { a: { execute: async () => 1 }, b: { execute: async () => 2 } };
+    let active: Set<string> | undefined;
+    const { agent } = makeAgent({ tools, activeTools: () => active });
+    await agent.run('none');
+    // 常态(谁都没调 setActiveTools):原对象直达,不白重建一遍工具集。
+    expect(calls[0]!.tools).toBe(tools);
+    active = new Set(['a']);
+    await agent.run('go');
+    expect(Object.keys(calls[1]!.tools)).toEqual(['a']);
+    expect(Object.keys(tools)).toEqual(['a', 'b']);
+  });
+
+  it('before_provider_request:经中间件改写发给 provider 的参数', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('before_provider_request', ({ params }) => ({
+      params: { ...params, headers: { 'x-trace': '1' } } as typeof params,
+    }));
+    const { agent } = makeAgent({ hooks, model: { id: 'm' } as never });
+    await agent.run('go');
+    const model = calls[0]!.model as {
+      middleware: { transformParams: (o: { params: object; type: string }) => Promise<object> };
+    };
+    expect(await model.middleware.transformParams({ params: { prompt: [] }, type: 'stream' })).toEqual({
+      prompt: [],
+      headers: { 'x-trace': '1' },
+    });
+  });
+
+  it('after_provider_response:流与非流的应答元数据都经中间件交给钩子', async () => {
+    const hooks = new HookRegistry();
+    const seen: Array<{ type: string; response: unknown }> = [];
+    hooks.on('after_provider_response', ({ type, response }) => {
+      seen.push({ type, response });
+    });
+    const { agent } = makeAgent({ hooks, model: { id: 'm' } as never });
+    await agent.run('go');
+    const model = calls[0]!.model as {
+      middleware: {
+        wrapStream: (o: { doStream: () => Promise<unknown>; params: object }) => Promise<unknown>;
+        wrapGenerate: (o: { doGenerate: () => Promise<unknown>; params: object }) => Promise<unknown>;
+        transformParams?: unknown;
+      };
+    };
+    expect(model.middleware.transformParams).toBeUndefined(); // 没人听 before_provider_request 就不装
+    await model.middleware.wrapStream({
+      doStream: async () => ({ stream: 's', response: { headers: { 'x-req': '1' } } }),
+      params: {},
+    });
+    await model.middleware.wrapGenerate({ doGenerate: async () => ({ response: { id: 'r' } }), params: {} });
+    expect(seen).toEqual([
+      { type: 'stream', response: { headers: { 'x-req': '1' } } },
+      { type: 'generate', response: { id: 'r' } },
+    ]);
+  });
+
+  it('agent_settled 在 agent_end 之后、且确认空闲时才发;agent_end 里又开链条则等下一次', async () => {
+    const hooks = new HookRegistry();
+    const order: string[] = [];
+    let reopened = false;
+    hooks.on('agent_end', () => {
+      order.push('end');
+      if (!reopened) {
+        reopened = true;
+        agent.followUp('again');
+      }
+    });
+    hooks.on('agent_settled', () => {
+      order.push('settled');
+    });
+    const { agent } = makeAgent({ hooks });
+    await agent.run('go');
+    // 第一条链的 agent_end 里开了第二条链:第一次不 settled;第二条链自己收尾后再等一拍。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(order).toEqual(['end', 'end', 'settled']);
+  });
+
+  it('sendMessage:triggerTurn 开轮(带信封与 display);空闲不开轮直接进历史并播报;运行中注入为引导', async () => {
+    const { agent, events } = makeAgent({});
+    await agent.sendMessage('note', 'remember this', { display: 'note!' });
+    expect(agent.history).toEqual([{ role: 'user', content: wrapCustomMessage('note', 'remember this') }]);
+    expect(events.at(-1)).toEqual({ type: 'custom-message', customType: 'note', content: 'remember this', display: 'note!' });
+    expect(unwrapCustomMessage(wrapCustomMessage('note', 'a\nb'))).toEqual({ customType: 'note', content: 'a\nb' });
+    expect(unwrapCustomMessage('plain')).toBeUndefined();
+
+    await agent.sendMessage('cmd', 'run it', { triggerTurn: true });
+    const start = events.find((e) => e.type === 'turn-start');
+    expect(start).toMatchObject({ userText: wrapCustomMessage('cmd', 'run it'), display: 'run it' });
+    expect(calls[0]!.messages).toEqual([wrapCustomMessage('note', 'remember this'), wrapCustomMessage('cmd', 'run it')]);
+
+    onStream = async (n) => {
+      if (n === 2) await agent.sendMessage('steer', 'mid-turn');
+    };
+    await agent.run('second');
+    // 运行中:作为引导注入,续跑的流看到套了引导信封的自定义消息。
+    expect(calls[2]!.messages.at(-1)).toBe(wrapGuidance(wrapCustomMessage('steer', 'mid-turn')));
+    expect(events.filter((e) => e.type === 'custom-message')).toHaveLength(2);
+  });
+
+  it('input 钩子每条消息只跑一次:运行中提交走 inject 那条路也不重复,改写只应用一次', async () => {
+    const hooks = new HookRegistry();
+    const seen: string[] = [];
+    hooks.on('input', ({ text, source }) => {
+      seen.push(`${source}:${text}`);
+      return { action: 'transform', text: `${text}+` };
+    });
+    const { agent } = makeAgent({ hooks });
+    onStream = async (n) => {
+      // 运行中调 run():内部转成 inject,钩子已在 run 里跑过,不能再跑一遍。
+      if (n === 1) await agent.run('mid');
+    };
+    await agent.run('first');
+    expect(seen).toEqual(['turn:first', 'guidance:mid']);
+    // 改写各只应用一次(不是 first++ / mid++);第二个流是引导续跑,历史里
+    // 已经有首答。
+    expect(calls[0]!.messages).toEqual(['first+']);
+    expect(calls[1]!.messages).toEqual(['first+', '回复1', wrapGuidance('mid+')]);
+  });
+
+  it('whenIdle:压缩没发 compaction 事件(短历史、被否决)时也照常兑现', async () => {
+    let release!: () => void;
+    mockCompactMessages.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          // removedMessages 0 = doCompact 提前返回,**不发** compaction 事件。
+          release = () => resolve({ messages: [], removedMessages: 0, summaryChars: 0 });
+        }),
+    );
+    const { agent } = makeAgent({});
+    const compacting = agent.compact();
+    expect(agent.isCompacting).toBe(true);
+    let settled = false;
+    const idle = agent.whenIdle().then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(settled).toBe(false);
+    release();
+    await compacting;
+    await idle;
+    expect(settled).toBe(true);
+  });
+
+  it('sendMessage:压缩进行中时先等它,消息不被整体替换的历史吞掉', async () => {
+    let release!: () => void;
+    mockCompactMessages.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ messages: [{ role: 'user', content: 'summary' }], removedMessages: 3, summaryChars: 7 });
+        }),
+    );
+    const { agent } = makeAgent({});
+    await agent.run('one');
+    const compacting = agent.compact();
+    const sending = agent.sendMessage('note', 'survive me');
+    release();
+    await compacting;
+    await sending;
+    expect(agent.history).toEqual([
+      { role: 'user', content: 'summary' },
+      { role: 'user', content: wrapCustomMessage('note', 'survive me') },
+    ]);
+  });
+
+  it('没有 before_provider_request 钩子时模型原样交给 SDK', async () => {
+    const model = { id: 'm' };
+    const { agent } = makeAgent({ model: model as never, hooks: new HookRegistry() });
+    await agent.run('go');
+    expect(calls[0]!.model).toBe(model);
+  });
+
+  it('处理器收到 ctx(第二个参数),缺省是无 UI 的空上下文', async () => {
+    const hooks = new HookRegistry();
+    let seen: unknown;
+    hooks.on('turn_start', (_input, ctx) => {
+      seen = { hasUI: ctx.hasUI, idle: ctx.isIdle() };
+    });
+    const { agent } = makeAgent({ hooks });
+    await agent.run('go');
+    expect(seen).toEqual({ hasUI: false, idle: true });
   });
 });

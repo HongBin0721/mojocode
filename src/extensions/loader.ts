@@ -5,7 +5,8 @@
  *  1. 包——`mojocode install` 装进来、记在配置 `packages` 里的(见 packages.ts);
  *  2. 全局目录 `~/.mojocode/extensions/`;
  *  3. 项目目录 `<root>/.mojocode/extensions/`;
- *  4. 命令行 `-e <path>`(可重复)。
+ *  4. 配置 `extensions: [路径…]`(全局与项目层取并集);
+ *  5. 命令行 `-e <path>`(可重复)。
  * 一方扩展(`BUILTIN_EXTENSIONS`)永远最先,不经这里。
  *
  * 目录里认 `*.ts` / `*.mts` / `*.js` / `*.mjs` 与 `<name>/index.<ext>`;`.d.ts`、
@@ -24,7 +25,7 @@ import { globalExtensionsDir, projectExtensionsDir } from '../config/paths.js';
 import type { ResolvedPackage } from './packages.js';
 import { nameOf } from './packages.js';
 
-export type ExtensionOrigin = 'package' | 'user' | 'project' | 'flag';
+export type ExtensionOrigin = 'package' | 'user' | 'project' | 'config' | 'flag';
 
 export interface DiscoveredExtension {
   /** 缺省 id(模块自己导出 id 时以它为准)。 */
@@ -108,6 +109,8 @@ export interface DiscoverOptions {
   root: string;
   /** 命令行 `-e` 给的文件或目录。 */
   extraPaths?: readonly string[];
+  /** 配置 `extensions` 列的文件或目录(相对路径按 root 解析),装在目录之后、`-e` 之前。 */
+  configPaths?: readonly string[];
   /** 已解析到磁盘的包(见 packages.ts 的 resolvePackages)。 */
   packages?: readonly ResolvedPackage[];
 }
@@ -144,7 +147,7 @@ export async function discoverExtensions(options: DiscoverOptions): Promise<Disc
   // 四类来源之间没有依赖,全部并发探;顺序在下面按装载优先级重新拼回来
   // (包 → 全局 → 项目 → `-e`,后装的同名覆盖先装的)。启动路径上这几十次
   // stat/readdir 串起来是纯粹的干等。
-  const [fromPackages, fromUser, fromProject, fromFlags] = await Promise.all([
+  const [fromPackages, fromUser, fromProject, fromConfig, fromFlags] = await Promise.all([
     Promise.all(
       (options.packages ?? []).map((pkg) => {
         const pkgName = nameOf(pkg.source);
@@ -153,6 +156,12 @@ export async function discoverExtensions(options: DiscoverOptions): Promise<Disc
     ),
     scanExtensionDir(globalExtensionsDir(), 'user'),
     scanExtensionDir(projectExtensionsDir(options.root), 'project'),
+    Promise.all(
+      (options.configPaths ?? []).map(async (raw) => {
+        const file = path.resolve(options.root, raw);
+        return (await expand(file, 'config')) ?? { missing: file };
+      }),
+    ),
     Promise.all(
       (options.extraPaths ?? []).map(async (raw) => {
         const file = path.resolve(options.root, raw);
@@ -164,7 +173,7 @@ export async function discoverExtensions(options: DiscoverOptions): Promise<Disc
   const out: DiscoveredExtension[] = [];
   for (const pkg of fromPackages) for (const found of pkg) out.push(...(found ?? []));
   out.push(...fromUser, ...fromProject);
-  for (const found of fromFlags) {
+  for (const found of [...fromConfig, ...fromFlags]) {
     if (Array.isArray(found)) out.push(...found);
     else notFound.push(found.missing);
   }
@@ -178,26 +187,56 @@ export async function discoverExtensions(options: DiscoverOptions): Promise<Disc
  * 扩展 ~30ms 的纯启动延迟,而 GUI 最多同时跑四个 sidecar。
  * 仍然是**惰性**的:真有磁盘扩展要装时才付 `import('jiti')` 的代价。
  */
-let jitiPromise: Promise<{ import: (file: string) => Promise<unknown> }> | undefined;
-function jitiOf(): Promise<{ import: (file: string) => Promise<unknown> }> {
-  jitiPromise ??= import('jiti').then(({ createJiti }) =>
-    createJiti(import.meta.url, { interopDefault: true }),
-  );
-  return jitiPromise;
+type Jiti = { import: (file: string) => Promise<unknown> };
+const jitiByGeneration = new Map<number, Promise<Jiti>>();
+/**
+ * `/reload` 靠 generation 换一份新实例:jiti 按文件缓存模块,同一实例再
+ * import 同一个文件拿到的是旧模块;新实例连共享依赖也重新求值一遍,那是
+ * 重载的代价,不是启动的代价(启动永远是 generation 0 的那一份)。
+ */
+function jitiOf(generation: number): Promise<Jiti> {
+  let promise = jitiByGeneration.get(generation);
+  if (!promise) {
+    promise = import('jiti').then(({ createJiti }) => createJiti(import.meta.url, { interopDefault: true }));
+    // 旧代数的实例连同它的模块注册表一起丢掉:`/reload` 之后再也用不到它,
+    // 留着就是每重载一次泄漏一份 zod/ai。(原生 import 那条路的 `?reload=N`
+    // 图进的是运行时自己的 ESM 缓存,清不掉——那是重载固有的代价。)
+    for (const old of [...jitiByGeneration.keys()]) {
+      if (old < generation) jitiByGeneration.delete(old);
+    }
+    jitiByGeneration.set(generation, promise);
+  }
+  return promise;
 }
 
-/** 加载一个模块文件。Bun 原生 import;Node 走 jiti。两条路都返回模块命名空间。 */
-async function importExtensionModule(file: string): Promise<Record<string, unknown>> {
-  if (process.versions.bun) {
-    return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+/**
+ * 加载一个模块文件。Bun 原生 import;Node 上 `.ts` / `.mts` 走 jiti,`.mjs` / `.js`
+ * 先试原生 import(jiti 对它们本来也只是转交原生 import,而原生 import 的缓存
+ * 按 URL 键——只有 query 能绕开),失败(CJS 形态的 `.js`)再退回 jiti。
+ * generation > 0 是 `/reload`:原生路径用 query 绕开模块缓存,jiti 路径换新
+ * 实例(实测 jiti 对 `.ts` 换实例即重读文件)。
+ */
+async function importExtensionModule(file: string, generation = 0): Promise<Record<string, unknown>> {
+  const href = pathToFileURL(file).href;
+  const busted = generation > 0 ? `${href}?reload=${generation}` : href;
+  if (process.versions.bun) return (await import(busted)) as Record<string, unknown>;
+  if (/\.m?js$/.test(file)) {
+    try {
+      return (await import(busted)) as Record<string, unknown>;
+    } catch {
+      // CJS 形态的 .js:交给 jiti 转译。
+    }
   }
-  const jiti = await jitiOf();
+  const jiti = await jitiOf(generation);
   return (await jiti.import(file)) as Record<string, unknown>;
 }
 
 /** 把模块导出规范成 Extension;形状不对抛错(由调用方变成 notice)。 */
-export async function loadExtension(discovered: DiscoveredExtension): Promise<Extension> {
-  const mod = await importExtensionModule(discovered.file);
+export async function loadExtension(
+  discovered: DiscoveredExtension,
+  options: { generation?: number } = {},
+): Promise<Extension> {
+  const mod = await importExtensionModule(discovered.file, options.generation ?? 0);
   const exported = (mod.default ?? mod) as ExtensionModuleExport | undefined;
   if (typeof exported === 'function') {
     return { id: discovered.id, setup: exported };

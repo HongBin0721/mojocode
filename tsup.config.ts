@@ -2,7 +2,10 @@ import { defineConfig } from 'tsup';
 import { solidPlugin } from 'esbuild-plugin-solid';
 
 export default defineConfig({
-  entry: { cli: 'src/cli.tsx' },
+  // `extension` 是给扩展作者的入口(`mojocode/extension`):类型 + 两个组件
+  // 工厂 + ExtensionEvents。它不 import UI,不带 FFI;d.ts 只为它生成。
+  entry: { cli: 'src/cli.tsx', extension: 'src/extension-entry.ts' },
+  dts: { entry: { extension: 'src/extension-entry.ts' } },
   format: ['esm'],
   target: 'node20',
   platform: 'node',

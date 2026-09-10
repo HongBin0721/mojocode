@@ -8,6 +8,7 @@ import { ExtensionStatusLine } from '../../src/ui/ExtensionStatusLine.js';
 import type { Session } from '../../src/app/bootstrap.js';
 import type { ExtensionCommandInfo, ExtensionStatusEntry } from '../../src/core/extension.js';
 import { renderUi } from '../support/otui.js';
+import { stubExtensions } from '../support/extensions.js';
 
 /**
  * 扩展在 TUI 里的接入面:命令表进 `/` 菜单并派发到 runCommand、状态行贴在
@@ -49,6 +50,8 @@ async function setup(options?: {
     bus,
     skills: [],
     skillsChanged: () => () => {},
+    // 扩展面的其余成员用共享的桩:App 挂载时会读它们,少一个就运行期炸。
+    ...stubExtensions(),
     extensionCommands: options?.commands ?? [
       { name: 'goal', description: 'Keep working', argumentHint: '<condition> | clear' },
     ],

@@ -1,4 +1,4 @@
-import { For, Show } from 'solid-js';
+import { createMemo, For, Show } from 'solid-js';
 import { Box, Text, type JSX } from './kit.js';
 import { Diff } from './Diff.js';
 import { Header } from './Header.js';
@@ -15,6 +15,9 @@ import {
   WIDTH_SAFETY,
 } from './theme.js';
 import { extractDiff, extractTodos } from './timeline-data.js';
+import { extensionTheme } from './extension-theme.js';
+import { messageRendererFor, toolRendererFor } from './tool-renderers.js';
+import { Lines } from './ExtensionSurface.js';
 import type { TimelineItem } from './types.js';
 import type { TodoItem } from './timeline-data.js';
 import { t } from '../i18n/index.js';
@@ -112,6 +115,9 @@ export function TimelineEntry(props: {
     case 'tool':
       return <ToolEntry item={item} columns={props.columns} expanded={props.expanded} />;
 
+    case 'custom':
+      return <CustomEntry item={item} />;
+
     case 'notice':
       return (
         <Box marginTop={1}>
@@ -162,6 +168,36 @@ export function TimelineEntry(props: {
   }
 }
 
+/**
+ * 扩展的自定义消息:有注册的画法就按它画;没有就一行 `[type]` 标签加正文
+ * (display 优先)。画法返回 undefined 或抛错都退回缺省。
+ */
+function CustomEntry(props: { item: Extract<TimelineItem, { kind: 'custom' }> }): JSX.Element {
+  const item = props.item;
+  const lines = createMemo((): string[] | undefined => {
+    try {
+      return messageRendererFor(item.customType)?.(item, extensionTheme);
+    } catch {
+      return undefined;
+    }
+  });
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Show
+        when={lines()}
+        fallback={
+          <Box flexDirection="column">
+            <Text color={theme.dim}>[{item.customType}]</Text>
+            <Text wrap="wrap">{item.display ?? item.content}</Text>
+          </Box>
+        }
+      >
+        {(rows: () => string[]) => <Lines lines={rows()} />}
+      </Show>
+    </Box>
+  );
+}
+
 function ToolEntry(props: {
   item: Extract<TimelineItem, { kind: 'tool' }>;
   columns: number;
@@ -171,15 +207,48 @@ function ToolEntry(props: {
   const args = formatToolInput(item.toolName, item.input);
   const diff = extractDiff(item);
   const todos = extractTodos(item);
+  // 扩展给这个工具的自定义画法(renderCall / renderResult):有就替换缺省的
+  // 调用行 / 结果块;返回 undefined 或抛错都退回缺省——扩展的画法坏了不该
+  // 让时间线少一条。
+  const custom = () => toolRendererFor(item.toolName);
+  const callLines = createMemo((): string[] | undefined => {
+    try {
+      return custom()?.renderCall?.(item.input, extensionTheme);
+    } catch {
+      return undefined;
+    }
+  });
+  const resultLines = createMemo((): string[] | undefined => {
+    try {
+      return custom()?.renderResult?.(
+        item.output,
+        { isError: item.isError, expanded: props.expanded === true, input: item.input },
+        extensionTheme,
+      );
+    } catch {
+      return undefined;
+    }
+  });
 
   return (
     <Box marginTop={1} flexDirection="column">
-      <Box>
-        <Text color={item.isError ? theme.error : theme.success}>{glyphs.bullet} </Text>
-        <Text bold>{toolDisplayName(item.toolName)}</Text>
-        {args ? <Text color={theme.dim}>({truncateWidth(args, 100)})</Text> : null}
-      </Box>
-      {todos ? (
+      <Show
+        when={callLines()}
+        fallback={
+          <Box>
+            <Text color={item.isError ? theme.error : theme.success}>{glyphs.bullet} </Text>
+            <Text bold>{toolDisplayName(item.toolName)}</Text>
+            {args ? <Text color={theme.dim}>({truncateWidth(args, 100)})</Text> : null}
+          </Box>
+        }
+      >
+        {(lines: () => string[]) => <Lines lines={lines()} />}
+      </Show>
+      {resultLines() ? (
+        <Box paddingLeft={2}>
+          <Lines lines={resultLines()!} />
+        </Box>
+      ) : todos ? (
         <TodoChecklist todos={todos} />
       ) : (
         <Box paddingLeft={2}>
@@ -193,12 +262,12 @@ function ToolEntry(props: {
           </Text>
         </Box>
       )}
-      {diff ? (
+      {diff && !resultLines() ? (
         <Box paddingLeft={5} flexDirection="column">
           <Diff patch={diff} maxLines={24} />
         </Box>
       ) : null}
-      {item.toolName === 'bash' && !item.isError ? (
+      {item.toolName === 'bash' && !item.isError && !resultLines() ? (
         <BashOutput output={item.output} expanded={props.expanded} />
       ) : null}
     </Box>

@@ -25,7 +25,8 @@ function makeHost() {
     config: { search: { backend: 'off' } } as unknown as Config,
   });
   webExtension.setup(host.api);
-  const prompt = () => host.hooks.beforeAgentStart({ systemPrompt: 'BASE', subagent: false });
+  const prompt = async () =>
+    (await host.hooks.beforeAgentStart({ systemPrompt: 'BASE', subagent: false })).systemPrompt;
   return { ...host, prompt };
 }
 

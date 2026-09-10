@@ -22,7 +22,7 @@ npm test            # 核心测试,Node 下跑(排除 tests/ui/)
 npm run test:ui     # UI 测试,必须在 Bun 下跑:OpenTUI 真渲染 + 模拟键盘
 ```
 
-UI 测试需要 Bun 是因为 OpenTUI 的测试渲染器就是真实的原生渲染器(FFI)。CI 在 Node 矩阵上跑 typecheck 与核心测试,Bun job 跑 UI 测试与单二进制冒烟,desktop job 跑桌面端独立包的 typecheck、测试与构建。
+UI 测试需要 Bun 是因为 OpenTUI 的测试渲染器就是真实的原生渲染器(FFI)。CI 在 Node 矩阵上跑 typecheck 与核心测试,Bun job 跑 UI 测试与单二进制冒烟。
 
 ## 单二进制
 
@@ -60,18 +60,6 @@ npm run build       # 产物在 website/dist/
 ```
 
 push 到 main 且 `website/**` 有改动时,`.github/workflows/docs.yml` 自动部署到 GitHub Pages。中文页面在 `src/content/docs/`,英文在 `src/content/docs/en/` 同名镜像,缺页自动回退中文。
-
-## 桌面端
-
-`apps/desktop` 是独立的 Electron 包,先在根目录 `npm ci` 与 `npm run build`(它编译根目录的核心源码,并拉起 `dist/cli.js` 作为 sidecar):
-
-```bash
-cd apps/desktop
-npm install
-npm run typecheck
-npm test            # 不会启动 Electron
-npm run dev
-```
 
 ## 约定
 

@@ -57,6 +57,7 @@ TUI 运行在 alternate screen(全屏,类似 vim):滚轮、`PageUp`、`PageDown`
 | `/resume` | 切换到本目录的另一个历史会话 |
 | `/fork` | 把当前对话分叉进新会话继续,原会话停在分叉点不再变动 |
 | `/skills` | 重扫并列出技能 |
+| `/reload` | 重载磁盘上的扩展(内置扩展不动) |
 | `/mcp` | 查看 MCP 服务器状态 |
 | `/doctor [offline]` | 体检,读会话此刻的配置;`offline` 跳过联网检查 |
 | `/cost` | 本次会话 token 用量 |

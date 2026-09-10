@@ -2,18 +2,17 @@ import { t } from '../../i18n/index.js';
 import type { CommandContext } from './types.js';
 
 /**
- * 两条"不是内置命令时"的回退:扩展命令(会话进程侧执行)与技能。
+ * 两条"不是内置命令时"的回退:扩展命令与技能。
  * 两者都可能发起一轮,拦忙逻辑各自内联(见各自注释)。
  */
 
 /**
- * 不是内置命令时的扩展回退:查会话进程推过来的扩展命令表(如 /goal),
- * 命中则整条交给 runCommand 在会话进程侧执行。
+ * 不是内置命令时的扩展回退:查扩展命令表(如 /goal),命中则整条交给
+ * runCommand 执行。
  *
- * 这里**不**拦忙、也不点 setRunning:扩展命令是即时 RPC,忙不忙由扩展自己
- * 按参数判(`/goal clear` 正是循环跑着的时候才要用的,一刀切拦忙就没法
- * 停了);要发起一轮的处理器在会话进程侧 followUp,turn-start 与随后的
- * state 推送会把运行态带回来。
+ * 这里**不**拦忙、也不点 setRunning:忙不忙由扩展自己按参数判(`/goal clear`
+ * 正是循环跑着的时候才要用的,一刀切拦忙就没法停了);要发起一轮的处理器
+ * 自己 followUp,turn-start 会把运行态带回来。
  */
 export const runExtensionCommand = async (
   ctx: CommandContext,
@@ -33,7 +32,7 @@ export const runExtensionCommand = async (
 
 /**
  * 不是内置命令时的技能回退:查技能表,命中则整轮交给 runSkill(激活、
- * 展开、跑轮次都在会话进程侧),display 用用户敲的原文。
+ * 展开、跑轮次),display 用用户敲的原文。
  * 技能发起完整一轮,运行中禁止。内联检查:
  * BUSY_BLOCKED_COMMANDS 是静态表,列不进动态发现的名字。
  */

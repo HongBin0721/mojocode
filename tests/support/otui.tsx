@@ -69,6 +69,9 @@ export async function renderUi(
   const setup = await testRender(node, {
     width: options.width ?? 100,
     height: options.height ?? 30,
+    // 与 kit 的 render() 对齐(见那边的注释):上游默认按 ctrl+c 直接销毁
+    // 渲染器,App 的双 ctrl+c 退出就永远测不到——按一下画面直接变空。
+    exitOnCtrlC: false,
   });
   const { renderer, mockInput, renderOnce, captureCharFrame } = setup;
 
