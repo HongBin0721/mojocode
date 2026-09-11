@@ -2,9 +2,14 @@
 
 `mojocode` — a terminal coding agent (full-screen OpenTUI TUI + headless `-p` mode) that
 works with any LLM via the Vercel AI SDK. ESM-only (`"type": "module"`), TypeScript with
-`strict` + `noUncheckedIndexedAccess`. Runtime split: `-p` and subcommands run on Node ≥ 22;
-the TUI needs native FFI — Bun (primary, single-binary distribution) or Node ≥ 26.1 with
-`--experimental-ffi` (auto re-exec injects the flag).
+`strict` + `noUncheckedIndexedAccess` + `noUnusedLocals`/`noUnusedParameters`. **Single
+process, Pi-style**: TUI, agent core, tools, extensions, MCP, LSP and the session store all
+live in one process. Runtime split: `-p` and subcommands run on Node ≥ 22; the TUI needs
+native FFI — Bun (primary, single-binary distribution) or Node ≥ 26.1 with
+`--experimental-ffi` (auto re-exec injects the flag, `src/app/runtime.ts`).
+
+`CLAUDE.md` is the long-form companion (design history, review findings, gotchas); this file
+is the short map. Keep the two consistent when the tree changes.
 
 ## Commands (verified against package.json)
 
@@ -14,141 +19,118 @@ npm run dev         # tsup --watch
 npm run typecheck   # tsc --noEmit — tsup does NOT typecheck; this is the gate
 npm test            # core tests, Node lane (excludes tests/ui/)
 npm run test:ui     # UI tests — MUST run under Bun (= bun --bun x vitest run --config vitest.ui.config.ts)
-npx vitest run tests/gate.test.ts       # single core test file
+npm run build:bin   # bun scripts/build-binaries.ts — single binaries for 6 platforms
+npx vitest run tests/hooks.test.ts      # single core test file
 npx vitest run -t "name substring"      # single test by name
 node dist/cli.js    # run the built CLI
-cd apps/desktop && npm run typecheck && npm test   # GUI gates (separate package; root npm ci needed too)
+cd website && npm ci && npm run build   # docs site (Astro Starlight), separate package
 ```
 
 There is no lint config; `npm run typecheck` + both test lanes are the correctness gates.
-UI tests need Bun because OpenTUI's test renderer is the real native renderer (FFI).
+UI tests need Bun because OpenTUI's test renderer is the real native renderer (FFI). CI
+(`.github/workflows/test.yml`) also runs the core lane under Bun to guard dual-runtime compat.
 
 ## Architecture
 
 **The agent core never imports the UI framework (SolidJS).** `src/core/events.ts` defines
-the contract: the core emits typed `AgentEvent`s over an `EventBus` and awaits permission
-decisions via a `PermissionAsker` callback. One agent loop therefore drives both the
-OpenTUI TUI (`src/ui/App.tsx`) and the non-interactive `-p` renderer (`src/app/headless.ts`).
+the contract: the core emits typed `AgentEvent`s over an `EventBus`. One agent loop drives
+both the OpenTUI TUI (`src/ui/App.tsx`) and the non-interactive `-p` renderer
+(`src/app/headless.ts`). The UI consumes the narrow `SessionHandle` interface
+(`src/app/session-handle.ts`); the `Session` built by `src/app/bootstrap.ts` satisfies it
+structurally, and UI tests build fake sessions against it (`tests/support/extensions.ts`'s
+`stubExtensions()` must list every extension-facing member App reads).
 
-**Process model (opencode-style client-server).** By default the TUI is a thin client: it
-spawns a managed `mojocode serve --managed` child (agent, tools, MCP, LSP, session store
-all live there) and talks REST + SSE — `src/server/serve.ts` + `src/server/protocol.ts`
-(wire types, event replay via SSE `id:`/`Last-Event-ID`), `src/client/remote.ts` (SSE-driven
-state mirror + serialized RPC queue). The UI consumes the narrow `SessionHandle` interface
-(`src/app/session-handle.ts`); the local `Session` satisfies it structurally, so
-`MOJOCODE_NO_SERVER=1` and UI tests run in-process. `-p` stays in-process by design.
-Every awaited session call in UI code needs a `.catch` — they are RPCs and an unhandled
-rejection kills the TUI.
-
-Wiring lives in `src/app/bootstrap.ts`, which builds the `Session` object (agent + bus +
-gate + tools + MCP + session store) consumed by both frontends. `src/cli.tsx` is the
-commander entry (`auth`, `models`, `providers`, `sessions`, `config`, `doctor`, `serve`
-subcommands). The TUI is a lazy `import('./ui/tui.js')` — never import `src/ui/` (→ kit →
+**Process model.** `src/cli.tsx` (commander entry: `auth`, `models`, `providers`,
+`sessions`, `doctor`, `install`, `remove`, `extensions`, `config`) bootstraps a `Session`
+and hands it straight to `runTui` or `renderHeadless`. There is no server, no protocol
+layer, no RPC — an earlier opencode-style `serve` sidecar, REST+SSE client and Electron GUI
+were removed deliberately (commit `be17f24`) so extensions can hand the TUI live
+**components**. The TUI is a lazy `import('./ui/tui.js')` — never import `src/ui/` (→ kit →
 `@opentui/core`, which needs FFI at module load) statically from anything on the `-p` path.
 
 One turn: `Agent.run()` (`src/agent/loop.ts`, AI SDK `streamText` + `stepCountIs`) → tools
-call `PermissionGate` **inside** their `execute()` (deliberately not AI SDK `toolApproval`,
-which would suspend the stream) → gate consults mode/rules or awaits the asker → events
-stream to the renderer → history persists to append-only JSONL in `~/.mojocode/sessions/`.
+are wrapped per stream with the hook layer (`src/agent/hooked-tools.ts`) → events stream to
+the renderer → history persists to append-only JSONL in `~/.mojocode/sessions/`.
 
+**No permission system** (deliberate, like Pi; commit `4a856ef`). Tools resolve paths
+relative to the workspace via `src/tools/paths.ts` with no fence. To intercept, write an
+extension: a `tool_call` hook returning `{ block: true, reason }` vetoes; to ask the user,
+`ctx.ui.confirm`. `tool_call` hook failure **vetoes** (fail closed). Old `sandbox` /
+`approval` / `permissions` config keys are ignored as unknown.
+
+- `src/core/` — `events.ts` (bus), `hooks.ts` (`HookRegistry`, snake_case hook names,
+  async, serial, return values matter), `extension.ts` (`ExtensionAPI`, the **only** surface
+  an extension touches; members named after Pi's), `extension-types.ts` (Node-free wire
+  types shared with UI components), `ui-kit.ts` (`selectList` / `textInput`),
+  `palette.ts` (the single colour table; TUI and `ExtensionTheme` both read it).
+- `src/extensions/` — first-party extensions `goal` `lsp` `mcp` `review` `todo` `web`
+  (`index.ts`), plus `loader.ts` (disk discovery: packages → `~/.mojocode/extensions` →
+  `<root>/.mojocode/extensions` → config `extensions:[]` → `-e`), `packages.ts`
+  (`mojocode install npm:|git:|<path>`, manifest key `mojocode`), `flags.ts` (`-X name[=value]`),
+  `tool-adapter.ts` (Pi-shaped `registerTool(definition)`). Disk `.ts` loads natively on
+  Bun, via jiti on Node. `/reload` unloads and reloads disk extensions through an undo stack.
+- `src/extension-entry.ts` — the public `mojocode/extension` entry (types + `selectList` /
+  `textInput` + `ExtensionEvents`).
+- `src/tools/` — builtin `read write edit glob grep bash` (+ `view_image` when a vision
+  model resolves) and `task` (subagent, one recursion level, `mode: 'explore'` is
+  read-only). `web_fetch` / `web_search` belong to the `web` extension, `todo` to the
+  `todo` extension; `skill` is built by `src/skills/`. Extensions may not override builtin
+  names (`BUILTIN_TOOL_NAMES` in bootstrap).
+- `src/skills/` — Agent Skills (`SKILL.md` dirs) from `.mojocode/skills` + `.claude/skills`
+  (project > global), a `skill` tool, slash invocation (`/name args` → `runSkill`),
+  `context: fork` runs through `runTaskSubagent`. The `<skill-command>` first-line marker
+  in `invocation.ts` is a persistence contract (like `INIT_PROMPT_MARKER`) — never change it.
+- `src/agent/` — loop, system prompt (`prompt.ts` injects this file, or `MOJOCODE.md` /
+  `CLAUDE.md` as fallbacks), compaction (`compact.ts`), `/init`, review collectors shared
+  by `/review` (extension) and `/simplify` (core).
 - `src/config/` — layered config: builtin → `~/.mojocode/config.json` → project
   `.mojocode/config.json` → `MOJOCODE_*` env → CLI flags. Zod schemas in `schema.ts`;
-  provider presets in `providers.ts`.
-- `src/permissions/` — `sandbox.ts` (realpath workspace containment; `.git/`, `.env*`,
-  keys/SSH always denied), `bash-rules.ts` (command judgment + `Bash(prefix:*)` rules;
-  hard-denies `rm -rf`/`sudo`/`curl|sh`/force-push; safelist is two-tier — commands that
-  run project code (`npm test`, test runners) are safe only in writable sandboxes, and
-  find/fd/git-branch arg forms that write are never safe), `gate.ts` (two-axis policy à la
-  Codex: sandbox `read-only`/`workspace-write`/`danger-full-access` × approval
-  `untrusted`/`on-request`/`never`; `/approvals` presets read-only/ask/auto/full-access
-  in `config/schema.ts`). Unlike Codex there is no OS sandbox, so non-safelisted bash
-  stays "outside the sandbox" even under workspace-write, and `on-failure` does not
-  exist. Plan mode is a flag that overrides both axes (read-only, non-escalatable);
-  the `exit_plan` tool submits a plan and approval restores the pre-plan combo
-  (read-only+never promotes to ask). `full-access` and plan are session-only, never
-  persisted. `shift+tab` cycles ask→auto→plan; from outside the cycle it lands on
-  `plan`, so a stray keystroke can only tighten permissions, never loosen them.
-- `src/tools/` — builtin `read write edit glob grep bash web_fetch todo exit_plan`, plus
-  `web_search` when a search backend resolves, plus `task` (subagent — one recursion level).
-- `src/skills/` — Agent Skills (agentskills.io `SKILL.md` dirs): discovery from
-  `.mojocode/skills` + `.claude/skills` (project > global, 15s-TTL `SkillManager`),
-  a `skill` tool whose description carries the L1 name+description list (rebuilt in place
-  on digest change — the tools object is shared by reference with the running Agent),
-  and slash invocation (`/name args` → `runSkill` on Session: activate → substitute
-  `$ARGUMENTS`/`$N` → run a turn wrapped in the `<skill-command>` replay envelope,
-  `invocation.ts` — first-line marker is a persistence contract like INIT_PROMPT_MARKER).
-  Activation adds the skill dir as a **read-only** extra root (`resolveReadable` in
-  sandbox.ts — read/glob only; writes still single-root) and, for `allowed-tools`,
-  asks once per session via `gate.confirmSessionRules` (session buckets only, never
-  persisted from frontmatter). `context: fork` runs the body through `runTaskSubagent`;
-  subagents get the skill tool without `runFork` (fork inlines — one recursion level).
-- `src/agent/` — loop, system prompt (`prompt.ts` injects this file), compaction (`compact.ts`).
-- `src/mcp/` — MCP client; MCP tools are wrapped as AI SDK tools through the same gate.
-- `src/i18n/` — `en.ts` / `zh-CN.ts` catalogs with a parity test asserting key sets match.
-- `src/session/` — append-only JSONL store; incremental `append` on pure extension, else
-  full `snapshot`; `<id>.meta.json` sidecar makes `list()` O(1). Non-history records
-  (`task`, `usage`) ride the same file; `open()` skips unknown kinds, old readers skip
-  them too. `usage` records (per-turn input/output/cached tokens) exist for after-the-fact
-  cache-hit / cost stats — read them with `SessionStore.readUsage()`.
-- `src/server/` + `src/client/` — the client-server split (HTTP + SSE, Bearer-token auth,
-  loopback bind; server is FFI-free and runs on Node ≥ 22).
+  provider presets in `providers.ts`; `save.ts` writes single keys back (`/theme` writes to
+  whichever layer already holds `theme`, otherwise global).
+- `src/mcp/`, `src/lsp/` — mechanism libraries; policy lives in the `mcp` / `lsp` extensions.
+  They stay in core because `mojocode doctor` uses them without a session.
+- `src/session/` — append-only JSONL store; `append` on pure extension, else `snapshot`;
+  `<id>.meta.json` sidecar makes `list()` O(1). `custom` records carry extension state
+  (`api.appendEntry`), `task` and `usage` records ride the same file; unknown kinds are skipped.
+- `src/i18n/` — `en.ts` / `zh-CN.ts` with a parity test asserting key sets match.
 - `src/ui/` — **SolidJS** (`@opentui/solid`) components; `kit.tsx` is the renderer adapter
   exposing Ink-shaped `Box`/`Text`/`useInput`/`useApp`/`render` — components import kit,
-  never `@opentui/*` directly. Solid discipline: never destructure props; derived values
-  are functions/memos; multi-signal updates observed by an effect must be `batch()`ed.
-  Two upstream traps: span (TextNode) styles only apply via the `style` prop (direct
-  `fg=`/`bg=` are silently ignored), and bare `solid-js` resolves to the non-reactive SSR
-  stub under Node/Bun native conditions — the build pins `solid-js/dist/solid.js`
-  everywhere (see tsup.config.ts / vitest.solid.ts); keep it pinned.
-  Two orthogonal collapse axes: `/focus` (ctrl+o, `focus.ts`) hides whole entries —
-  `user`/`assistant`/`error`/`banner` and all notices never (iron law, `tests/focus.test.ts`);
-  **ctrl+r** toggles the *bodies* of reasoning and raw tool output, collapsed by default,
-  while diff/plan/todo bodies are results and never collapse. Each turn ends with a
-  `kind: 'turn'` line (model · elapsed · that turn's tokens, plus a cache-hit segment
-  `cached/input (pct%)` when the provider reports one — `formatCacheHit` decides, 0% is
-  shown, missing data is not). Single-line info rows must be
-  measured and cut before layout (`Footer.fitParts`) — an overflowing OpenTUI flex row
-  shrinks its children and silently eats the spaces around separators. Diff rows use
-  `highlightDiffLine`, not `highlightLine`: highlight.js's default theme is built for a
-  white background (strings red, numbers/comments green) and paints red-on-green inside
-  the diff; `DIFF_THEME` overrides every colored default key (unset keys fall back) with a
-  red/green-free bright palette, emitted as raw truecolor SGR instead of via chalk.
-
-**`apps/desktop/` is the Electron GUI client — a deliberately separate package.** No root
-workspaces: it carries its own `package.json`/lockfile, tsconfig projects and vitest config,
-so root `build`/`typecheck`/`test`/publish never see it (`files: ["dist"]`). It is a third
-frontend over the same core — Electron main spawns a managed `mojocode serve --managed`
-child and speaks the same REST+SSE protocol as the TUI's remote mode; `spawn-server.ts`
-mirrors `src/app/server-launch.ts`'s handshake on purpose (a shared launch path would grow
-holes for the GUI's process shapes) — don't "fix" the duplication. Dependencies are strictly
-one-way: desktop compiles root pure modules via `@core/*` source aliases, a whitelist kept
-in **three synced copies** (`apps/desktop/tsconfig.json` paths, `electron.vite.config.ts`,
-`vitest.config.ts`); root never imports desktop, and renderer-side `@core/*` targets must be
-Node-free (the browser build failing on a `node:` import IS the guardrail). Gates:
-`cd apps/desktop && npm run typecheck && npm test` — root `npm ci` is a prerequisite
-(`@core/*` sources resolve `zod`/`ai` from root `node_modules`); neither gate launches
-Electron, so `ELECTRON_SKIP_BINARY_DOWNLOAD=1` is fine (CI's `desktop` job relies on it).
+  never `@opentui/*` directly. Solid discipline: never destructure props; derived values are
+  functions/memos; multi-signal updates observed by an effect must be `batch()`ed. Span
+  (TextNode) styles only apply via the `style` prop; bare `solid-js` resolves to the
+  non-reactive SSR stub under Node/Bun conditions — the build and both vitest configs pin
+  `solid-js/dist/solid.js`; keep it pinned. `theme` (`ui/theme.ts`) is a reactive Proxy
+  over `core/palette.ts`: read `theme.x` inside JSX/memos, never snapshot at module level.
+  Slash commands: `ui/commands/registry.ts` (table) + `ui/commands/index.ts` (dispatch) +
+  handlers in `*-cmds.ts`; enumerated arguments get a second-level picker via
+  `SlashCommand.options(path)`, `onHighlight` previews the highlighted item (`/theme`).
+  Two collapse axes: `/focus` (ctrl+o) hides whole entries (`user`/`assistant`/`error`/
+  `banner` and notices never — `tests/focus.test.ts`); ctrl+r toggles reasoning and raw
+  tool-output *bodies*. Single-line rows must be measured and cut before layout
+  (`Footer.fitParts`). Diff rows use `highlightDiffLine` with `DIFF_THEME`, not `highlightLine`.
+- `website/` — docs (Astro Starlight): Chinese pages in `src/content/docs/`, English mirrors
+  under `src/content/docs/en/` with the same slugs. Update both when behaviour changes.
 
 ## Conventions
 
 - **Code comments are written in Simplified Chinese** — keep new comments in Chinese.
-- **UI strings are localized; text fed back to the model (tool errors, denial reasons)
+- **UI strings are localized; text fed back to the model (tool errors, hook veto reasons)
   stays English-only** — mixed language degrades function calling.
 - **Never hardcode model IDs** — presets are starting defaults only; `mojocode models`
   fetches the live list.
 - **GLM baseURL is `/api/paas/v4`** — never append `/v1` (404s).
 - **Use `result.responseMessages` for history**, not `result.response.messages` — the
   latter only holds the last step and silently drops earlier tool calls.
-- **Readonly mode enforces `gate.assertCanMutate()` before any work**, separate from
-  `checkWrite`, because tools short-circuit and the guarantee must not depend on the branch.
-- **Kit's `render()` defaults `exitOnCtrlC: false`** — the renderer would otherwise swallow
+- **Kit's `render()` defaults `exitOnCtrlC: false`** — otherwise the renderer swallows
   ctrl+c before `useInput`, breaking double-ctrl+c-to-exit (startup wizard/picker opt back in).
 - **In-turn compaction shrinks only the messages sent to the model**; persistent history
   stays full, and `historyNeedsCompact` forces compaction at next turn start.
-- Timeline items are immutable once finalized — the `<For>` in App reuses entries by
-  reference (zero re-render under Solid's fine-grained updates) and `renderMarkdownAnsi`
-  is LRU-cached by `(key, width)` in `md-cache.ts`; keep the wrap-safety margin and
-  truncate by display width (`WIDTH_SAFETY` and `truncateWidth` in `theme.ts`).
-- Core tests live in `tests/*.test.ts` mirroring the module under test (`gate.test.ts`,
-  `sandbox.test.ts`, `i18n.test.ts`, ...) on the Node lane; UI tests live in `tests/ui/`
-  on the Bun lane with the `tests/support/otui.tsx` harness.
+- `src/config/paths.ts` resolves home from `$HOME`/`$USERPROFILE`, never bare `os.homedir()`
+  (Bun snapshots it; tests that stub HOME would read the developer's real config).
+- Timeline items are immutable once finalized — `<For>` reuses entries by reference and
+  `renderMarkdownAnsi` is LRU-cached by `(key, width)` in `md-cache.ts`; keep the
+  wrap-safety margin (`WIDTH_SAFETY`) and truncate by display width (`truncateWidth`).
+- Every extension gets its own `ctx` whose `hasUI` is a getter — never `{ ...ctx }` it.
+  Hook/command/shortcut registrations carry that ctx so `/reload` can undo them.
+- Core tests live in `tests/*.test.ts` mirroring the module under test on the Node lane;
+  UI tests live in `tests/ui/` on the Bun lane with the `tests/support/otui.tsx` harness.
