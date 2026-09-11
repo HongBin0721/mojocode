@@ -168,6 +168,5 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | 裸 `--my-flag` | `-X my-flag`(commander 对未声明选项只能整体放行,见 `src/extensions/flags.ts`) |
 | pi-tui 的组件类(`Container`、`Text`、`SelectList`…) | 组件只需 `render(width)` + `handleInput`,自己拼行;`host.theme` / `ui.theme` 给颜色 |
 | `ctx.sessionManager` 的写口、裸 `SessionManager` 对象 | 只读视图;写入走 `appendEntry` / `setSessionName` / `newSession` / `fork` / `switchSession` |
-| 运行期 `/theme` 切换 | 主题由配置 `theme` 指名,TUI 起来前应用一次(见[包管理](/extensions/packages/)) |
 
 Pi 生态的扩展**不能**原样拿来跑:它们从 `@mariozechner/pi-coding-agent` 导入类型、用 pi-tui 的类拼界面。形状一致,改 import、把 pi-tui 的组件换成自己拼行即可。

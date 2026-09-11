@@ -38,7 +38,7 @@ An image whose long edge exceeds 1568px is downsampled proportionally, keeping i
 
 ## Slash commands
 
-Built-in commands come first, extension commands next and skills last; on a name clash the built-in wins. A command with enumerated arguments (`/provider` `/think` `/focus` `/review`) opens a second-level picker when you press enter in the menu; `/models` with no arguments opens a model picker grouped by provider.
+Built-in commands come first, extension commands next and skills last; on a name clash the built-in wins. A command with enumerated arguments (`/provider` `/think` `/focus` `/theme` `/review`) opens a second-level picker when you press enter in the menu; `/models` with no arguments opens a model picker grouped by provider.
 
 | Command | Purpose |
 |---|---|
@@ -52,6 +52,7 @@ Built-in commands come first, extension commands next and skills last; on a name
 | `/think <level>` | reasoning effort. The available levels depend on the current model, see [Thinking levels](/config/providers/#thinking-levels) |
 | `/setting` | settings panel: interface language, status bar items. `↑`/`↓` to select, enter to open, `esc` to go back one level; the status bar is multi-select with space to toggle and enter to apply. Changes take effect at once and are written to the global config |
 | `/focus <full\|compact\|result>` | timeline density, persisted. `full` keeps everything, `compact` folds runs of tool calls into "⋯ N tool calls collapsed", `result` shows only questions and answers. Answers, errors and notices are never hidden at any density |
+| `/theme <name>` | switch the colour theme at runtime and persist it; the picker lists every `<name>.json` in the project / global `themes/` directories and in theme directories shipped by packages and previews the highlighted one, `default` restores the built-in palette; the active theme file is hot-reloaded on save (see [Packages](/extensions/packages/#themes)) |
 | `/compact` | compact the context manually |
 | `/new` | start a new session (keeping the screen contents) |
 | `/clear` | clear the screen and start a new session |

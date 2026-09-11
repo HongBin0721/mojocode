@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { Box, Text, useInput, useTerminalSize, type JSX, type ScrollDirection } from './kit.js';
 import { theme, glyphs } from './theme.js';
 import { IdleRule, StatusLine, phaseColor, type WorkState } from './StatusLine.js';
@@ -46,6 +46,13 @@ export interface SlashCommand {
    * 兼容的),不必为了这个能力去动签名。
    */
   options?: (path: string[]) => CommandOption[] | Promise<CommandOption[]>;
+  /**
+   * 光标停到某项时的预览回调(`/theme` 移到哪套配色就先换上看):参数是停住
+   * 那项的 value 与已选层。选择器关闭时——esc、回车提交、整个卸载——都以
+   * `undefined` 调一次,命令应回到已提交的状态;回车提交的新状态由命令
+   * 本身落实(先收回、再由命令换上,提交失败时画面也回得去)。加载中不通知。
+   */
+  onHighlight?: (value: string | undefined, path: string[]) => void;
   /**
    * 多选模式:空格切换选中,回车把所有选中值(按选项顺序)作为参数提交;
    * 全部取消时提交 `none`。`current` 标记初始选中集合。
@@ -101,6 +108,11 @@ interface Props {
    * 标记归零,一条早就用过的 prefill 会二次覆盖用户当前的草稿。
    */
   onPrefillConsumed?: () => void;
+  /**
+   * 命令历史的存放处:App 持有,Input 挂载时从这里取、每次提交写回——
+   * 整树重挂(切语言、换主题)后上箭头还翻得到之前的输入。
+   */
+  historyRef?: { current: string[] };
   /**
    * 草稿的**拉取口**:挂载时把取值函数写进 `ref.read`(扩展的
    * `ui.getEditorText` 经它现读)。不用"每次变化回调"——那要在每个按键上
@@ -175,7 +187,7 @@ export function Input(props: Props): JSX.Element {
   const [value, setValue] = createSignal('');
   if (props.editorRef) props.editorRef.read = value;
   const [cursor, setCursor] = createSignal(0);
-  const [history, setHistory] = createSignal<string[]>([]);
+  const [history, setHistory] = createSignal<string[]>(props.historyRef?.current ?? []);
   const [historyIndex, setHistoryIndex] = createSignal<number | undefined>(undefined);
   const [menuIndex, setMenuIndex] = createSignal(0);
   const [menuDismissed, setMenuDismissed] = createSignal(false);
@@ -342,6 +354,7 @@ export function Input(props: Props): JSX.Element {
       if (image) images.push(image);
     }
     setHistory((prev) => [trimmed, ...prev.filter((h) => h !== trimmed)].slice(0, 100));
+    if (props.historyRef) props.historyRef.current = history();
     setHistoryIndex(undefined);
     setValue('');
     setCursor(0);
@@ -409,6 +422,21 @@ export function Input(props: Props): JSX.Element {
     );
   }
 
+  /** 通知命令当前停在哪项(见 SlashCommand.onHighlight)。 */
+  const notifyHighlight = (sel: SelectorState | undefined) => {
+    if (!sel?.command.onHighlight || sel.loading) return;
+    const option = sel.options[sel.cursor];
+    if (option) sel.command.onHighlight(option.value, sel.trail.map((step) => step.value));
+  };
+  /** 关掉选择器(esc / 提交):作废在途的取值、收回预览。 */
+  const closeSelector = (sel: SelectorState) => {
+    selectorGen++;
+    setSelector(undefined);
+    sel.command.onHighlight?.(undefined, []);
+  };
+  // 选择器开着时被卸载(覆盖层顶掉输入框):预览同样要收回。
+  onCleanup(() => selector()?.command.onHighlight?.(undefined, []));
+
   /**
    * 打开(或深入/退回一层)取值选择器。`trail` 是已选过的层;取值失败或
    * 某层为空表时退回成提交 `/name <已选层...>`——由命令自己解释这一层为什么
@@ -454,6 +482,7 @@ export function Input(props: Props): JSX.Element {
           selected,
           trail,
         });
+        notifyHighlight(selector());
       },
       () => {
         if (selectorGen !== gen) return;
@@ -480,12 +509,14 @@ export function Input(props: Props): JSX.Element {
     setFileMenuTouched(true);
     setFileMenuIndex((fileCursor() + total + step) % total);
   };
-  const moveSelector = (step: -1 | 1) =>
+  const moveSelector = (step: -1 | 1) => {
     setSelector((s) =>
       s && s.options.length > 0
         ? { ...s, cursor: (s.cursor + s.options.length + step) % s.options.length }
         : s,
     );
+    notifyHighlight(selector());
+  };
 
   const insert = (text: string) => {
     const v = value();
@@ -509,8 +540,7 @@ export function Input(props: Props): JSX.Element {
             openSelector(sel.command, back.cursor, sel.trail.slice(0, -1));
             return;
           }
-          selectorGen++;
-          setSelector(undefined);
+          closeSelector(sel);
           return;
         }
         if (sel.loading || sel.options.length === 0) return;
@@ -541,8 +571,7 @@ export function Input(props: Props): JSX.Element {
             const values = sel.options
               .filter((o) => sel.selected.has(o.value))
               .map((o) => o.value);
-            selectorGen++;
-            setSelector(undefined);
+            closeSelector(sel);
             submit(`/${sel.command.name} ${values.length > 0 ? values.join(' ') : 'none'}`);
             return;
           }
@@ -557,8 +586,7 @@ export function Input(props: Props): JSX.Element {
             return;
           }
           const path = [...sel.trail.map((step) => step.value), option.value];
-          selectorGen++;
-          setSelector(undefined);
+          closeSelector(sel);
           // 预填:留尾随空格,菜单保持关闭(slashState 遇空格即收起),
           // 用户接着补自由文本再自己回车。
           if (option.prefill) {

@@ -29,6 +29,7 @@ export function buildCommands(): SlashCommand[] {
     { name: 'think', description: t('cmd.think') },
     { name: 'setting', aliases: ['settings'], description: t('cmd.setting') },
     { name: 'focus', description: t('cmd.focus') },
+    { name: 'theme', description: t('cmd.theme') },
     { name: 'compact', description: t('cmd.compact') },
     { name: 'new', description: t('cmd.new') },
     { name: 'clear', description: t('cmd.clear') },

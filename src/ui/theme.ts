@@ -1,5 +1,7 @@
 import stringWidth from 'string-width';
+import { createSignal } from 'solid-js';
 import { t } from '../i18n/index.js';
+import { palette, type ThemeColorKey } from '../core/palette.js';
 
 /**
  * 终端文本折行宽度的安全余量(列)。
@@ -14,10 +16,29 @@ export const WIDTH_SAFETY = 4;
 
 /**
  * 配色表住在零依赖的 `core/palette.ts`——扩展的 `ExtensionTheme` 要在 headless
- * 下也拿得到同一份,而那边 import 不到这个模块。这里原样转口,TUI 侧既有的
- * `import { theme } from './theme.js'` 一个都不用改。
+ * 下也拿得到同一份,而那边 import 不到这个模块。这里转口成一个**可追踪**的
+ * 读视图:每次 `theme.x` 都先读一下版本信号,组件 JSX 里的 `color={theme.x}`
+ * 因此订阅了它;`/theme` 选择器里光标移到哪套配色就 `applyTheme` + `bumpTheme`,
+ * 已画出的文字随之变色而不必整树重挂(选择器还开着,重挂会把它关掉)。
+ * 提交时仍整树重挂兜底——不经 JSX 读色的地方(扩展组件自己拼的 SGR 行、
+ * 一次性算好的字符串)不会跟着版本走。写入不走这里:`applyTheme` 直接改
+ * palette 再 bump。TUI 侧既有的 `import { theme } from './theme.js'` 一个都不用改。
  */
-export { palette as theme, THEME_COLOR_KEYS, sgrForeground, type ThemeColorKey } from '../core/palette.js';
+const [themeVersion, setThemeVersion] = createSignal(0);
+
+export const theme: Readonly<Record<ThemeColorKey, string>> = new Proxy(palette, {
+  get(target, key) {
+    themeVersion();
+    return target[key as ThemeColorKey];
+  },
+});
+
+/** palette 改完后通知所有读过 `theme.x` 的响应式节点重算。 */
+export function bumpTheme(): void {
+  setThemeVersion((n) => n + 1);
+}
+
+export { THEME_COLOR_KEYS, sgrForeground, type ThemeColorKey } from '../core/palette.js';
 
 export const glyphs = {
   bullet: '⏺',

@@ -124,6 +124,33 @@ export async function saveTimelineMode(mode: string, file?: string): Promise<str
   }, file);
 }
 
+/**
+ * 保存 `/theme` 选择的主题名;`undefined`(内置配色)删掉 `theme` 键。
+ * 写到**持有该键的那一层**:项目配置已经写了 `theme` 就改项目配置——只写
+ * 全局的话项目层下次启动会把它盖回去,用户看到的是"落盘了却不生效";
+ * 项目层没写就落全局(与 /focus、/think 一致)。
+ *
+ * 删键时**每一层都删**:schema 里没有"内置配色"的显式写法(`default` 是保留名,
+ * 磁盘上没有那个文件),只删项目层会让全局层的值浮上来——下次启动仍不是内置。
+ */
+export async function saveTheme(name: string | undefined, root: string): Promise<string> {
+  const mutate = (config: Record<string, unknown>) => {
+    if (name === undefined) delete config.theme;
+    else config.theme = name;
+  };
+  let project: unknown;
+  try {
+    project = JSON.parse(await fs.readFile(projectConfigPath(root), 'utf8'));
+  } catch {
+    // 没有项目配置、或不是合法 JSON:按"项目层没写"处理,落全局。
+  }
+  const projectOwnsTheme = typeof project === 'object' && project !== null && 'theme' in project;
+  if (!projectOwnsTheme) return updateGlobalConfig(mutate);
+  const file = await updateProjectConfig(root, mutate);
+  if (name === undefined) await updateGlobalConfig(mutate);
+  return file;
+}
+
 /** 保存顶层 `language`,让设置面板里选的语言在下次启动时生效。 */
 export async function saveLanguage(language: string, file?: string): Promise<string> {
   return updateGlobalConfig((config) => {

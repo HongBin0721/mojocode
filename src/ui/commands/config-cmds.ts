@@ -4,13 +4,14 @@ import {
   TIMELINE_MODES,
   type TimelineMode,
 } from '../../config/schema.js';
-import { saveReasoningEffort, saveTimelineMode } from '../../config/save.js';
+import { saveReasoningEffort, saveTheme, saveTimelineMode } from '../../config/save.js';
+import { applyTheme, BUILTIN_THEME_NAME, listThemes, loadTheme, themeLocations } from '../theme-loader.js';
 import { supportedEfforts } from '../../model/reasoning.js';
 import type { ReasoningEffort } from '../../config/schema.js';
 import type { SessionHandle } from '../../app/session-handle.js';
 import type { CommandHandler } from './types.js';
 
-/** 配置类命令:think / setting / focus / provider / models。 */
+/** 配置类命令:think / setting / focus / theme / provider / models。 */
 
 /**
  * /think 选择器与参数校验同源的可选档位。生效可选集由 Session 的
@@ -93,6 +94,57 @@ export const focus: CommandHandler = async (ctx, arg) => {
       level: 'warn',
       message: t('notice.focusSaveFailed', { message: err.message }),
     });
+  });
+};
+
+/**
+ * `/theme <name>`:运行期换配色。主题文件的查找与启动时(tui.tsx 的
+ * applyConfiguredTheme)同一条路;`default` 回到内置配色。换色只改
+ * palette 那一张表,已画出的行不会自己变——由 ctx.refreshTheme 整树重挂载。
+ * 落盘写顶层 `theme`(default 则删掉),下次启动直接生效。
+ */
+export const theme: CommandHandler = async (ctx, arg) => {
+  const name = arg;
+  const dirs = themeLocations(ctx.session.root, ctx.session.themeDirs ?? []);
+  if (!name) {
+    const names = [BUILTIN_THEME_NAME, ...(await listThemes(dirs)).map((entry) => entry.name)];
+    ctx.push({
+      kind: 'notice',
+      level: 'info',
+      message: t('notice.themeUsage', {
+        list: names.join(' | '),
+        current: ctx.session.config.theme ?? BUILTIN_THEME_NAME,
+      }),
+    });
+    return;
+  }
+  let file: string | undefined;
+  if (name === BUILTIN_THEME_NAME) {
+    applyTheme({});
+    ctx.session.config.theme = undefined;
+  } else {
+    const result = await loadTheme(name, dirs);
+    if (!result.ok) {
+      // 选择器里光标经过时换上的预览色,在它关闭时已收回到已提交的那套
+      // (Input 的 onHighlight(undefined)),这里只提示。
+      ctx.push({
+        kind: 'notice',
+        level: 'warn',
+        message:
+          result.reason === 'not-found'
+            ? t('notice.themeNotFound', { name })
+            : t('notice.themeInvalid', { detail: result.detail ?? name }),
+      });
+      return;
+    }
+    applyTheme(result.theme.colors);
+    ctx.session.config.theme = name;
+    file = result.theme.file;
+  }
+  ctx.refreshTheme(file);
+  ctx.push({ kind: 'notice', level: 'info', message: t('notice.themeSet', { name }) });
+  await saveTheme(name === BUILTIN_THEME_NAME ? undefined : name, ctx.session.root).catch((err: Error) => {
+    ctx.push({ kind: 'notice', level: 'warn', message: t('notice.themeSaveFailed', { message: err.message }) });
   });
 };
 

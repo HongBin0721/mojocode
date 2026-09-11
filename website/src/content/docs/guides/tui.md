@@ -38,7 +38,7 @@ TUI 运行在 alternate screen(全屏,类似 vim):滚轮、`PageUp`、`PageDown`
 
 ## 斜杠命令
 
-内置命令在前,扩展命令其次,技能最后;同名时内置优先。带枚举参数的命令(`/provider` `/think` `/focus` `/review`)在菜单上回车会进入二级选择器;`/models` 不带参数回车打开按厂商分组的模型选择器。
+内置命令在前,扩展命令其次,技能最后;同名时内置优先。带枚举参数的命令(`/provider` `/think` `/focus` `/theme` `/review`)在菜单上回车会进入二级选择器;`/models` 不带参数回车打开按厂商分组的模型选择器。
 
 | 命令 | 作用 |
 |---|---|
@@ -52,6 +52,7 @@ TUI 运行在 alternate screen(全屏,类似 vim):滚轮、`PageUp`、`PageDown`
 | `/think <档位>` | 思考强度。可选档位随当前模型而定,见[思考档位](/config/providers/#思考档位) |
 | `/setting` | 设置面板:界面语言、状态栏显示项。`↑`/`↓` 选择、回车进入、`esc` 逐级返回;状态栏是多选,空格勾选、回车生效。改动即时生效并写入全局配置 |
 | `/focus <full\|compact\|result>` | 时间线密度并落盘。`full` 全量,`compact` 把成段的工具调用折叠为「⋯ N 个工具调用已折叠」,`result` 只看问答。回答、报错与各类提示在任何档位都不隐藏 |
+| `/theme <name>` | 运行期切换配色主题并落盘;选择器列出项目 / 全局 `themes/` 目录与包带的主题目录里的每个 `<name>.json`,光标到哪套预览哪套,`default` 回到内置配色;生效中的主题文件保存即重画(见[包管理](/extensions/packages/#主题)) |
 | `/compact` | 手动压缩上下文 |
 | `/new` | 开启新会话(保留屏幕内容) |
 | `/clear` | 清屏并开启新会话 |

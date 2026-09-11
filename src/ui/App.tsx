@@ -4,6 +4,7 @@ import {
   createSignal,
   For,
   Match,
+  on,
   onCleanup,
   Show,
   Switch,
@@ -54,6 +55,7 @@ import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
 import type { ProviderModels } from '../model/registry.js';
 import { saveLanguage, saveStatusBar } from '../config/save.js';
 import { selectableEfforts } from './commands/config-cmds.js';
+import { applyTheme, BUILTIN_THEME_NAME, listThemes, loadTheme, themeLocations, watchThemeFile } from './theme-loader.js';
 import { getLocale, setLocale, t, type Locale } from '../i18n/index.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
@@ -107,6 +109,71 @@ export function App(props: Props): JSX.Element {
   const [timelineMode, setTimelineMode] = createSignal<TimelineMode>(
     session.config.timeline ?? 'full',
   );
+  // /theme 提交计数:换完 +1,下方与 locale 同一个 <Show keyed> 整树重挂——
+  // JSX 里读 `theme.x` 的节点会随 applyTheme 的 bump 自己变色,但扩展组件自己
+  // 拼的 SGR 行、一次性算好的字符串不会,提交时重挂兜底。
+  const [themeEpoch, setThemeEpoch] = createSignal(0);
+  // 当前生效主题的文件(内置配色为 undefined),盯它做热重载。
+  const [themeFile, setThemeFile] = createSignal<string | undefined>(undefined);
+  const themeDirs = () => themeLocations(session.root, session.themeDirs ?? []);
+  // 启动时按配置应用过的主题(tui.tsx)在这里补上文件路径,开始盯。查完时
+  // 用户可能已经 /theme 换过了:配置里的名字变了就不覆盖。
+  {
+    const startupTheme = session.config.theme;
+    if (startupTheme) {
+      void loadTheme(startupTheme, themeDirs()).then((result) => {
+        if (result.ok && session.config.theme === startupTheme && themeFile() === undefined) {
+          setThemeFile(result.theme.file);
+        }
+      });
+    }
+  }
+  // 热重载:主题文件改了就重读。只换色不重挂——改文件的人多半正在输入框里
+  // 打字或开着选择器,每次保存都清一次草稿受不了;JSX 里读 theme.x 的节点
+  // 经 bump 自己重算,扩展自拼的 SGR 行等它下次重画。坏了只提示、留着上一次
+  // 的颜色;删了按"找不到"提示,同样不动颜色——别让屏幕闪回内置色。
+  createEffect(
+    on(themeFile, (file) => {
+      if (!file) return;
+      const stop = watchThemeFile(file, () => {
+        const name = session.config.theme;
+        if (!name) return;
+        void loadTheme(name, themeDirs()).then((result) => {
+          if (result.ok) {
+            applyTheme(result.theme.colors);
+            return;
+          }
+          push({
+            kind: 'notice',
+            level: 'warn',
+            message:
+              result.reason === 'not-found'
+                ? t('notice.themeNotFound', { name })
+                : t('notice.themeInvalid', { detail: result.detail ?? name }),
+          });
+        });
+      });
+      onCleanup(stop);
+    }),
+  );
+  // /theme 选择器的预览:光标到哪套配色就换上,esc 收回到已提交的那套。只经
+  // applyTheme 的 bump 反应式变色,不重挂(重挂会把开着的选择器关掉)。
+  let previewGen = 0;
+  const previewTheme = (value: string | undefined) => {
+    const gen = ++previewGen;
+    const name = value ?? session.config.theme ?? BUILTIN_THEME_NAME;
+    if (name === BUILTIN_THEME_NAME) {
+      applyTheme({});
+      return;
+    }
+    void loadTheme(name, themeDirs()).then((result) => {
+      // 光标已经移走、或这套主题坏了:不动颜色,提交时命令自己会提示。
+      if (gen !== previewGen || !result.ok) return;
+      applyTheme(result.theme.colors);
+    });
+  };
+  // 命令历史活在 App:整树重挂(切语言、换主题)后上箭头还翻得到。
+  const inputHistory = { current: [] as string[] };
   // ctrl+o 切换后在 footer 短暂回显新档位(得有反馈)。
   const [focusFlash, setFocusFlash] = createSignal<TimelineMode | undefined>(undefined);
   let focusFlashTimer: NodeJS.Timeout | undefined;
@@ -472,6 +539,11 @@ export function App(props: Props): JSX.Element {
     timelineMode,
     setThink,
     setTimelineMode,
+    refreshTheme: (file) => {
+      previewGen++;
+      setThemeFile(file);
+      setThemeEpoch((n) => n + 1);
+    },
     setProviderLabel,
     setModel,
     setRunning,
@@ -577,11 +649,9 @@ export function App(props: Props): JSX.Element {
         .run(expanded, Object.keys(runOptions).length > 0 ? runOptions : undefined)
         .finally(() => setRunning(false));
     })().catch((err: Error) => {
-      // agent.run / goal.run 自身不 reject,但 inject / steer / run 在
-      // client-server 模式下都是 RPC:server 抖一下(HTTP 错误、协议错误、
-      // 连接断开)就会 reject,而这里是个 void 的异步 IIFE——未捕获的
-      // rejection 在 Node ≥20 / Bun 下直接掀掉整个 TUI。与 /init、/plan、
-      // /goal 三处同一条教训,这条提交路径在方法变成异步后被漏掉了。
+      // agent.run 自身不 reject,但前面 await 的 inject 会;这里是个 void 的
+      // 异步 IIFE——未捕获的 rejection 在 Node ≥20 / Bun 下直接掀掉整个 TUI。
+      // 与 /init、/goal 同一条教训。
       submitGate.clearPending();
       setRunning(false);
       push({ kind: 'error', message: err.message });
@@ -606,6 +676,15 @@ export function App(props: Props): JSX.Element {
           label: t(FOCUS_DESCRIPTIONS[m]),
           current: m === timelineMode(),
         })),
+      // 磁盘上的主题现扫(改了文件不必重启);`default` 是内置配色的保留名。
+      theme: async () => {
+        const current = session.config.theme ?? BUILTIN_THEME_NAME;
+        const found = await listThemes(themeDirs());
+        return [
+          { value: BUILTIN_THEME_NAME, label: t('themeopt.default'), current: current === BUILTIN_THEME_NAME },
+          ...found.map((entry) => ({ value: entry.name, label: entry.file, current: entry.name === current })),
+        ];
+      },
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
           value: id,
@@ -628,7 +707,11 @@ export function App(props: Props): JSX.Element {
           }));
       },
     };
-    const builtin = buildCommands().map((c) => ({ ...c, options: optionSources[c.name] }));
+    const builtin = buildCommands().map((c) => ({
+      ...c,
+      options: optionSources[c.name],
+      ...(c.name === 'theme' ? { onHighlight: previewTheme } : {}),
+    }));
     // 磁盘上的技能拼在内置命令之后。同名时**内置优先**(与 Claude Code 相反):
     // 内置命令是不可替代的会话操作,不能被仓库里的一个文件顶掉。
     // description 是用户内容,原样展示,不过 t()。
@@ -723,6 +806,7 @@ export function App(props: Props): JSX.Element {
       prefill={prefill()}
       onPrefillConsumed={clearPrefill}
       editorRef={editor}
+      historyRef={inputHistory}
       fileIndex={fileLister}
       readClipboardImage={readClipboardImage}
       onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
@@ -797,10 +881,11 @@ export function App(props: Props): JSX.Element {
     </Box>
   );
 
-  // 界面 JSX 抽成函数,由下方 <Show keyed> 按 locale 重挂载:Solid 没有
-  // "整树重渲染",切换语言后的静态文案(占位符、提示、footer 标签)只有
-  // 重建 JSX 才会重新求值。信号都活在外层,重挂载不丢任何状态;代价是
-  // Input 的草稿/历史清空、滚动位置回到粘底——对一个改语言的显式操作可接受。
+  // 界面 JSX 抽成函数,由下方 <Show keyed> 按 locale 与 themeEpoch 重挂载:
+  // Solid 没有"整树重渲染",切换语言后的静态文案(占位符、提示、footer 标签)
+  // 与换主题后已画出的颜色只有重建 JSX 才会重新求值。信号都活在外层,
+  // 重挂载不丢任何状态(命令历史也在外层的 inputHistory 里);代价是 Input
+  // 的草稿清空、滚动位置回到粘底——对改语言 / 换主题这样的显式操作可接受。
   const body = () => (
     <Box flexDirection="column" width="100%" height="100%">
       {/* 扩展的 setHeader:屏幕顶部、时间线之上的一块。 */}
@@ -918,8 +1003,8 @@ export function App(props: Props): JSX.Element {
   // 原样返回,memo 每次拿到的是同一个函数引用 → 语言换了却什么都不重建,
   // 静态文案(占位符、菜单提示、面板标题)会一直停在旧语言上。
   return (
-    <Show when={locale()} keyed>
-      {(_current: Locale) => body()}
+    <Show when={`${locale()}:${themeEpoch()}`} keyed>
+      {(_current: string) => body()}
     </Show>
   );
 }

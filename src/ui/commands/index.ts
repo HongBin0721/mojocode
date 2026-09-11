@@ -16,7 +16,7 @@ import {
 } from './session-cmds.js';
 import { simplify } from './simplify-cmds.js';
 import { runExtensionCommand, runSkillCommand } from './extension-cmds.js';
-import { focus, models, provider, setting, think } from './config-cmds.js';
+import { focus, models, provider, setting, theme, think } from './config-cmds.js';
 
 /**
  * 命令分发入口(原 App.tsx 的 runCommand 巨型 switch):
@@ -36,6 +36,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   think,
   setting,
   focus,
+  theme,
   provider,
   models,
   skills,

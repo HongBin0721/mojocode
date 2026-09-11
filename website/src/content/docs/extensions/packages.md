@@ -49,7 +49,7 @@ argument-hint: <文件>
 
 ### 主题
 
-`themes/` 目录(以及 `<项目>/.mojocode/themes/`、`~/.mojocode/themes/`)里的 `<name>.json` 是一个主题,配置 `theme: "<name>"` 指名,TUI 起来前应用一次(运行期不切换)。`colors` 只需写要改的键,其余沿用内置配色;可用键:`accent` `user` `assistant` `dim` `tool` `error` `warn` `success` `added` `removed` `diffAddedBg` `diffAddedFg` `diffRemovedBg` `diffRemovedFg` `code`,值是命名色或 `#rrggbb`。
+`themes/` 目录(以及 `<项目>/.mojocode/themes/`、`~/.mojocode/themes/`)里的 `<name>.json` 是一个主题,配置 `theme: "<name>"` 指名启动时应用的那个,运行期 `/theme <name>` 随时换。选择器列出找到的全部主题,光标移到哪套就预览哪套(esc 回到已提交的那套);选定后写回**已经持有 `theme` 键的那一层**(项目配置写了就改项目配置,否则落全局)。生效中的主题文件被盯着:保存即重画。`default` 是保留名,代表内置配色——`/theme default` 回到它并删掉配置键。`colors` 只需写要改的键,其余沿用内置配色;可用键:`accent` `user` `assistant` `dim` `tool` `error` `warn` `success` `added` `removed` `diffAddedBg` `diffAddedFg` `diffRemovedBg` `diffRemovedFg` `code`,值是命名色或 `#rrggbb`。
 
 ```json
 { "name": "dusk", "colors": { "accent": "#7aa2f7", "user": "#bb9af7", "code": "#7dcfff" } }

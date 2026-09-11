@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,8 +6,10 @@ import {
   saveApiKey,
   saveCustomProvider,
   saveReasoningEffort,
+  saveTheme,
   setDefaultProvider,
 } from '../src/config/save.js';
+import { globalConfigPath, projectConfigPath } from '../src/config/paths.js';
 
 let dir: string;
 let file: string;
@@ -145,5 +147,56 @@ describe('setDefaultProvider', () => {
       providers: { glm: { apiKey: 'g1' } },
       provider: 'glm',
     });
+  });
+});
+
+describe('saveTheme', () => {
+  // 走真实路径(HOME 与工作区根都指到临时目录):它要判断的正是"写哪一层"。
+  let home: string;
+  let root: string;
+  beforeEach(async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-theme-home-'));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'mojocode-theme-root-'));
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const read = async (file: string) => JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>;
+
+  it('项目层没写 theme 时落全局;default 删掉键', async () => {
+    expect(await saveTheme('dusk', root)).toBe(globalConfigPath());
+    expect(await read(globalConfigPath())).toEqual({ theme: 'dusk' });
+    await saveTheme(undefined, root);
+    expect(await read(globalConfigPath())).toEqual({});
+  });
+
+  it('项目层已写 theme 时改项目层——否则下次启动会被项目层盖回去', async () => {
+    const project = projectConfigPath(root);
+    await fs.mkdir(path.dirname(project), { recursive: true });
+    await fs.writeFile(project, JSON.stringify({ theme: 'old', timeline: 'compact' }));
+    await fs.mkdir(path.dirname(globalConfigPath()), { recursive: true });
+    await fs.writeFile(globalConfigPath(), JSON.stringify({ language: 'en' }));
+
+    expect(await saveTheme('dusk', root)).toBe(project);
+    expect(await read(project)).toEqual({ theme: 'dusk', timeline: 'compact' });
+    expect(await read(globalConfigPath())).toEqual({ language: 'en' });
+    await saveTheme(undefined, root);
+    expect(await read(project)).toEqual({ timeline: 'compact' });
+  });
+
+  it('default 时两层都删——只删项目层会让全局层的值浮上来', async () => {
+    const project = projectConfigPath(root);
+    await fs.mkdir(path.dirname(project), { recursive: true });
+    await fs.writeFile(project, JSON.stringify({ theme: 'night' }));
+    await fs.mkdir(path.dirname(globalConfigPath()), { recursive: true });
+    await fs.writeFile(globalConfigPath(), JSON.stringify({ theme: 'dusk', language: 'en' }));
+
+    await saveTheme(undefined, root);
+    expect(await read(project)).toEqual({});
+    expect(await read(globalConfigPath())).toEqual({ language: 'en' });
   });
 });

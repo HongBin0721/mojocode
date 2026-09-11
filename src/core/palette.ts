@@ -10,8 +10,10 @@
  * `renderCall`/`renderResult`、以及退出时的整段回滚转储全都还是内置色。
  *
  * 值是 kit 认的颜色:命名色(`cyan`)或 `#rrggbb`。**可变**,由
- * `src/ui/theme-loader.ts` 的 `applyTheme` 在 render 之前就地改;读取方一律
- * 现读,不许做模块级快照(`StatusLine` 的阶段色表就栽在这上面)。
+ * `src/ui/theme-loader.ts` 的 `applyTheme` 就地改(启动时 render 之前一次,
+ * 之后 `/theme` 随时换);读取方一律现读,不许做模块级快照(`StatusLine`
+ * 的阶段色表就栽在这上面)。内置配色另存一份冻结的 `BUILTIN_PALETTE`,
+ * 换主题时没给的键从它恢复——否则上一个主题设过的键会漏到下一个主题里。
  */
 
 /** 主题文件 `colors` 段认得的键。 */
@@ -63,6 +65,9 @@ export const palette: Record<ThemeColorKey, string> = {
   /** markdown 中的行内代码与代码块。 */
   code: 'cyan',
 };
+
+/** 内置配色的冻结快照:`applyTheme` 的基线,`/theme default` 回到它。 */
+export const BUILTIN_PALETTE: Readonly<Record<ThemeColorKey, string>> = Object.freeze({ ...palette });
 
 /** 命名色 → SGR 前景码。表以外的名字按"终端默认前景"处理。 */
 const NAMED_SGR: Record<string, string> = {

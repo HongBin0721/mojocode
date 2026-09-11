@@ -68,7 +68,7 @@ built-in defaults → global config → project config → MOJOCODE_* environmen
 | `systemPromptAppend` | unset | extra instructions appended to the end of the system prompt |
 | `language` | `auto` | interface language `auto` / `en` / `zh-CN` |
 | `statusBar` | all | footer segments: `model` `cwd` `think` `context` `total` `todos`, configured in `/setting` |
-| `theme` | none | TUI theme name; `<name>.json` is looked up in the project / global `themes/` and in theme directories shipped by packages, see [Packages](/extensions/packages/#themes) |
+| `theme` | none | TUI theme name; `<name>.json` is looked up in the project / global `themes/` and in theme directories shipped by packages, persisted by `/theme`, see [Packages](/extensions/packages/#themes) |
 | `timeline` | `full` | timeline density `full` / `compact` / `result`, persisted by `/focus` |
 | `cleanupPeriodDays` | `30` | how many days sessions are kept; inactive ones past that are cleaned up at startup |
 

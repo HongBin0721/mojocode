@@ -49,7 +49,7 @@ Write unit tests for $ARGUMENTS, covering the edge cases.
 
 ### Themes
 
-Every `<name>.json` in a `themes/` directory (and in `<project>/.mojocode/themes/` or `~/.mojocode/themes/`) is a theme; the config key `theme: "<name>"` names one and it is applied once before the TUI starts (no runtime switching). `colors` only needs the keys you want to change, the rest keep the built-in palette; available keys: `accent` `user` `assistant` `dim` `tool` `error` `warn` `success` `added` `removed` `diffAddedBg` `diffAddedFg` `diffRemovedBg` `diffRemovedFg` `code`. Values are named colours or `#rrggbb`.
+Every `<name>.json` in a `themes/` directory (and in `<project>/.mojocode/themes/` or `~/.mojocode/themes/`) is a theme; the config key `theme: "<name>"` names the one applied at startup, and `/theme <name>` switches at runtime. The picker lists every theme found and previews the highlighted one as you move the cursor (esc restores the committed theme); the choice is written to whichever config layer already holds `theme` (project if it does, global otherwise). While a theme is active its file is watched: saving it repaints at once. `default` is a reserved name for the built-in palette - `/theme default` restores it and removes the config key. `colors` only needs the keys you want to change, the rest keep the built-in palette; available keys: `accent` `user` `assistant` `dim` `tool` `error` `warn` `success` `added` `removed` `diffAddedBg` `diffAddedFg` `diffRemovedBg` `diffRemovedFg` `code`. Values are named colours or `#rrggbb`.
 
 ```json
 { "name": "dusk", "colors": { "accent": "#7aa2f7", "user": "#bb9af7", "code": "#7dcfff" } }

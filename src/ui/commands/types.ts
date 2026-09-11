@@ -32,6 +32,11 @@ export interface CommandContext {
   timelineMode: () => TimelineMode;
   setThink: (v: ReasoningEffort) => void;
   setTimelineMode: (m: TimelineMode) => void;
+  /**
+   * `/theme` 提交后:记下生效主题的文件(内置配色为 undefined,用于热重载)
+   * 并整树重挂(扩展组件自拼的 SGR 行不会随 palette 自己变色)。
+   */
+  refreshTheme: (file: string | undefined) => void;
   setProviderLabel: (v: string) => void;
   setModel: (v: string) => void;
   setRunning: (v: boolean) => void;

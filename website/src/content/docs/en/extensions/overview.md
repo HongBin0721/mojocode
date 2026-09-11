@@ -169,6 +169,5 @@ Loading, hooks, the API surface and the rendering layer mirror Pi; the deliberat
 | bare `--my-flag` | `-X my-flag` (commander can only pass unknown options through wholesale, see `src/extensions/flags.ts`) |
 | pi-tui component classes (`Container`, `Text`, `SelectList`, …) | a component only needs `render(width)` + `handleInput`; `selectList` / `textInput` cover the common cases, `host.theme` / `ui.theme` gives colours |
 | writable `ctx.sessionManager`, the raw `SessionManager` object | a read-only view; write through `appendEntry` / `setSessionName` / `newSession` / `fork` / `switchSession` |
-| runtime `/theme` switching | the config key `theme` names a theme, applied once before the TUI starts (see [Packages](/extensions/packages/)) |
 
 Pi ecosystem extensions do **not** run unchanged: they import types from `@mariozechner/pi-coding-agent` and build UI from pi-tui classes. The shapes match, so switching the import and replacing pi-tui components with your own lines (or `selectList` / `textInput`) is all it takes.

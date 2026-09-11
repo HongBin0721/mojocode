@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { applyTheme, loadTheme, parseThemeColors, themeLocations } from '../src/ui/theme-loader.js';
+import {
+  applyTheme,
+  BUILTIN_THEME_NAME,
+  listThemes,
+  loadTheme,
+  parseThemeColors,
+  themeLocations,
+  watchThemeFile,
+} from '../src/ui/theme-loader.js';
 import { theme } from '../src/ui/theme.js';
 import { phaseColor } from '../src/ui/StatusLine.js';
 import { extensionTheme } from '../src/core/extension-types.js';
@@ -57,10 +65,57 @@ describe('主题文件', () => {
     expect(await loadTheme('nocolors', dirs)).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('applyTheme 就地换色,只改给了的键,返回改动数', () => {
+  it('applyTheme 就地换色:给了的键取主题值,没给的键回到内置配色,返回改动数', () => {
     expect(applyTheme({ accent: '#abcdef', dim: theme.dim })).toBe(1);
     expect(theme.accent).toBe('#abcdef');
     expect(theme.user).toBe(original.user);
+    // 换到一个不设 accent 的主题:上一个主题的 accent 不能漏过来(运行期
+    // /theme 反复切换就靠这一条),空对象则整张表回到内置配色。
+    expect(applyTheme({ tool: '#9ece6a' })).toBe(2);
+    expect(theme.accent).toBe(original.accent);
+    expect(theme.tool).toBe('#9ece6a');
+    expect(applyTheme({})).toBe(1);
+    expect(theme).toEqual(original);
+  });
+
+  it('listThemes:按目录优先级去重、不解析文件、不列保留名 default', async () => {
+    const extra = path.join(root, 'pkg-themes');
+    const [project, global] = themeLocations(root, [extra]);
+    for (const dir of [project!, global!, extra]) await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(project!, 'dusk.json'), '{ not json');
+    await fs.writeFile(path.join(global!, 'dusk.json'), JSON.stringify({ colors: {} }));
+    await fs.writeFile(path.join(global!, `${BUILTIN_THEME_NAME}.json`), JSON.stringify({ colors: {} }));
+    await fs.writeFile(path.join(global!, 'notes.txt'), '');
+    await fs.writeFile(path.join(extra, 'dawn.json'), JSON.stringify({ colors: {} }));
+
+    expect(await listThemes(themeLocations(root, [extra, path.join(root, 'missing')]))).toEqual([
+      { name: 'dusk', file: path.join(project!, 'dusk.json') },
+      { name: 'dawn', file: path.join(extra, 'dawn.json') },
+    ]);
+  });
+
+  it('watchThemeFile:文件改了回调,目录不存在静默放弃', async () => {
+    // 真 fs.watch + 真时钟:内核事件不受假定时器驱动,只能等真实回调。
+    // macOS 的 FSEvents 流是异步建起来的,紧跟 watch() 的第一笔写可能落在
+    // 流注册之前而没有事件——把写放进重试里,直到有回调为止。
+    const dir = path.join(root, 'themes');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'dusk.json');
+    await fs.writeFile(file, '{}');
+    let calls = 0;
+    const stop = watchThemeFile(file, () => {
+      calls += 1;
+    });
+    await vi.waitFor(
+      async () => {
+        await fs.writeFile(file, `{"colors":{"accent":"${calls}"}}`);
+        expect(calls).toBeGreaterThan(0);
+      },
+      { timeout: 3000, interval: 150 },
+    );
+    stop();
+
+    expect(() => watchThemeFile(path.join(root, 'missing', 'x.json'), () => {})()).not.toThrow();
   });
 
   it('sgrForeground:命名色查表,#rgb / #rrggbb 走真彩色,不认识的退回默认前景', () => {
