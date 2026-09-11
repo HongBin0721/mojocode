@@ -39,11 +39,12 @@ node scripts/gen-logo.mjs  # 重新生成像素字 logo 与 favicon(改过 src/u
 
 ## 链接规则(最容易踩的坑)
 
-站点部署在 GitHub Pages 的项目子路径下,`astro.config.mjs` 里 `site = https://hongbin0721.github.io`、`base = /mojocode`。Astro 只给侧栏与组件里的链接补 base,**Markdown 正文里的链接原样输出**,不处理就全站 404。解决方式是 `plugins/remark-base-links.mjs`:在 remark 阶段把正文里的根绝对链接(`link` 与 `definition` 节点)加上 `/mojocode` 前缀,文件路径含 `/content/docs/en/` 的再加 `/en`。由此推出三条写法:
+站点部署在 GitHub Pages 的项目子路径下,`astro.config.mjs` 里 `site = https://hongbin0721.github.io`、`base = /mojocode`。Astro 只给侧栏与组件里的链接补 base,**Markdown 正文里的链接原样输出**,不处理就全站 404。解决方式是 `plugins/remark-base-links.mjs`:在 remark 阶段把正文里的根绝对链接(`link` 与 `definition` 节点)加上 `/mojocode` 前缀,文件路径含 `/content/docs/en/` 的再加 `/en`。由此推出四条写法:
 
-1. **正文链接一律写不带 base、不带语言段的站内路径**:`[配置](/config/overview/)`,中英文页面同一份写法。带 `//`、协议、锚点、或已带 `/mojocode/` 前缀的链接插件不动。
+1. **正文链接一律写不带 base、不带语言段的站内路径**:`[配置](/config/overview/)`,中英文页面路径同一份写法(锚点见第 4 条)。带 `//`、协议、纯锚点(`#…`)、或已带 `/mojocode/` 前缀的链接插件不动。
 2. **frontmatter 与组件 props 里的链接不经 remark**(首页 `index.mdx` 传给 `<Hero>` 与 `<Feature href>` 的路径),要手写完整路径:中文 `/mojocode/guides/quickstart/`,英文 `/mojocode/en/guides/quickstart/`。
 3. 换自定义域名只改 `astro.config.mjs` 的 `site` / `base` 两行,正文与插件都不用动。
+4. **锚点按目标语言页面的标题写**:插件只补 base 与 `/en` 段,不翻译锚点——英文页里的 `/config/providers/#vision-models` 对应英文页的 `## Vision models`,照抄中文页的 `#视觉模型` 会静默落到页首。
 
 这个插件挂在 **legacy 的 `@astrojs/markdown-remark` 处理器**上运行——Astro 7 默认的 Markdown 处理器不跑 remark 插件——这就是 `@astrojs/markdown-remark` 出现在 devDependencies 里的唯一理由,不要当成无用依赖删掉。
 
