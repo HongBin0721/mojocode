@@ -182,6 +182,9 @@ export const en = {
   'notice.providerNoVision':
     'The deepseek SDK silently drops image parts — the model will not see them.',
   'notice.busyCommand': '/{name} is unavailable while a task is running (esc to interrupt first).',
+  'notice.userBashFailed': 'Command `{command}` failed to run: {message}',
+  'notice.themeMissing': 'Theme "{name}" not found; using the built-in colors.',
+  'notice.themeInvalid': 'Theme file is invalid: {detail}',
   'notice.cannedBusy': 'A review/cleanup command is still preparing — send messages in a moment.',
   'notice.compacted': 'Compacted {removed} messages into a {chars}-character summary.',
   'notice.compactFailed': 'Compaction failed: {message}',
@@ -226,6 +229,7 @@ export const en = {
   'uiPrompt.selectHint': '↑/↓ select · enter confirm · esc cancel',
   'uiPrompt.confirmHint': 'y / n · enter confirm · esc = no',
   'uiPrompt.inputHint': 'enter submit · esc cancel',
+  'uiPrompt.editorHint': 'enter submit · trailing `\\` + enter for newline · esc cancel',
   'notice.mcpNone': 'No MCP servers configured. Add them under "mcpServers" in .mojocode/config.json.',
   'notice.doctorRunning': 'Running checks …',
   'notice.mcpTools': '{n} tools',

@@ -8,7 +8,9 @@ import type { ExtensionAPI } from '../src/core/extension.js';
 import type { AgentEvent } from '../src/core/events.js';
 import { parseExtensionFlags } from '../src/extensions/flags.js';
 import { wrapCustomMessage } from '../src/agent/loop.js';
-import { flattenPiResult } from '../src/extensions/tool-adapter.js';
+import { adaptToolDefinition } from '../src/extensions/tool-adapter.js';
+import { flattenPiResult } from '../src/core/extension-types.js';
+import { PROVIDER_PRESETS } from '../src/config/providers.js';
 
 /**
  * Pi 对齐的那批 ExtensionAPI 成员,走**真 bootstrap**:一个磁盘扩展把自己
@@ -46,8 +48,22 @@ export default (api) => {
     execute: async (_id, params) => ({ content: [{ type: 'text', text: 'echo ' + params.x }] }),
   });
   api.registerTool('plain', () => undefined, { promptSnippet: 'never materializes' });
-  api.on('resources_discover', () => ({ skillPaths: ['extskills'] }));
+  api.on('resources_discover', () => ({
+    skillPaths: ['extskills'],
+    promptPaths: ['extprompts'],
+    themePaths: ['extthemes'],
+  }));
   api.on('session_before_fork', () => (globalThis.__mojoBlockFork ? { cancel: true } : undefined));
+  api.on('session_switch', ({ id }) => { globalThis.__mojoSwitched = id; });
+  api.on('session_fork', ({ id }) => { globalThis.__mojoForked = id; });
+  api.on('user_bash', ({ command }) => (command === 'echo hooked-me' ? { command: 'echo hooked' } : undefined));
+  api.registerTool({
+    name: 'with_details',
+    description: 'returns details',
+    parameters: { type: 'object', properties: {} },
+    execute: async () => ({ content: [{ type: 'text', text: 'shown to model' }], details: { secret: 42 } }),
+    renderResult: (output) => ['details=' + JSON.stringify(output.details)],
+  });
 };
 `;
 
@@ -58,6 +74,8 @@ beforeAll(async () => {
   process.env.HOME = home;
   // setModel 走 switchProvider,它按 process.env 重新解析 provider(与 /models 同一条路)。
   process.env.DEEPSEEK_API_KEY = 'test-key-not-used';
+  // 只 export 了 key、配置里一个字没写的厂商:getProviders 必须收它(见那条用例)。
+  process.env.MOONSHOT_API_KEY = 'test-key-not-used';
 
   // 配置 `extensions` 来源(相对路径按 root 解析)+ 一条不存在的路径进 notice。
   await fs.mkdir(path.join(root, 'ext'), { recursive: true });
@@ -73,6 +91,9 @@ beforeAll(async () => {
     path.join(root, 'extskills', 'extskill', 'SKILL.md'),
     '---\nname: extskill\ndescription: from an extension\n---\nDo it.\n',
   );
+  // resources_discover 贡献的提示词模板目录:一个没有 frontmatter 的 md 就是一条 /greet。
+  await fs.mkdir(path.join(root, 'extprompts'), { recursive: true });
+  await fs.writeFile(path.join(root, 'extprompts', 'greet.md'), 'Say hello to $1 warmly.\n');
 
   const loaded = await loadConfig({
     root,
@@ -95,6 +116,7 @@ afterAll(async () => {
   await session?.dispose?.();
   process.env.HOME = savedHome;
   delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.MOONSHOT_API_KEY;
   for (const dir of [home, root]) await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -183,11 +205,94 @@ describe('ui 提问', () => {
 });
 
 describe('会话控制、快捷键、编辑框、资源', () => {
-  it('mode / waitForIdle / resources_discover', async () => {
+  it('mode / waitForIdle / resources_discover(技能、提示词模板、主题目录三类都收)', async () => {
     expect(api.mode).toBe('tui');
     expect(api.ctx.mode).toBe('tui');
     await expect(api.waitForIdle()).resolves.toBeUndefined();
     expect(session.skills.map((s) => s.name)).toContain('extskill');
+    // 提示词模板与技能同一条命令菜单;description 取正文第一行。
+    const greet = session.skills.find((s) => s.name === 'greet');
+    expect(greet?.description).toBe('Say hello to $1 warmly.');
+    expect(session.themeDirs).toEqual([path.join(root, 'extthemes')]);
+  });
+
+  it('ui.editor:没人看立即 undefined;有人看进 uiRequests(带 prefill),answerUi 交回文本', async () => {
+    session.attachUi(undefined);
+    await expect(api.ui.editor('edit', 'draft')).resolves.toBeUndefined();
+    session.attachUi({ available: () => true });
+    const edited = api.ui.editor('edit', 'draft');
+    expect(session.uiRequests[0]).toMatchObject({ kind: 'editor', title: 'edit', prefill: 'draft' });
+    session.answerUi(session.uiRequests[0]!.id, 'draft+more');
+    await expect(edited).resolves.toBe('draft+more');
+  });
+
+  it('ui.theme / setWorkingMessage / setEditorComponent / pasteToEditor', () => {
+    expect(api.ui.theme.bold('x')).toBe('\x1b[1mx\x1b[22m');
+    expect(api.ctx.ui.theme).toBe(api.ui.theme);
+    let changed = 0;
+    const off = session.extensionsChanged(() => changed++);
+    api.ui.setWorkingMessage('brewing…');
+    expect(session.uiSurfaces.workingMessage).toBe('brewing…');
+    const factory = () => ({ render: () => ['ed'] });
+    api.ui.setEditorComponent(factory);
+    expect(session.uiSurfaces.editor).toBe(factory);
+    expect(changed).toBe(2);
+    api.ui.setWorkingMessage(undefined);
+    api.ui.setEditorComponent(undefined);
+    expect(session.uiSurfaces.workingMessage).toBeUndefined();
+    expect(session.uiSurfaces.editor).toBeUndefined();
+    off();
+    const pasted: string[] = [];
+    session.attachUi({ available: () => true, pasteToEditor: (text) => pasted.push(text) });
+    api.ui.pasteToEditor('snippet');
+    expect(pasted).toEqual(['snippet']);
+    session.attachUi(undefined);
+    api.ui.pasteToEditor('ignored');
+    expect(pasted).toEqual(['snippet']);
+  });
+
+  it('ctx.sessionManager 是当前会话的只读视图;ctx.modelRegistry 给配置与预设里已知的模型', async () => {
+    const sm = api.ctx.sessionManager;
+    expect(sm.getSessionId()).toBe(session.store.id);
+    await api.appendEntry('probe', { n: 1 });
+    expect(sm.getEntries('probe').map((e) => e.data)).toEqual([{ n: 1 }]);
+    expect(sm.getEntries().some((e) => e.type === 'probe')).toBe(true);
+    expect(sm.getHistory()).toBe(api.history());
+    expect(Array.isArray(sm.getDisplayHistory())).toBe(true);
+    const sessions = await sm.listSessions();
+    expect(sessions.some((s) => s.id === session.store.id)).toBe(true);
+
+    const mr = api.ctx.modelRegistry;
+    expect(mr.getCurrent()).toEqual({ provider: 'deepseek', model: 'deepseek-chat' });
+    expect(mr.getProviders()[0]).toBe('deepseek');
+    const models = mr.getModels('deepseek');
+    expect(models.every((m) => m.provider === 'deepseek')).toBe(true);
+    expect(models.some((m) => m.id === PROVIDER_PRESETS.deepseek.defaultModel)).toBe(true);
+    expect(mr.find('deepseek', 'deepseek-chat')?.contextWindow).toBe(128_000);
+    expect(mr.find('deepseek', 'no-such-model')).toBeUndefined();
+    expect(mr.getModels().length).toBeGreaterThan(models.length);
+    // 只靠预设 env 变量配 key 的厂商也要列出来(与 /models 的枚举同一份判定)
+    // ——否则扩展搭的模型切换器会悄悄漏掉用户正在用的那个厂商。
+    expect(mr.getProviders()).toContain('kimi');
+    // 没 key 没 baseURL 的不列。
+    expect(mr.getProviders()).not.toContain('zhipu');
+  });
+
+  it('runUserBash:过 user_bash 钩子(改写 / 接管)后在工作区跑,输出以 user_bash 消息并入历史不开轮', async () => {
+    await session.runUserBash('echo plain');
+    const last = () => session.agent.history.at(-1) as { role: string; content: string };
+    expect(last().role).toBe('user');
+    expect(last().content).toContain('[extension message: user_bash]');
+    expect(last().content).toContain('$ echo plain\nplain\n(exit code 0)');
+    // 钩子改写命令。
+    await session.runUserBash('echo hooked-me');
+    expect(last().content).toContain('$ echo hooked\nhooked');
+    // 钩子接管执行。
+    const off = api.on('user_bash', () => ({ run: async () => ({ exitCode: 7, output: 'took over' }) }));
+    await session.runUserBash('whatever');
+    expect(last().content).toContain('$ whatever\ntook over\n(exit code 7)');
+    off();
+    expect(session.agent.isRunning).toBe(false);
   });
 
   it('api.ctx.hasUI 是活的 getter(不是建 API 那一刻钉死的 false)', () => {
@@ -250,9 +355,13 @@ describe('会话控制、快捷键、编辑框、资源', () => {
     await expect(api.fork()).rejects.toThrow(/cancelled/);
     (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = false;
 
+    // session_fork / session_switch 的事后通知带新会话 id。
+    expect((globalThis as { __mojoForked?: string }).__mojoForked).toBe(forked.id);
+
     await api.switchSession(before);
     expect(session.store.id).toBe(before);
     expect(events.at(-1)).toEqual({ type: 'session-changed', reason: 'resume', id: before });
+    expect((globalThis as { __mojoSwitched?: string }).__mojoSwitched).toBe(before);
     await expect(api.switchSession('no-such-session-id')).rejects.toThrow();
     off();
   });
@@ -349,6 +458,34 @@ describe('工具管理', () => {
     expect(systemPrompt).toContain('- pi_shaped: echoes x back');
     expect(systemPrompt).toContain('- Use pi_shaped when asked to echo.');
     expect(systemPrompt).not.toContain('never materializes');
+  });
+
+  it('Pi 结果的 details 留给画法:工具输出是整个对象,模型经 toModelOutput 只看 content 文本', async () => {
+    const definition = {
+      name: 'd',
+      description: 'd',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => ({ content: [{ type: 'text', text: 'visible' }], details: { hidden: true } }),
+    };
+    const tool = adaptToolDefinition(definition, { bus: session.bus, ctx: () => api.ctx })({ subagent: false })!;
+    const output = await tool.execute!({}, { toolCallId: 'c1', messages: [], context: undefined } as never);
+    expect(output).toEqual({ content: [{ type: 'text', text: 'visible' }], details: { hidden: true } });
+    expect(tool.toModelOutput!({ toolCallId: 'c1', input: {}, output })).toEqual({ type: 'text', value: 'visible' });
+    // 非 Pi 形状要逐字复刻 SDK 的缺省:undefined → null。给了 toModelOutput
+    // 之后 SDK 不再走它自己那条路,漏掉这一步 tool 消息会带着 content:
+    // undefined 发出去,请求直接 400(Pi 的 execute 允许什么都不返回)。
+    const asJson = (out: unknown) => tool.toModelOutput!({ toolCallId: 'c1', input: {}, output: out });
+    expect(asJson(undefined)).toEqual({ type: 'json', value: null });
+    expect(asJson(null)).toEqual({ type: 'json', value: null });
+    expect(asJson({ a: 1 })).toEqual({ type: 'json', value: { a: 1 } });
+    expect(asJson('plain')).toEqual({ type: 'text', value: 'plain' });
+    // 经 registerTool 登记的画法拿到的也是整个对象。
+    const rendered = session.toolRenderers.get('with_details')!.renderResult!(
+      { content: [], details: { secret: 42 } },
+      { isError: false, expanded: false, input: {} },
+      api.ui.theme,
+    );
+    expect(rendered).toEqual(['details={"secret":42}']);
   });
 
   it('flattenPiResult:content 数组拼成文本,其他形状原样', () => {

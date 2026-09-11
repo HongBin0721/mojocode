@@ -39,6 +39,11 @@ interface Props {
   /** 终端列数,整行按它铺满:标题之后的线一直画到行尾。 */
   columns: number;
   /**
+   * 替换阶段名的文字(扩展的 `ui.setWorkingMessage`):只在思考 / 回复两个
+   * 阶段生效——跑工具、压缩时阶段名本身就是信息,不让扩展盖掉。
+   */
+  label?: string;
+  /**
    * 整行的颜色,缺省用阶段色。输入框传自己的边框色进来——那一句
    * `borderColor()` 同时喂给顶线与底边,「这条线就是框的边」因此是一个
    * 表达式用两处,而不是两条各自演化的规则。
@@ -52,14 +57,6 @@ const FRAME_MS = 100;
 /** 进度条格数,与 Footer 的上下文表同宽,视觉上是同一族。 */
 const BAR_CELLS = 10;
 
-/** 不同阶段用不同颜色,一眼区分在想、在答还是在跑工具。 */
-const PHASE_COLORS: Record<WorkPhase, string> = {
-  thinking: 'magenta',
-  responding: theme.accent,
-  tool: theme.tool,
-  compacting: theme.accent,
-  listingModels: theme.accent,
-};
 
 const PHASE_LABELS: Record<Exclude<WorkPhase, 'tool'>, MessageKey> = {
   thinking: 'status.thinking',
@@ -84,9 +81,25 @@ const SPINNER_WIDTH = 2;
 /** 标题右侧至少保留 ` ─`:内容顶到行尾会像没画完。 */
 const MIN_TRAIL = 2;
 
-/** 阶段色。Input 用它给整个框上色,不必自己再维护一张阶段表。 */
+/**
+ * 阶段色,一眼区分在想、在答还是在跑工具。Input 用它给整个框上色,不必
+ * 自己再维护一张阶段表。
+ *
+ * **必须现读 `theme`,不能做成模块级的表**:主题文件由 theme-loader 就地
+ * 换色,而本模块在 runTui 的函数体跑起来之前就被 import 了——一张
+ * `{ responding: theme.accent }` 的常量表会把内置的 cyan 钉死,于是换了
+ * 主题之后满屏都变色、只有这条状态线还是旧的。magenta 不在可换色键里
+ * (THEME_COLOR_KEYS),照旧写字面量。
+ */
 export function phaseColor(phase: WorkPhase): string {
-  return PHASE_COLORS[phase];
+  switch (phase) {
+    case 'thinking':
+      return 'magenta';
+    case 'tool':
+      return theme.tool;
+    default:
+      return theme.accent;
+  }
 }
 
 /**
@@ -129,11 +142,13 @@ export function StatusLine(props: Props): JSX.Element {
   // 个 delta 都新建一个 WorkState 对象,parts 仍会随之重算,量下来一秒几十次、
   // 几十微秒,可以忽略,别为它再加一层缓存。
   const seconds = createMemo(() => Math.max(0, Math.floor((now() - props.work.since) / 1000)));
-  const color = () => props.color ?? PHASE_COLORS[props.work.phase];
+  const color = () => props.color ?? phaseColor(props.work.phase);
   const label = () =>
     props.work.phase === 'tool'
       ? t('status.runningTool', { tool: toolDisplayName(props.work.detail ?? '') })
-      : t(PHASE_LABELS[props.work.phase as Exclude<WorkPhase, 'tool'>]);
+      : props.label && (props.work.phase === 'thinking' || props.work.phase === 'responding')
+        ? props.label
+        : t(PHASE_LABELS[props.work.phase as Exclude<WorkPhase, 'tool'>]);
 
   /**
    * 整行排版一次算完。拆成一串互相调用的取值函数时,`trail` 要 `tail`、

@@ -29,6 +29,13 @@ export type {
   ContextHookResult,
   MessageEndHookInput,
   MessageEndHookResult,
+  MessageStartHookInput,
+  MessageUpdateHookInput,
+  UserBashHookInput,
+  UserBashHookResult,
+  UserBashRunner,
+  SessionSwitchHookInput,
+  SessionForkHookInput,
   BeforeProviderRequestHookInput,
   BeforeProviderRequestHookResult,
   AfterProviderResponseHookInput,
@@ -55,6 +62,7 @@ export type {
   UiSurfaces,
   UiHost,
 } from './core/extension-types.js';
+export { extensionTheme, flattenPiResult, isPiToolResult } from './core/extension-types.js';
 export type { AgentEvent, UsageSnapshot, ContextUsage } from './core/events.js';
 export type { Config, ReasoningEffort } from './config/schema.js';
 export type { SessionCustomRecord } from './session/store.js';

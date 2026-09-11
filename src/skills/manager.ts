@@ -27,6 +27,8 @@ export class SkillManager {
   private readonly root: string;
   /** 扩展包带来的技能目录(优先级最低),见 discovery.ts;扩展经 resources_discover 还能再加。 */
   private packageDirs: readonly string[];
+  /** 包与扩展贡献的提示词模板目录(项目 / 全局的两个约定目录不在这里,discovery 自己知道)。 */
+  private promptDirs: readonly string[];
   private readonly ttlMs: number;
   private cached: Promise<SkillIndex> | undefined;
   private fetchedAt = 0;
@@ -35,9 +37,15 @@ export class SkillManager {
   private notifyKey = notifyKeyOf(EMPTY_INDEX);
   private readonly listeners = new Set<() => void>();
 
-  constructor(options: { root: string; packageDirs?: readonly string[]; ttlMs?: number }) {
+  constructor(options: {
+    root: string;
+    packageDirs?: readonly string[];
+    promptDirs?: readonly string[];
+    ttlMs?: number;
+  }) {
     this.root = options.root;
     this.packageDirs = options.packageDirs ?? [];
+    this.promptDirs = options.promptDirs ?? [];
     this.ttlMs = options.ttlMs ?? 15_000;
   }
 
@@ -48,12 +56,19 @@ export class SkillManager {
     this.cached = undefined;
   }
 
+  /** 追加提示词模板目录(同上)。 */
+  addPromptDirs(dirs: readonly string[]): void {
+    if (dirs.length === 0) return;
+    this.promptDirs = [...this.promptDirs, ...dirs];
+    this.cached = undefined;
+  }
+
   /** TTL 内复用同一个 promise;扫描失败不缓存,下次重试(同 createFileLister)。 */
   list(): Promise<SkillIndex> {
     const now = Date.now();
     if (!this.cached || now - this.fetchedAt > this.ttlMs) {
       this.fetchedAt = now;
-      this.cached = discoverSkills(this.root, this.packageDirs).then(
+      this.cached = discoverSkills(this.root, this.packageDirs, this.promptDirs).then(
         (index) => {
           this.applyIndex(index);
           return index;

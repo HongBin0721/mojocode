@@ -110,4 +110,39 @@ describe('扩展提问提示框', () => {
     await ui.tick();
     expect(answerUi).toHaveBeenCalledWith('ui-5', undefined);
   });
+
+  it('editor:预填可见,行尾 `\\` + 回车换行,回车提交多行文本;esc 给 undefined', async () => {
+    const { ui, answerUi, setRequests } = await setup([
+      { id: 'ui-6', kind: 'editor', title: '改一改', prefill: 'line1' },
+    ]);
+    expect(ui.frame()).toContain('line1');
+    await ui.type('\\');
+    await ui.press('return');
+    await ui.type('line2');
+    await ui.tick();
+    expect(ui.frame()).toContain('line2');
+    expect(answerUi).not.toHaveBeenCalled();
+    await ui.press('return');
+    await ui.tick();
+    expect(answerUi).toHaveBeenCalledWith('ui-6', 'line1\nline2');
+    await setRequests([{ id: 'ui-7', kind: 'editor', title: '再来' }]);
+    await ui.press('escape');
+    await ui.tick();
+    expect(answerUi).toHaveBeenCalledWith('ui-7', undefined);
+  });
+
+  it('editor:粘贴进来的多行原样留着(单行的 input 才拍平)', async () => {
+    const { ui, answerUi, setRequests } = await setup([{ id: 'ui-8', kind: 'editor', title: '提交信息' }]);
+    await ui.paste('line1\nline2\r\nline3');
+    await ui.press('return');
+    await ui.tick();
+    expect(answerUi).toHaveBeenCalledWith('ui-8', 'line1\nline2\nline3');
+
+    // 对照:单行的 input 照旧把换行拍平成一行。
+    await setRequests([{ id: 'ui-9', kind: 'input', title: '一行' }]);
+    await ui.paste('a\nb');
+    await ui.press('return');
+    await ui.tick();
+    expect(answerUi).toHaveBeenCalledWith('ui-9', 'ab');
+  });
 });

@@ -12,34 +12,12 @@ import { t } from '../i18n/index.js';
  */
 export const WIDTH_SAFETY = 4;
 
-export const theme = {
-  accent: 'cyan',
-  /**
-   * 用户自己发出的消息。刻意不用 success 的绿色——工具行的 ● 已经占了
-   * 绿色,同色会让"谁说的"变模糊;青色与输入框的提示符同色,打进去的和
-   * 回滚区里记下的是同一抹颜色。
-   */
-  user: 'cyan',
-  assistant: 'white',
-  dim: 'gray',
-  tool: 'blue',
-  error: 'red',
-  warn: 'yellow',
-  success: 'green',
-  added: 'green',
-  removed: 'red',
-  /**
-   * diff 行的背景高亮(Claude Code 风格)。前景与背景都显式指定:
-   * 背景取深色、前景取浅色,不依赖终端的默认前景色,深浅色主题下
-   * 对比度都够;不支持真彩色的终端由 chalk 自动降到 256 色近似。
-   */
-  diffAddedBg: '#1e4023',
-  diffAddedFg: '#b6e3bc',
-  diffRemovedBg: '#4a2226',
-  diffRemovedFg: '#f2b8bd',
-  /** markdown 中的行内代码与代码块。 */
-  code: 'cyan',
-} as const;
+/**
+ * 配色表住在零依赖的 `core/palette.ts`——扩展的 `ExtensionTheme` 要在 headless
+ * 下也拿得到同一份,而那边 import 不到这个模块。这里原样转口,TUI 侧既有的
+ * `import { theme } from './theme.js'` 一个都不用改。
+ */
+export { palette as theme, THEME_COLOR_KEYS, sgrForeground, type ThemeColorKey } from '../core/palette.js';
 
 export const glyphs = {
   bullet: '⏺',

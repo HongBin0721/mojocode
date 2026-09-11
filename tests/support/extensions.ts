@@ -26,5 +26,6 @@ export function stubExtensions() {
     toolRenderers: new Map(),
     messageRenderers: new Map(),
     reloadExtensions: async () => ({ loaded: [], failed: [] }),
+    runUserBash: async () => {},
   };
 }

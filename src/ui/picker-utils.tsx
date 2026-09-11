@@ -8,13 +8,25 @@ import { t } from '../i18n/index.js';
 export { centeredWindowStart } from '../core/ui-kit.js';
 
 /**
- * 一行文本输入的按键语义:退格删一个,可打印字符追加(粘贴去掉换行)。
- * 抽出来是因为它有三个用户——手动输入态、扩展提问的 input 框、`ui-kit`
- * 的 textInput,而"IME、粘贴怎么处理"这件事只允许有一处答案。
+ * 文本输入的按键语义:退格删一个,可打印字符追加。抽出来是因为它有四个
+ * 用户——手动输入态、扩展提问的 input 框、`ui-kit` 的 textInput、扩展提问
+ * 的 editor 框,而"IME、粘贴怎么处理"这件事只允许有一处答案。
+ *
+ * `multiline` 只影响粘贴进来的换行:缺省(单行)剥掉,多行留着并把 CRLF
+ * 归一为 LF。分成两个函数写过一版,那正是这句注释在防的事——下一个
+ * readline 语义(删词、bracketed paste)会要求作者在两处各写一笔。回车本身
+ * 由调用方先拦掉(提交 / 行尾 `\` 续行),到这里的换行只可能来自粘贴。
  */
-export function applyTextKey(buffer: string, input: string, key: Key): string {
+export function applyTextKey(
+  buffer: string,
+  input: string,
+  key: Key,
+  options: { multiline?: boolean } = {},
+): string {
   if (key.backspace || key.delete) return buffer.slice(0, -1);
-  if (!key.ctrl && !key.meta && input) return buffer + input.replace(/[\r\n]/g, '');
+  if (!key.ctrl && !key.meta && input) {
+    return buffer + (options.multiline ? input.replace(/\r\n?/g, '\n') : input.replace(/[\r\n]/g, ''));
+  }
   return buffer;
 }
 

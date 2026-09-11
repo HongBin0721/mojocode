@@ -131,6 +131,10 @@ export interface SessionHandle {
   readonly messageRenderers: ReadonlyMap<string, MessageRenderer>;
   /** `/reload`:重载磁盘扩展。 */
   reloadExtensions(): Promise<{ loaded: string[]; failed: string[] }>;
+  /** 输入框里的 `!command`:过 `user_bash` 钩子、在工作区跑、输出并入历史不开轮。 */
+  runUserBash(command: string): Promise<void>;
+  /** 包与扩展贡献的主题目录;TUI 起来前按配置 `theme` 查。可选:UI 测试的假 session 不必造。 */
+  readonly themeDirs?: readonly string[];
   /**
    * `/simplify` 跑一轮代码清理并直接应用修复:与 /review 共用 git 收集器与
    * 失败 reason(UI 据此映射本地化提示)。

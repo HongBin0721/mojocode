@@ -23,12 +23,13 @@ import { dispatch } from './commands/index.js';
 import type { CommandContext } from './commands/types.js';
 import type { TimelineItem } from './types.js';
 import type { SessionHandle } from '../app/session-handle.js';
+import type { EditorComponentFactory } from '../core/extension-types.js';
 import { SessionStore } from '../session/store.js';
 import { APP_NAME } from '../config/paths.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
 import { UiPrompt } from './UiPrompt.js';
-import { CustomHost, SurfaceView } from './ExtensionSurface.js';
+import { CustomHost, EditorHost, SurfaceView, type EditorRef } from './ExtensionSurface.js';
 import { shortcutOf } from './extension-theme.js';
 import { setMessageRenderers, setToolRenderers } from './tool-renderers.js';
 import { SettingsPanel } from './SettingsPanel.js';
@@ -210,11 +211,13 @@ export function App(props: Props): JSX.Element {
   // 草稿是**拉取式**的:Input 挂载时把自己的取值函数放进来。推送式(每次
   // 按键回调一次)要为一个几乎没人读的镜像在最热的输入路径上多跑一个
   // 响应式节点。
-  const editor: { read?: () => string } = {};
+  const editor: EditorRef = {};
   session.attachUi({
     available: () => true,
     getEditorText: () => editor.read?.() ?? '',
-    setEditorText: (text) => setPrefill({ text }),
+    // 缺省输入框走 prefill(它自己在下一帧消费);扩展编辑器挂着时直接写它。
+    setEditorText: (text) => (editor.write ? editor.write(text) : setPrefill({ text })),
+    pasteToEditor: (text) => editor.insert?.(text),
   });
   onCleanup(() => session.attachUi(undefined));
   const uiCustom = createMemo((): UiCustomRequest | undefined => {
@@ -492,6 +495,14 @@ export function App(props: Props): JSX.Element {
       void runCommand(text);
       return;
     }
+    // `!command`(Pi 同款):在工作区跑一条 shell 命令,输出并入历史不开轮;
+    // 时间线由 custom-message 事件画。`!` 后面空着不算命令。
+    if (text.startsWith('!') && text.slice(1).trim()) {
+      void session.runUserBash(text.slice(1)).catch((err: Error) => {
+        push({ kind: 'notice', level: 'warn', message: err.message });
+      });
+      return;
+    }
     // 罐装命令的阶段一窗口(/simplify 四个子代理并行,主 agent 空闲,可达数
     // 分钟):普通消息没有在途的轮可注入,放过去会经 goal.run 另起一轮,
     // 阶段二的应用轮提示词随后撞上防重入兜底、整份灌进用户那轮;且这条
@@ -675,6 +686,50 @@ export function App(props: Props): JSX.Element {
    * 那个信号就成了外层 Switch 的依赖,一变就整块拆了重建——打字打到一半
    * 草稿没了,而且编译期毫无提示。
    */
+  /**
+   * 工作状态线。**一处定义两处用**:输入框自己画的那条是框的顶边(归
+   * Input),而"输入框被顶掉了"的两种情形——扩展编辑器、各类覆盖层——都要
+   * 把它单独画在上方,否则一开框 spinner 与已用时就没了。曾经是两份逐字
+   * 相同的 JSX,`label`(扩展的 setWorkingMessage)加进来时要在两处各写一笔。
+   */
+  const WorkStatus = (p: { when?: boolean }) => (
+    // 不加 keyed:work 每次阶段变化都是新对象,keyed 会整块重建,
+    // spinner 的定时器跟着重启、已用时清零。
+    <Show when={(p.when ?? true) ? work() : undefined}>
+      {(current: () => WorkState) => (
+        <StatusLine
+          work={current()}
+          todoHint={todoHint()}
+          tokens={turnTokens()}
+          columns={size.columns}
+          label={uiSurfaces().workingMessage}
+        />
+      )}
+    </Show>
+  );
+
+  /** 缺省输入框。单独成组件只为让下面那句 Show 的 fallback 是一行。 */
+  const DefaultInput = () => (
+    <Input
+      onSubmit={handleSubmit}
+      disabled={false}
+      work={work()}
+      todoHint={todoHint()}
+      turnTokens={turnTokens()}
+      placeholder={running() || work() ? t('input.steer') : t('input.placeholder')}
+      busy={running() || Boolean(work())}
+      commands={commands()}
+      onEscape={handleEscape}
+      prefill={prefill()}
+      onPrefillConsumed={clearPrefill}
+      editorRef={editor}
+      fileIndex={fileLister}
+      readClipboardImage={readClipboardImage}
+      onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
+      workingMessage={uiSurfaces().workingMessage}
+    />
+  );
+
   const InputArea = () => (
     // 不设 marginTop:与时间线的分隔由外层底部固定区统一给出(一行)。这里
     // 再叠一层的话,状态行/待办面板都不在的常态会空出两行——正是时间线与
@@ -685,23 +740,27 @@ export function App(props: Props): JSX.Element {
           (它们走的是那串互斥分支的其他支)。 */}
       <For each={uiSurfaces().widgets}>{(widget) => <SurfaceView surface={widget.surface} />}</For>
       <ExtensionStatusLine entries={extensionStatus} columns={size.columns} />
-      <Input
-        onSubmit={handleSubmit}
-        disabled={false}
-        work={work()}
-        todoHint={todoHint()}
-        turnTokens={turnTokens()}
-        placeholder={running() || work() ? t('input.steer') : t('input.placeholder')}
-        busy={running() || Boolean(work())}
-        commands={commands()}
-        onEscape={handleEscape}
-        prefill={prefill()}
-        onPrefillConsumed={clearPrefill}
-        editorRef={editor}
-        fileIndex={fileLister}
-        readClipboardImage={readClipboardImage}
-        onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
-      />
+      {/* 扩展的 setEditorComponent 顶替缺省输入框(Pi 同款):它换掉的只是输入框,
+          widget、状态行、底栏照旧——那是"编辑器"与"覆盖层"的区别,所以它留在
+          这里而不是下面那串互斥分支里。工作状态线跟着挪到它上方。 */}
+      <Show when={uiSurfaces().editor} keyed fallback={<DefaultInput />}>
+        {(factory: EditorComponentFactory) => (
+          <>
+            <WorkStatus />
+            <EditorHost
+              factory={factory}
+              onSubmit={handleSubmit}
+              // 跑着的时候 esc 归中断,不转发给组件(见 EditorHost 的注释)。
+              onEscape={() => {
+                if (!session.agent.isRunning && !submitGate.pending) return false;
+                handleEscape();
+                return true;
+              }}
+              editorRef={editor}
+            />
+          </>
+        )}
+      </Show>
       {/* 扩展的 setFooter 整个替换底栏(Pi 同款:换了就由扩展负责画全)。 */}
       <Show
         when={uiSurfaces().footer}
@@ -780,21 +839,8 @@ export function App(props: Props): JSX.Element {
         <Show when={todoPanelVisible()}>
           <TodoPanel todos={todos()} columns={size.columns} />
         </Show>
-        {/* 工作状态线常态是输入框的顶边(Input 自己画,见 StatusLine)。覆盖层
-            顶掉输入框时,状态线留在覆盖层上方——不然一开确认框 spinner 与
-            已用时就没了;空闲时覆盖层不需要它(那条线是输入框的边,不是分隔)。 */}
-        <Show when={overlayOpen() ? work() : undefined}>
-          {/* 不加 keyed:work 每次阶段变化都是新对象,keyed 会整块重建,
-              spinner 的定时器跟着重启、已用时清零。 */}
-          {(current: () => WorkState) => (
-            <StatusLine
-              work={current()}
-              todoHint={todoHint()}
-              tokens={turnTokens()}
-              columns={size.columns}
-            />
-          )}
-        </Show>
+        {/* 覆盖层顶掉输入框时,状态线留在覆盖层上方(见 WorkStatus)。 */}
+        <WorkStatus when={overlayOpen()} />
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
             扩展组件 > 扩展提问 > 回退选择器 > 设置面板 > 模型/厂商选择器 > 常态输入框,按这个优先级

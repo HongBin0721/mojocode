@@ -197,6 +197,25 @@ export function isProviderConfigured(
     : override.baseURL !== undefined;
 }
 
+/**
+ * 厂商能不能被切过去 / 被列出来:显式配置过(上面那条),**或者**内置厂商
+ * 的预设 env 变量里扫到了 key。`isProviderConfigured` 回答的是"用户写没写
+ * 配置",这一条回答的是"能不能用"——只 `export DEEPSEEK_API_KEY` 的用户
+ * 一行配置都没有,但 deepseek 对他是可用的。
+ *
+ * 两个消费方必须共用这一份:`/models` 的枚举(registry.ts)与扩展的
+ * `ctx.modelRegistry.getProviders()`。各写各的会让扩展搭的模型切换器
+ * 悄悄漏掉用户正在用的那个厂商。
+ */
+export function isProviderEligible(
+  id: string,
+  override: ProviderConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (override && isProviderConfigured(id, override, env)) return true;
+  return isBuiltinProvider(id) && apiKeyFromEnv(PROVIDER_PRESETS[id].apiKeyEnv, env) !== undefined;
+}
+
 export function resolveProvider(
   config: Config,
   env: NodeJS.ProcessEnv = process.env,

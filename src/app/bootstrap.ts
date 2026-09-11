@@ -25,12 +25,13 @@ import {
   type UiAnswer,
   type UiRequest,
 } from '../core/extension.js';
-import type {
-  ComponentHost,
-  ExtensionComponent,
-  UiCustomRequest,
-  UiHost,
-  UiSurfaces,
+import {
+  extensionTheme,
+  type ComponentHost,
+  type ExtensionComponent,
+  type UiCustomRequest,
+  type UiHost,
+  type UiSurfaces,
 } from '../core/extension-types.js';
 import { normalizeShortcut, RESERVED_SHORTCUTS } from '../core/extension-types.js';
 import type { ExtensionShortcutOptions } from '../core/extension.js';
@@ -47,12 +48,19 @@ import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus } from '../core/events.js';
 import { errorMessage } from '../core/errors.js';
 import { HookRegistry } from '../core/hooks.js';
-import { createModel, listProviderModels, type ProviderModels } from '../model/registry.js';
+import {
+  createModel,
+  eligibleProviderIds,
+  knownProviderModels,
+  listProviderModels,
+  type ProviderModels,
+} from '../model/registry.js';
 import { capabilitiesFor, createCatalogSource, type ModelCapabilities } from '../model/catalog.js';
 import { effectiveEfforts } from '../model/reasoning.js';
 import type { McpStatus } from '../mcp/client.js';
 import type { LspRuntimeStatus } from '../lsp/manager.js';
 import { createBuiltinTools } from '../tools/index.js';
+import { truncate } from '../tools/context.js';
 import {
   createTaskTool,
   runTaskSubagent,
@@ -195,6 +203,14 @@ export interface Session {
   /** `/reload`:卸载全部磁盘扩展、换一代模块缓存、重新装载。一方扩展不动。 */
   reloadExtensions: () => Promise<{ loaded: string[]; failed: string[] }>;
   /**
+   * 用户在输入框敲 `!<command>`(Pi 的 user bash):先过 `user_bash` 钩子
+   * (改写 / 接管),再在工作区跑一条 shell 命令,输出以 `user_bash` 类型的
+   * 自定义消息并入历史(运行中作为引导注入),**不开轮**——下一轮模型自然看到。
+   */
+  runUserBash: (command: string) => Promise<void>;
+  /** 主题目录(包与扩展贡献的,项目 / 全局两个约定目录之外),TUI 起来前按配置 `theme` 查。 */
+  readonly themeDirs: readonly string[];
+  /**
    * 以用户身份跑一轮代码清理(`/simplify`,对齐 Claude Code):解析目标 →
    * 复用 review.ts 的收集器 → 组稿清理提示词交给 agent.run,模型在这一轮里
    * 直接应用修复(编辑工作区、保持未提交)。失败同样以 reason 代码返回。
@@ -226,6 +242,10 @@ export interface BootstrapOptions {
   /** `tui`(默认)或 `print`(`-p`),进 ctx.mode。 */
   mode?: 'tui' | 'print';
 }
+
+/** `!command` 的兜底超时。输出封顶与 bash 工具同值,截断由 tools/context 的 truncate 做。 */
+const USER_BASH_TIMEOUT_MS = 120_000;
+const USER_BASH_OUTPUT_LIMIT = 20_000;
 
 /** explore 子 agent 的只读白名单(内置工具);扩展工具由各自的工厂决定。 */
 const EXPLORE_TOOLS = new Set(['read', 'glob', 'grep', 'view_image', 'skill']);
@@ -318,15 +338,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    * 自定义画法。换引用两头都对:内容没变身份就没变。
    */
   let uiSurfaces: UiSurfaces = { widgets: [] };
-  const setSurface = (slot: 'header' | 'footer', surface: ExtensionSurface | undefined): void => {
-    if (surface === undefined) {
+  /** 单值槽位(header / footer / title / workingMessage / editor)统一的设与清。 */
+  const setSurface = <K extends Exclude<keyof UiSurfaces, 'widgets'>>(
+    slot: K,
+    value: UiSurfaces[K] | undefined,
+  ): void => {
+    if (value === undefined) {
       if (uiSurfaces[slot] === undefined) return;
       const next = { ...uiSurfaces };
       delete next[slot];
       uiSurfaces = next;
     } else {
-      if (uiSurfaces[slot] === surface) return;
-      uiSurfaces = { ...uiSurfaces, [slot]: surface };
+      if (uiSurfaces[slot] === value) return;
+      uiSurfaces = { ...uiSurfaces, [slot]: value };
     }
     extensionsChanged();
   };
@@ -364,17 +388,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     }
     extensionsChanged();
   };
-  const setTitleImpl = (title: string | undefined): void => {
-    if (uiSurfaces.title === title) return;
-    if (title === undefined) {
-      const next = { ...uiSurfaces };
-      delete next.title;
-      uiSurfaces = next;
-    } else {
-      uiSurfaces = { ...uiSurfaces, title };
-    }
-    extensionsChanged();
-  };
 
   /**
    * 空闲 = 没有链条在跑、也没有压缩在跑。`isIdle()` 与 `waitForIdle()` 必须
@@ -401,6 +414,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     owner: string,
     undoOnce: (key: string, undo: () => void) => void,
   ): ExtensionContext => {
+    /**
+     * 一个单值槽位的 setter:记一笔"卸载时清掉"再写进去。撤销键与槽位键
+     * 永远同名,所以五个槽位只差这一个字符串——展开成五份四行的手写体时,
+     * 槽名要在每份里出现三次,加第六个槽位就得记住这三处。
+     */
+    const ownedSlot =
+      <K extends Exclude<keyof UiSurfaces, 'widgets'>>(slot: K) =>
+      (value: UiSurfaces[K] | undefined): void => {
+        undoOnce(slot, () => setSurface(slot, undefined));
+        setSurface(slot, value);
+      };
     const ui: ExtensionUI = {
       custom: <T,>(
         factory: (host: ComponentHost, done: (value: T) => void) => ExtensionComponent,
@@ -420,20 +444,22 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         undoOnce(`widget:${key}`, () => setWidgetImpl(key, undefined));
         setWidgetImpl(key, surface);
       },
-      setHeader: (surface) => {
-        undoOnce('header', () => setSurface('header', undefined));
-        setSurface('header', surface);
-      },
-      setFooter: (surface) => {
-        undoOnce('footer', () => setSurface('footer', undefined));
-        setSurface('footer', surface);
-      },
-      setTitle: (title) => {
-        undoOnce('title', () => setTitleImpl(undefined));
-        setTitleImpl(title);
-      },
+      setHeader: ownedSlot('header'),
+      setFooter: ownedSlot('footer'),
+      setTitle: ownedSlot('title'),
+      setWorkingMessage: ownedSlot('workingMessage'),
+      setEditorComponent: ownedSlot('editor'),
+      theme: extensionTheme,
       getEditorText: () => uiHost?.getEditorText?.() ?? '',
       setEditorText: (text) => uiHost?.setEditorText?.(text),
+      pasteToEditor: (text) => uiHost?.pasteToEditor?.(text),
+      editor: async (title, prefill) => {
+        const answer = await askUi(
+          { kind: 'editor', title, ...(prefill !== undefined ? { prefill } : {}) },
+          owner,
+        );
+        return typeof answer === 'string' ? answer : undefined;
+      },
       select: async (title, items) => {
         const answer = await askUi({ kind: 'select', title, items }, owner);
         // 答案必须是列表里的一项:提示框只会发这些,但 answerUi 谁都能调。
@@ -468,6 +494,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       },
       model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
       config,
+      // 两个只读视图:store 与 provider 都是可变绑定(/new、/models 换掉),闭包现读。
+      sessionManager: {
+        getSessionId: () => store.id,
+        getSessionName: () => store.meta.title,
+        getEntries: (type) => store.custom(type),
+        getHistory: () => agent.history,
+        getDisplayHistory: () => store.displayMessages,
+        listSessions: () => SessionStore.list(root),
+      },
+      modelRegistry: {
+        getCurrent: () => ({ provider: provider.id, model: provider.model }),
+        // 枚举与离线模型表都在 model/registry.ts,与 `/models` 共用一份:
+        // 谓词共用、枚举各写一遍时,只靠 env 变量配 key 的厂商会在一处
+        // 列得出、另一处列不出。这里只做"当前 provider 现读"的绑定。
+        getProviders: () => eligibleProviderIds({ ...config, provider: provider.id }, process.env).ids,
+        getModels: (providerId) => knownProviderModels(config, providerId),
+        find: (providerId, modelId) =>
+          knownProviderModels(config, providerId).find((m) => m.id === modelId),
+        capabilities: (providerId, modelId) => modelCapabilities(providerId, modelId),
+        probe: () => listProviderModels(config),
+      },
       ui,
     };
   };
@@ -480,6 +527,31 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const extensionEvents = new ExtensionEvents();
   // models.dev 能力目录:懒加载 + 磁盘缓存(首个 modelCapabilities 调用才拉取)。
   const catalogSource = createCatalogSource();
+  /**
+   * 逐模型能力:返回**生效可选集**,不是目录原文——回退与 wire 可表达性过滤
+   * 都做在这里,前端(TUI /think 选择器与校验、模型弹窗)与扩展的
+   * `ctx.modelRegistry.capabilities` 直接渲染。放前端做过两次都是错的——
+   * 家族表是核心模块,同一个目录缺口一处会收窄、另一处却列出模型根本不
+   * 支持的档位。
+   */
+  const modelCapabilities = async (
+    providerId: string,
+    modelId: string,
+  ): Promise<ModelCapabilities | undefined> => {
+    const catalog = await catalogSource.get();
+    const caps = catalog ? capabilitiesFor(catalog, providerId, modelId) : undefined;
+    // 目标 provider/model 的 wire 能力:probe 模式,缺 key 不抛(弹窗查的
+    // 可能是还没配 key 的厂商)。解析失败(连 baseURL 都没有)只能交回目录原文。
+    let target: ResolvedProvider;
+    try {
+      target = resolveProvider({ ...config, provider: providerId, model: modelId }, process.env, {
+        probe: true,
+      });
+    } catch {
+      return caps;
+    }
+    return { ...caps, efforts: effectiveEfforts(target, caps?.efforts) };
+  };
 
   /**
    * 技能的会话态:pendingUserSkills 是本轮用户斜杠点名的技能(skill 工具
@@ -519,7 +591,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const skillManager = new SkillManager({
     root,
     packageDirs: resolved.packages.flatMap((pkg) => pkg.manifest.skills),
+    promptDirs: resolved.packages.flatMap((pkg) => pkg.manifest.prompts),
   });
+  /** 包与扩展贡献的主题目录;TUI 起来前按配置 `theme` 在这些目录里找。 */
+  const themeDirs: string[] = resolved.packages.flatMap((pkg) => pkg.manifest.themes);
 
   // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
   // 技能初扫并入同一批:tools 组装(下方)读 skillManager.current() 决定
@@ -1203,11 +1278,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     return loadDiskExtensions((level, message) => bus.emit({ type: 'notice', level, message }));
   };
 
-  // 扩展贡献的技能目录(resources_discover):追加后重扫一次,skill 工具随之重建。
+  // 扩展贡献的资源目录(resources_discover):技能与提示词模板追加后重扫一次,
+  // skill 工具随之重建;主题目录记下来给 TUI 起来前查。
   {
-    const { skillPaths } = await hooks.resourcesDiscover();
-    if (skillPaths.length > 0) {
-      skillManager.addDirs(skillPaths.map((p) => path.resolve(root, p)));
+    const { skillPaths, promptPaths, themePaths } = await hooks.resourcesDiscover();
+    skillManager.addDirs(skillPaths.map((p) => path.resolve(root, p)));
+    skillManager.addPromptDirs(promptPaths.map((p) => path.resolve(root, p)));
+    themeDirs.push(...themePaths.map((p) => path.resolve(root, p)));
+    if (skillPaths.length > 0 || promptPaths.length > 0) {
       await skillManager.list().catch(() => {});
       syncSkillTool();
     }
@@ -1251,6 +1329,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 才不会继续宣称一个这段对话往后都不会再用的模型。
     opened.setModel(provider.id, provider.model);
     await hooks.notify('session_start', { reason: 'resume' });
+    await hooks.notify('session_switch', { id: opened.id });
     bus.emit({ type: 'session-changed', reason: 'resume', id: opened.id });
     return opened;
   };
@@ -1262,8 +1341,57 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 内存里的历史一概不动——分叉的意义就是"一切照旧,换个 id"。
     store = await store.fork({ provider: provider.id, model: provider.model });
     await hooks.notify('session_start', { reason: 'fork' });
+    await hooks.notify('session_fork', { id: store.id });
     bus.emit({ type: 'session-changed', reason: 'fork', id: store.id });
     return store;
+  };
+
+  /**
+   * `!command`:钩子 → 执行 → 以 `user_bash` 自定义消息并入历史(不开轮)。
+   * 输出封顶与工具输出同一量级;超时、跑不起来都只是一条 warn notice,
+   * 不能把会话拖垮。模型看到的正文是英文信封(命令、输出、退出码)。
+   */
+  const runUserBash = async (raw: string): Promise<void> => {
+    const requested = raw.trim();
+    if (!requested) return;
+    const resolved = await hooks.userBash({ command: requested, cwd: root });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), USER_BASH_TIMEOUT_MS);
+    let exitCode: number;
+    let output: string;
+    try {
+      if (resolved.run) {
+        ({ exitCode, output } = await resolved.run({
+          command: resolved.command,
+          cwd: root,
+          signal: controller.signal,
+        }));
+      } else {
+        const result = await execa(resolved.command, {
+          shell: true,
+          cwd: root,
+          reject: false,
+          all: true,
+          cancelSignal: controller.signal,
+        });
+        exitCode = result.exitCode ?? -1;
+        output = result.all ?? '';
+      }
+    } catch (err) {
+      bus.emit({
+        type: 'notice',
+        level: 'warn',
+        message: t('notice.userBashFailed', { command: resolved.command, message: errorMessage(err) }),
+      });
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+    // 截断走 tools/context 的 truncate:与 bash 工具同一个限额、同一句标记,
+    // 自己再写一遍会让产品里出现两种"输出被截断"的说法。
+    const body = truncate(output.replace(/\s+$/, ''), USER_BASH_OUTPUT_LIMIT) || '(no output)';
+    const content = `$ ${resolved.command}\n${body}\n(exit code ${exitCode})`;
+    await agent.sendMessage('user_bash', content, { display: content });
   };
 
   const switchProvider = (change: {
@@ -1409,25 +1537,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     switch: switchProvider,
     setReasoningEffort,
     listProviderModels: () => listProviderModels(config),
-    // 返回**生效可选集**,不是目录原文:回退与 wire 可表达性过滤都做在这里,
-    // 三个前端(TUI /think 选择器与校验、GUI 思考菜单、模型弹窗)直接渲染。
-    // 放前端做过两次都是错的——家族表是 server-only 模块,renderer 摸不到,
-    // 同一个目录缺口 TUI 会收窄、GUI 却列出模型根本不支持的档位。
-    modelCapabilities: async (providerId, modelId) => {
-      const catalog = await catalogSource.get();
-      const caps = catalog ? capabilitiesFor(catalog, providerId, modelId) : undefined;
-      // 目标 provider/model 的 wire 能力:probe 模式,缺 key 不抛(弹窗查的
-      // 可能是还没配 key 的厂商)。解析失败(连 baseURL 都没有)只能交回目录原文。
-      let target: ResolvedProvider;
-      try {
-        target = resolveProvider({ ...config, provider: providerId, model: modelId }, process.env, {
-          probe: true,
-        });
-      } catch {
-        return caps;
-      }
-      return { ...caps, efforts: effectiveEfforts(target, caps?.efforts) };
-    },
+    modelCapabilities,
     doctor: async ({ offline }) => {
       // 会话内已经拉起来的子进程直接采信状态,doctor 不再自己连/拉一份。两份
       // 都由扩展发布(publishRuntime),扩展没装时为 undefined——那不是"一个
@@ -1526,6 +1636,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return messageRenderers;
     },
     reloadExtensions,
+    runUserBash,
+    themeDirs,
     startSimplify,
     // 子进程(MCP 的 stdio server、LSP 的语言服务器)由各自的扩展在
     // session_shutdown 里关,包括「连接还在路上时会话就关了」的孤儿竞态。

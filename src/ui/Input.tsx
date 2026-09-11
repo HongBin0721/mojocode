@@ -106,7 +106,9 @@ interface Props {
    * `ui.getEditorText` 经它现读)。不用"每次变化回调"——那要在每个按键上
    * 多跑一个响应式节点,只为镜像一个几乎没人读的字符串。
    */
-  editorRef?: { read?: () => string };
+  editorRef?: { read?: () => string; insert?: (text: string) => void };
+  /** 透传给顶边线:替换「思考中 / 回复中」的文字(扩展的 setWorkingMessage)。 */
+  workingMessage?: string;
   /**
    * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
    * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
@@ -491,6 +493,8 @@ export function Input(props: Props): JSX.Element {
     setValue(v.slice(0, c) + text + v.slice(c));
     setCursor(c + text.length);
   };
+  // 扩展的 ui.pasteToEditor 经它在光标处插入。
+  if (props.editorRef) props.editorRef.insert = insert;
 
   useInput(
     (input, key) => {
@@ -774,6 +778,7 @@ export function Input(props: Props): JSX.Element {
     tokens: props.turnTokens,
     columns: size.columns,
     color: borderColor(),
+    label: props.workingMessage,
   }));
 
   return (

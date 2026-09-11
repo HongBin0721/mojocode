@@ -264,6 +264,11 @@ export const configSchema = z.object({
   /** 状态栏显示的信息段,可在 /setting 设置面板里调整。 */
   statusBar: statusBarSchema.default([...STATUS_SEGMENTS]),
   /**
+   * TUI 主题名(Pi 的 themes):在 `<root>/.mojocode/themes/`、`~/.mojocode/themes/`
+   * 与包 / 扩展贡献的主题目录里找 `<name>.json`;缺省用内置配色。
+   */
+  theme: z.string().optional(),
+  /**
    * 时间线显示密度,/focus 或 ctrl+o 切换。full = 全量;compact = 折叠
    * 工具调用过程;result = 只看问答。`user/assistant/error/banner` 与
    * warn 级提示在任何档位都不隐藏(见 src/ui/focus.ts 的铁律注释)。
@@ -313,6 +318,7 @@ export const partialConfigSchema = z.object({
   systemPromptAppend: z.string().optional(),
   language: z.enum(['auto', 'en', 'zh-CN']).optional(),
   statusBar: statusBarSchema.optional(),
+  theme: z.string().optional(),
   // timeline 同理:`.partial()` 不摘 `.default('full')`,项目层只要存在任意
   // 配置文件,幻影 timeline:'full' 就会以更高优先级把全局保存的 /focus
   // 偏好重置。裸 optional 让「没写」真正表示「没写」。

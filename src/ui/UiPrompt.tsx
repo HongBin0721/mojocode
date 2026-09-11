@@ -9,7 +9,7 @@ const WINDOW = 8;
 
 interface Props {
   request: UiRequest;
-  /** select:选中项或 undefined(esc);confirm:布尔;input:文本或 undefined(esc)。 */
+  /** select:选中项或 undefined(esc);confirm:布尔;input / editor:文本或 undefined(esc)。 */
   onAnswer: (answer: UiAnswer) => void;
 }
 
@@ -21,7 +21,9 @@ interface Props {
  */
 export function UiPrompt(props: Props): JSX.Element {
   const [cursor, setCursor] = createSignal(0);
-  const [buffer, setBuffer] = createSignal('');
+  const [buffer, setBuffer] = createSignal(
+    props.request.kind === 'editor' ? (props.request.prefill ?? '') : '',
+  );
 
   const items = createMemo((): string[] => {
     const request = props.request;
@@ -42,10 +44,17 @@ export function UiPrompt(props: Props): JSX.Element {
       props.onAnswer(request.kind === 'confirm' ? false : undefined);
       return;
     }
-    if (request.kind === 'input') {
-      // 打字/退格/粘贴的语义与手动输入态、扩展的 textInput 同一份实现。
-      if (key.return) props.onAnswer(buffer());
-      else setBuffer((b) => applyTextKey(b, input, key));
+    if (request.kind === 'input' || request.kind === 'editor') {
+      // 两种文本框只差一个 multiline:打字/退格/粘贴的语义与手动输入态、
+      // 扩展的 textInput 同一份实现;多行的换行约定与主输入框一致——
+      // 行尾 `\` + 回车换行,回车提交。
+      const multiline = request.kind === 'editor';
+      if (key.return) {
+        if (multiline && buffer().endsWith('\\')) setBuffer((b) => `${b.slice(0, -1)}\n`);
+        else props.onAnswer(buffer());
+      } else {
+        setBuffer((b) => applyTextKey(b, input, key, { multiline }));
+      }
       return;
     }
     const count = items().length;
@@ -72,12 +81,17 @@ export function UiPrompt(props: Props): JSX.Element {
     if (key.return) submit(cursor());
   });
 
+  /** 多行框的行。**一个 memo**:每行再 split 一次整段 buffer 只为问"我是不是最后一行",
+      粘进来 60 行就是每次按键把整段扫 61 遍。 */
+  const bufferLines = createMemo(() => buffer().split('\n'));
   const windowStart = createMemo(() => centeredWindowStart(cursor(), items().length, WINDOW));
   const visible = createMemo(() => items().slice(windowStart(), windowStart() + WINDOW));
   const hint = (): string => {
     const kind = props.request.kind;
     return kind === 'input'
       ? t('uiPrompt.inputHint')
+      : kind === 'editor'
+        ? t('uiPrompt.editorHint')
       : kind === 'confirm'
         ? t('uiPrompt.confirmHint')
         : t('uiPrompt.selectHint');
@@ -108,6 +122,19 @@ export function UiPrompt(props: Props): JSX.Element {
             </Show>
             <Text color={theme.accent}>▏</Text>
           </Text>
+        </Show>
+        <Show when={props.request.kind === 'editor'}>
+          <Box flexDirection="column">
+            <For each={bufferLines()}>
+              {(line, i) => (
+                <Text>
+                  <Text color={theme.accent}>{i() === 0 ? `${glyphs.pointer} ` : '  '}</Text>
+                  {line}
+                  {i() === bufferLines().length - 1 ? <Text color={theme.accent}>▏</Text> : null}
+                </Text>
+              )}
+            </For>
+          </Box>
         </Show>
         <Show when={windowStart() > 0}>
           <Text color={theme.dim}>{t('selector.moreAbove', { n: windowStart() })}</Text>

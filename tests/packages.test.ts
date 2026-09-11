@@ -144,4 +144,33 @@ describe('removePackage / resolvePackages', () => {
     expect(packages.map((p) => p.dir)).toEqual([projectDir]);
     expect(missing).toEqual(['npm:absent']);
   });
+
+  it('manifest 四类资源(extensions / skills / prompts / themes):写了按它、不存在的丢掉;没写按约定目录', async () => {
+    const declared = path.join(root, 'declared');
+    for (const dir of ['ext', 'sk', 'pr', 'th']) await fs.mkdir(path.join(declared, dir), { recursive: true });
+    await fs.writeFile(
+      path.join(declared, 'package.json'),
+      JSON.stringify({
+        name: 'declared',
+        mojocode: { extensions: ['ext'], skills: ['sk', 'missing'], prompts: ['pr'], themes: ['th'] },
+      }),
+    );
+    const convention = path.join(root, 'convention');
+    for (const dir of ['extensions', 'skills', 'prompts', 'themes']) {
+      await fs.mkdir(path.join(convention, dir), { recursive: true });
+    }
+    const { packages } = await resolvePackages([declared, convention], { root });
+    expect(packages[0]!.manifest).toEqual({
+      extensions: [path.join(declared, 'ext')],
+      skills: [path.join(declared, 'sk')],
+      prompts: [path.join(declared, 'pr')],
+      themes: [path.join(declared, 'th')],
+    });
+    expect(packages[1]!.manifest).toEqual({
+      extensions: [path.join(convention, 'extensions')],
+      skills: [path.join(convention, 'skills')],
+      prompts: [path.join(convention, 'prompts')],
+      themes: [path.join(convention, 'themes')],
+    });
+  });
 });

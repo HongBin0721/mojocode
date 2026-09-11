@@ -66,7 +66,9 @@ Hooks are async, run serially in registration order, and their return values mat
 | `tool_call` | before a tool runs, `{ callId, toolName, input }` | `{ block: true, reason }` vetoes | **failure vetoes** |
 | `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | tool actually starts / streams a `chunk` / finishes (raw `output`, `durationMs`) | none | reported only |
 | `tool_result` | after the tool ran, before the result goes back to the model, `{ output, isError }` | `{ output }` rewrites | keeps the value |
+| `message_start` / `message_update` | an assistant message starts streaming (one per step) / each streamed delta; `{ message }` is the partial message accumulated so far, `message_update` also carries `{ delta: { type: 'text' \| 'reasoning', id, text } }`. Nothing is assembled when nobody listens | none | reported only |
 | `message_end` | before each finished assistant / tool message joins history, `{ message }` | `{ message }` replaces | keeps the value |
+| `user_bash` | the user typed `!<command>` in the input box, before it runs, `{ command, cwd }` | `{ command }` rewrites the command; `{ run({ command, cwd, signal }) }` takes over execution (a container, a remote host) and returns `{ exitCode, output }`. The output joins history as a `user_bash` custom message without starting a turn | treated as silent |
 | `session_before_compact` | before compaction, `{ reason: 'manual' \| 'auto' \| 'in-turn', messages }` | `{ cancel: true }` skips this one | treated as not cancelled |
 | `session_compact` | after compaction, `{ reason, removedMessages, summaryChars }` | none | reported only |
 | `model_select` / `thinking_level_select` | model / thinking level changed | none | reported only |
@@ -76,24 +78,31 @@ Hooks are async, run serially in registration order, and their return values mat
 | `agent_settled` | after `agent_end` once the agent is confirmed idle (no extension started another chain in `agent_end`) | none | reported only |
 | `after_provider_response` | after the provider answered (AI SDK middleware), `{ type, params, response }` | none | reported only |
 | `session_before_switch` / `session_before_fork` | about to `/resume` / `/fork` (also the extension's `switchSession` / `fork`), `{ id }` / none | `{ cancel: true }` cancels; the caller gets an error | treated as not cancelled |
-| `resources_discover` | at startup after extensions loaded, collect resource directories | `{ skillPaths: [...] }`, relative to the workspace root | skipped |
+| `session_switch` / `session_fork` | switched to / forked into a new session (after `session_start`), `{ id }` is the new session id | none | reported only |
+| `resources_discover` | at startup after extensions loaded, collect resource directories | `{ skillPaths, promptPaths, themePaths }`, relative to the workspace root: skill directories, prompt-template directories (each `*.md` becomes a `/name`), theme directories (`<name>.json`) | skipped |
 
 `tool_call` failing closed is deliberate: without a permission system it is the only checkpoint an intercepting extension has, and treating a throwing handler as "allowed" would mean every tool runs bare as soon as that extension has a bug. All hook failures become a notice in the timeline and never bubble into the agent loop.
 
 ## ctx: the handler's second argument
 
-Hook and command handlers both receive `ctx` (`api.ctx` is the same object), shaped like Pi's: `cwd`, `hasUI`, `mode` (`'tui' | 'print'`), `isIdle()`, `abort()`, `waitForIdle()`, `newSession()`, `fork()`, `switchSession(id)`, `model(id?)`, `config`, plus `ui` for talking to the interface. `isIdle()` and `waitForIdle()` share one definition: idle means no chain and no compaction running - appending to history during compaction would be swallowed when the compacted history replaces it. **Each extension gets its own `ctx`**, so `ctx.ui.setWidget` and friends are recorded under that extension and `/reload` can withdraw them:
+Hook and command handlers both receive `ctx` (`api.ctx` is the same object), shaped like Pi's: `cwd`, `hasUI`, `mode` (`'tui' | 'print'`), `isIdle()`, `abort()`, `waitForIdle()`, `newSession()`, `fork()`, `switchSession(id)`, `model(id?)`, `config`, `sessionManager`, `modelRegistry`, plus `ui` for talking to the interface. `sessionManager` is a **read-only** view of the current session (`getSessionId` / `getSessionName` / `getEntries(type?)` / `getHistory` / `getDisplayHistory` / `listSessions`); writes go through the API members of the same names. `modelRegistry` is the model table: `getCurrent` / `getProviders` / `getModels(providerId?)` / `find` read the models known from config and presets synchronously, `capabilities(provider, model)` queries the models.dev catalog and `probe()` lists live (the same path as `/models`). `isIdle()` and `waitForIdle()` share one definition: idle means no chain and no compaction running - appending to history during compaction would be swallowed when the compacted history replaces it. **Each extension gets its own `ctx`**, so `ctx.ui.setWidget` and friends are recorded under that extension and `/reload` can withdraw them:
 
 | Member | Notes |
 |---|---|
 | `ui.select(title, items)` | pick one item; esc gives `undefined` |
 | `ui.confirm(title, message)` | yes / no; esc gives `false` |
 | `ui.input(title, placeholder?)` | one line of text; esc gives `undefined` |
+| `ui.editor(title, prefill?)` | multi-line editor: enter submits, a trailing `\` + enter inserts a newline; esc gives `undefined` |
 | `ui.custom((host, done) => component)` | mount a component that draws itself and handles its own keys (Pi's `ctx.ui.custom`): it replaces the input box, owns the keyboard, and `done(value)` closes it and returns the value |
 | `ui.setWidget(key, lines \| factory)` | a block above the input box; `undefined` clears |
 | `ui.setHeader(…)` / `ui.setFooter(…)` | a block at the top of the screen; replaces the footer |
 | `ui.setTitle(title)` | terminal window title |
-| `ui.getEditorText()` / `ui.setEditorText(text)` | read / write the input box draft |
+| `ui.setWorkingMessage(text)` | replaces the "thinking / responding" label in the status line (not while a tool or compaction runs); `undefined` restores |
+| `ui.setEditorComponent((host, submit) => component)` | replaces the default input box: the component draws itself and handles keys, `submit(text)` takes the same path as pressing enter in the default box (slash commands, `!` commands, @ references included); optional `getText` / `setText` / `insertText` back `getEditorText` / `setEditorText` / `pasteToEditor` (without `insertText`, a paste degrades to appending at the end); `undefined` restores |
+| `ui.theme` | the colour helpers (`fg(name, text)` / `bold` / `dim` / `italic`), the same object as a component's `host.theme`, available headless too |
+| `ui.getEditorText()` / `ui.setEditorText(text)` / `ui.pasteToEditor(text)` | read / write the input box draft; insert at the cursor |
+
+While an extension editor is mounted, **`esc` during a running turn always means "interrupt" and is not forwarded to the component** - handing it over wholesale would leave a user whose editor extension ignores `esc` with nothing but double `ctrl+c`, which exits the whole program. When idle, `esc` goes to the component as usual (so `esc` `esc` rewind is unavailable while an extension editor is mounted - that follows from "the keyboard belongs to the component").
 | `ui.notify(message, level?)` | same path as `api.notify` |
 
 Two ready-made component factories save every extension from rewriting cursor and backspace handling: `selectList({ items, onSelect, onCancel?, title?, window? })` and `textInput({ placeholder?, initial?, onSubmit, onCancel? })`. Both return factories you can hand to `ui.custom` / `setWidget` (inside `ui.custom`, wire `done` to `onSelect` / `onSubmit`).
@@ -117,7 +126,7 @@ Components have Pi's `Component` shape: `render(width): string[]` (lines may car
 | `registerMessageRenderer(customType, (message, theme) => lines)` | how a custom message is drawn in the timeline; unregistered types get a `[type]` label plus the text |
 | `mode` / `waitForIdle()` / `newSession()` / `fork()` / `switchSession(id)` | same as the ctx members |
 | `registerTool(name, (scope) => Tool \| undefined, { promptSnippet?, promptGuidelines?, renderCall?, renderResult? }?)` / `unregisterTool(name)` | a model-callable tool. Pass a factory, not the tool: decide per `scope.subagent` / `scope.mode` (`general` / `explore`) whether to provide it. Built-in tool names cannot be overridden. Tools with a snippet are gathered by the host into an "Extension tools" section of the system prompt, always consistent with what is actually registered |
-| `registerTool({ name, description, parameters, execute, promptSnippet?, promptGuidelines?, renderCall?, renderResult?, scope? })` | Pi-shaped tool definition: `parameters` is JSON Schema (a TypeBox schema works as is), `execute(toolCallId, params, signal, onUpdate, ctx)` has Pi's signature, and a Pi `{ content: [{ type: 'text', text }] }` result is flattened to text for the model; `renderCall` / `renderResult` return lines |
+| `registerTool({ name, description, parameters, execute, promptSnippet?, promptGuidelines?, renderCall?, renderResult?, scope? })` | Pi-shaped tool definition: `parameters` is JSON Schema (a TypeBox schema works as is), `execute(toolCallId, params, signal, onUpdate, ctx)` has Pi's signature, and a Pi `{ content: [{ type: 'text', text }], details? }` result reaches the model as the `content` text only, while the **whole object** (including `details`) goes to `renderResult` and the `tool_result` hook; `details` never enters persistent history. `renderCall` / `renderResult` return lines |
 | `getAllTools()` / `getActiveTools()` / `setActiveTools(names \| undefined)` | every tool name in the main tool set; the ones currently offered to the model; offer only these (main agent and subagents alike), the rest stay registered |
 | `registerFlag(name, { description, type, default? })` / `getFlag(name)` | command-line flags (`-X name[=value]`) |
 | `setStatus(text, { since? })` | one status line above the input box, `undefined` clears; entries with `since` get a live elapsed time |
@@ -155,9 +164,11 @@ Loading, hooks, the API surface and the rendering layer mirror Pi; the deliberat
 |---|---|
 | `registerEntryRenderer` / `registerMarkdownTransformer` | `registerMessageRenderer` for custom messages, `renderCall` / `renderResult` for tool entries, `setWidget` / `setState` for the rest |
 | Session tree: `fork(entryId)`, `navigateTree`, `setLabel`, `session_before_tree` | sessions are linear JSONL; `/fork` copies the whole session |
-| `registerProvider`, `models.json` | providers are defined in the config (`providers.<id>`); rewrite requests with `before_provider_request` |
+| `registerProvider`, `models.json` | providers are defined in the config (`providers.<id>`); rewrite requests with `before_provider_request`; `ctx.modelRegistry` is read-only |
 | `project_trust` | there is no permission system (a deliberate decision, like Pi) |
 | bare `--my-flag` | `-X my-flag` (commander can only pass unknown options through wholesale, see `src/extensions/flags.ts`) |
-| pi-tui component classes (`Container`, `Text`, `SelectList`, …) | a component only needs `render(width)` + `handleInput`; `selectList` / `textInput` cover the common cases, `host.theme` gives colours |
+| pi-tui component classes (`Container`, `Text`, `SelectList`, …) | a component only needs `render(width)` + `handleInput`; `selectList` / `textInput` cover the common cases, `host.theme` / `ui.theme` gives colours |
+| writable `ctx.sessionManager`, the raw `SessionManager` object | a read-only view; write through `appendEntry` / `setSessionName` / `newSession` / `fork` / `switchSession` |
+| runtime `/theme` switching | the config key `theme` names a theme, applied once before the TUI starts (see [Packages](/extensions/packages/)) |
 
 Pi ecosystem extensions do **not** run unchanged: they import types from `@mariozechner/pi-coding-agent` and build UI from pi-tui classes. The shapes match, so switching the import and replacing pi-tui components with your own lines (or `selectList` / `textInput`) is all it takes.

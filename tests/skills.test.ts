@@ -184,6 +184,57 @@ describe('discoverSkills(临时 HOME)', () => {
     expect(index.failures).toEqual([]);
   });
 
+  it('提示词模板:prompts 目录里每个 md 一条只给用户敲的命令;frontmatter 可省;同名技能赢', async () => {
+    const prompts = path.join(root, '.mojocode', 'prompts');
+    await fs.mkdir(prompts, { recursive: true });
+    await fs.writeFile(path.join(prompts, 'greet.md'), 'Say hello to $1.\n\nWarmly.\n');
+    await fs.writeFile(
+      path.join(prompts, 'fix.md'),
+      '---\ndescription: fix a bug\nargument-hint: "<file>"\n---\nFix $ARGUMENTS.\n',
+    );
+    await fs.writeFile(path.join(prompts, 'Bad Name.md'), 'x\n');
+    await write(path.join(root, '.mojocode', 'skills'), 'greet', SKILL('description: the skill'));
+
+    const index = await discoverSkills(root);
+    const greet = index.skills.find((s) => s.name === 'greet')!;
+    expect(greet.kind).toBeUndefined(); // 技能赢
+    expect(greet.description).toBe('the skill');
+    const fix = index.skills.find((s) => s.name === 'fix')!;
+    expect(fix).toMatchObject({
+      kind: 'prompt',
+      description: 'fix a bug',
+      argumentHint: '<file>',
+      disableModelInvocation: true,
+      userInvocable: true,
+      source: 'project',
+    });
+    expect(await readSkillBody(fix)).toBe('Fix $ARGUMENTS.\n');
+    expect(index.failures.map((f) => path.basename(f.file))).toEqual(['Bad Name.md']);
+    // 模板只在菜单里,不在模型可见列表里。
+    expect(toCommandInfos(index).map((c) => c.name)).toContain('fix');
+    const manager = new SkillManager({ root });
+    await manager.list();
+    expect(manager.digest()).not.toContain('fix');
+  });
+
+  it('包与扩展贡献的提示词目录经 promptDirs / addPromptDirs 进表,description 缺省取正文第一行', async () => {
+    const extra = path.join(root, 'pkg-prompts');
+    await fs.mkdir(extra, { recursive: true });
+    await fs.writeFile(path.join(extra, 'from-pkg.md'), '\nFirst line here.\nsecond\n');
+    const manager = new SkillManager({ root, promptDirs: [extra] });
+    const index = await manager.list();
+    expect(index.skills.find((s) => s.name === 'from-pkg')).toMatchObject({
+      kind: 'prompt',
+      description: 'First line here.',
+      source: 'package',
+    });
+    const later = path.join(root, 'later-prompts');
+    await fs.mkdir(later, { recursive: true });
+    await fs.writeFile(path.join(later, 'late.md'), 'Late one.\n');
+    manager.addPromptDirs([later]);
+    expect((await manager.list()).skills.map((s) => s.name)).toContain('late');
+  });
+
   it('readSkillBody 现读磁盘;toCommandInfos 只投影 user-invocable', async () => {
     await write(
       path.join(root, '.mojocode', 'skills'),

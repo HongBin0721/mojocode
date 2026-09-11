@@ -87,6 +87,29 @@ export function projectSkillsDir(root: string): string {
 }
 
 /**
+ * `~/.mojocode/prompts`——提示词模板目录(Pi 的 prompts):每个 `*.md` 一条
+ * `/name` 命令,正文经参数替换后作为用户消息发出。与技能同一条命令菜单。
+ */
+export function globalPromptsDir(): string {
+  return path.join(globalDir(), 'prompts');
+}
+
+/** `<workspace>/.mojocode/prompts`——项目提示词模板目录。 */
+export function projectPromptsDir(root: string): string {
+  return path.join(projectDir(root), 'prompts');
+}
+
+/** `~/.mojocode/themes`——主题目录(Pi 的 themes):`<name>.json`,配置 `theme` 按名字选。 */
+export function globalThemesDir(): string {
+  return path.join(globalDir(), 'themes');
+}
+
+/** `<workspace>/.mojocode/themes`——项目主题目录。 */
+export function projectThemesDir(root: string): string {
+  return path.join(projectDir(root), 'themes');
+}
+
+/**
  * `.claude/skills` 兼容目录。生态里现成的技能大多发布在这两个路径下
  * (Claude Code 的约定),读它们与 gatherEnvironment 兜底读 CLAUDE.md 同理。
  */

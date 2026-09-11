@@ -8,9 +8,11 @@
  * compact / getContextUsage / setSessionName …),处理器的第二个参数是 Pi
  * 同形的 `ctx`(cwd / hasUI / isIdle / abort / ui.*)。扩展与 TUI 跑在
  * **同一个进程**里(Pi 的形态),所以渲染那一族也在:`ui.custom` 挂一个
- * 自己处理按键的组件、`ui.setWidget / setHeader / setFooter / setTitle`、
+ * 自己处理按键的组件、`ui.setWidget / setHeader / setFooter / setTitle /
+ * setWorkingMessage / setEditorComponent / editor / theme / pasteToEditor`、
  * 工具的 `renderCall / renderResult`。组件的形状是 Pi 的(渲染成行 + 处理
  * 按键),不是 pi-tui 的类;核心只传递这些对象,画出来是 TUI 的事。
+ * `ctx.sessionManager` / `ctx.modelRegistry` 也在,但收窄成读口。
  * 刻意没有的:会话树、`registerProvider`、`project_trust`。
  *
  * 一方扩展静态打包(src/extensions/index.ts),磁盘扩展由 extensions/loader.ts
@@ -23,23 +25,28 @@ import type { LanguageModel, ModelMessage, Tool } from 'ai';
 import type { AgentEvent } from './events.js';
 import type { HookRegistry } from './hooks.js';
 import type { Config, ReasoningEffort } from '../config/schema.js';
-import type { SessionCustomRecord } from '../session/store.js';
+import type { SessionCustomRecord, SessionMeta } from '../session/store.js';
 import type { ImageAttachment } from '../app/attachments.js';
+import type { ModelCapabilities } from '../model/catalog.js';
+import type { KnownModel, ProviderModels } from '../model/registry.js';
 // 过线的那几个类型住在 Node-free 的 extension-types.ts,理由见那边的文件头;
 // 这里原样 re-export,扩展作者仍然只从 core/extension.js 一处 import。
 import type {
   ComponentFactory,
   ComponentHost,
   CustomMessageInfo,
+  EditorComponentFactory,
   ExtensionCommandInfo,
   ExtensionCommandOption,
   ExtensionComponent,
+  ExtensionEditorComponent,
   ExtensionKey,
   ExtensionShortcutInfo,
   ExtensionStatusEntry,
   ExtensionSurface,
   ExtensionTheme,
   MessageRenderer,
+  PiToolResult,
   ToolRenderers,
   ToolScope,
   UiAnswer,
@@ -52,15 +59,18 @@ export type {
   ComponentFactory,
   ComponentHost,
   CustomMessageInfo,
+  EditorComponentFactory,
   ExtensionCommandInfo,
   ExtensionCommandOption,
   ExtensionComponent,
+  ExtensionEditorComponent,
   ExtensionKey,
   ExtensionShortcutInfo,
   ExtensionStatusEntry,
   ExtensionSurface,
   ExtensionTheme,
   MessageRenderer,
+  PiToolResult,
   ToolRenderers,
   ToolScope,
   UiAnswer,
@@ -120,6 +130,8 @@ export interface ExtensionUI {
   select(title: string, items: string[]): Promise<string | undefined>;
   confirm(title: string, message: string): Promise<boolean>;
   input(title: string, placeholder?: string): Promise<string | undefined>;
+  /** 多行编辑框(Pi 的 ctx.ui.editor):回车提交,行尾 `\\` + 回车换行;esc 为 undefined。 */
+  editor(title: string, prefill?: string): Promise<string | undefined>;
   /**
    * 挂一个自己画、自己处理按键的组件(Pi 的 ctx.ui.custom):它顶掉输入框、
    * 独占键盘,`done(value)` 收尾并把 value 交回;会话关闭时以 undefined 收尾。
@@ -135,10 +147,22 @@ export interface ExtensionUI {
   setFooter(surface: ExtensionSurface | undefined): void;
   /** 终端窗口标题;undefined 恢复。 */
   setTitle(title: string | undefined): void;
+  /** 工作状态线里替换「思考中 / 回复中」的文字(Pi 的 setWorkingMessage);undefined 恢复。 */
+  setWorkingMessage(message: string | undefined): void;
+  /**
+   * 顶替缺省输入框的编辑器组件(Pi 的 setEditorComponent):工厂收 host 与
+   * `submit(text)`,组件自己画、自己收键,`submit` 与在缺省输入框回车同一条路。
+   * undefined 恢复缺省输入框。
+   */
+  setEditorComponent(factory: EditorComponentFactory | undefined): void;
+  /** 给行上色的主题面(Pi 的 ctx.ui.theme),与组件的 `host.theme` 同一份。 */
+  readonly theme: ExtensionTheme;
   /** 输入框当前草稿(headless 恒为空串)。 */
   getEditorText(): string;
   /** 覆盖输入框草稿(headless 忽略)。 */
   setEditorText(text: string): void;
+  /** 在光标处插入一段文本(Pi 的 pasteToEditor;headless 忽略)。 */
+  pasteToEditor(text: string): void;
   /** 与 api.notify 同一条路,参数顺序照 Pi(message 在前)。 */
   notify(message: string, level?: 'info' | 'warn'): void;
 }
@@ -174,7 +198,52 @@ export interface ExtensionContext {
   switchSession(idOrPrefix: string): Promise<void>;
   model(modelId?: string): LanguageModel;
   readonly config: Config;
+  /** 当前会话的只读视图(Pi 的 ctx.sessionManager,收窄到读口)。 */
+  readonly sessionManager: ExtensionSessionManager;
+  /** 已配置的 provider / 模型表(Pi 的 ctx.modelRegistry)。 */
+  readonly modelRegistry: ExtensionModelRegistry;
   readonly ui: ExtensionUI;
+}
+
+/**
+ * Pi 的 `ctx.sessionManager` 在这里的形状:**只读**。写入走 API 上的成员
+ * (`appendEntry` / `setSessionName` / `newSession` / `fork` / `switchSession`),
+ * 会话文件的形状不对扩展开放——那是核心的持久化细节,不是扩展面。
+ */
+export interface ExtensionSessionManager {
+  getSessionId(): string;
+  getSessionName(): string;
+  /** 自定义记录(kind custom),不给 type 就是全部,写入顺序。 */
+  getEntries(type?: string): SessionCustomRecord[];
+  /** 模型历史(压缩后是摘要 + 尾巴);与 `api.history()` 同源。 */
+  getHistory(): ModelMessage[];
+  /** 完整展示历史(压缩不缩减)。 */
+  getDisplayHistory(): ModelMessage[];
+  /** 本工作区的会话列表(会话选择器同款)。 */
+  listSessions(): Promise<SessionMeta[]>;
+}
+
+/**
+ * 模型表里的一条。就是 `model/registry.ts` 的 `KnownModel`——同一个形状写两遍
+ * 的话,给它加一个字段要在两处各写一笔,而扩展拿到的正是那边算出来的对象。
+ */
+export type ExtensionModelEntry = KnownModel;
+
+/**
+ * Pi 的 `ctx.modelRegistry` 在这里的形状:静态部分(配置 + 预设)同步读,
+ * 活的部分(`/models` 的在线探测、models.dev 的能力目录)异步。
+ */
+export interface ExtensionModelRegistry {
+  getCurrent(): { provider: string; model: string };
+  /** 已配置(有 key / 有 baseURL)的 provider id,当前的排第一。 */
+  getProviders(): string[];
+  /** 配置与预设里**已知**的模型;不给 providerId 就是全部 provider 的。 */
+  getModels(providerId?: string): ExtensionModelEntry[];
+  find(providerId: string, modelId: string): ExtensionModelEntry | undefined;
+  /** models.dev 目录里的能力(思考档位 / 窗口 / 输出上限);库里没有为 undefined。 */
+  capabilities(providerId: string, modelId: string): Promise<ModelCapabilities | undefined>;
+  /** 在线探测各 provider 的模型列表(与 `/models` 同一条路)。 */
+  probe(): Promise<ProviderModels[]>;
 }
 
 export interface ExtensionCommand {

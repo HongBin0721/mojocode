@@ -40,7 +40,9 @@ interface Call {
 }
 const calls: Call[] = [];
 /** 第 n 次流要"模拟模型"调用的工具(mock 像 SDK 一样自己去 execute)。 */
-let scripts: Array<{ toolCalls?: Array<{ name: string; input: unknown }> } | undefined> = [];
+let scripts: Array<
+  { toolCalls?: Array<{ name: string; input: unknown }>; text?: string[]; reasoning?: string[] } | undefined
+> = [];
 /** 每个流开始时的回调,用于在"流进行中"注入/中断/抛错。 */
 let onStream: ((call: number) => void | Promise<void>) | undefined;
 
@@ -77,6 +79,20 @@ function installStream() {
             steps: [],
           });
           if (prepared?.messages) entry.messages = prepared.messages.map((m) => String(m.content));
+          // 有文本 / 思考脚本时像真 SDK 一样先发 start-step,再逐段 delta。
+          if (script.text || script.reasoning) {
+            yield { type: 'start-step' };
+            if (script.reasoning) {
+              yield { type: 'reasoning-start', id: 'r1' };
+              for (const chunk of script.reasoning) yield { type: 'reasoning-delta', id: 'r1', text: chunk };
+              yield { type: 'reasoning-end', id: 'r1' };
+            }
+            if (script.text) {
+              yield { type: 'text-start', id: 't1' };
+              for (const chunk of script.text) yield { type: 'text-delta', id: 't1', text: chunk };
+              yield { type: 'text-end', id: 't1' };
+            }
+          }
           for (const [i, call] of (script.toolCalls ?? []).entries()) {
             const toolCallId = `call-${n}-${i}`;
             yield { type: 'tool-call', toolCallId, toolName: call.name, input: call.input };
@@ -557,6 +573,31 @@ describe('Agent × Pi 对齐的钩子', () => {
     const { agent } = makeAgent({ hooks });
     await agent.run('hi');
     expect(agent.history[1]).toEqual({ role: 'assistant', content: '被替换' });
+  });
+
+  it('message_start / message_update:按 step 开一条部分消息,增量按 part id 累积;没人听不组装', async () => {
+    const hooks = new HookRegistry();
+    const starts: unknown[] = [];
+    const updates: Array<{ content: unknown; delta: unknown }> = [];
+    hooks.on('message_start', ({ message }) => {
+      starts.push(structuredClone(message));
+    });
+    hooks.on('message_update', ({ message, delta }) => {
+      updates.push({ content: structuredClone(message.content), delta });
+    });
+    const { agent } = makeAgent({ hooks });
+    scripts = [{ reasoning: ['think'], text: ['hel', 'lo'] }];
+    await agent.run('hi');
+    expect(starts).toEqual([{ role: 'assistant', content: [] }]);
+    expect(updates.map((u) => u.delta)).toEqual([
+      { type: 'reasoning', id: 'r1', text: 'think' },
+      { type: 'text', id: 't1', text: 'hel' },
+      { type: 'text', id: 't1', text: 'lo' },
+    ]);
+    expect(updates.at(-1)!.content).toEqual([
+      { type: 'reasoning', text: 'think' },
+      { type: 'text', text: 'hello' },
+    ]);
   });
 
   it('before_agent_start 的 message 只在本轮首个流注入,进历史', async () => {

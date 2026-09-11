@@ -68,6 +68,7 @@ description: 分层配置、优先级与全部字段。
 | `systemPromptAppend` | 不设 | 追加到系统提示词末尾的额外指令 |
 | `language` | `auto` | 界面语言 `auto` / `en` / `zh-CN` |
 | `statusBar` | 全部 | 状态栏显示段:`model` `cwd` `think` `context` `total` `todos`,`/setting` 里调 |
+| `theme` | 无 | TUI 主题名,在项目 / 全局 `themes/` 与包带的主题目录里找 `<name>.json`,见[包管理](/extensions/packages/#主题) |
 | `timeline` | `full` | 时间线密度 `full` / `compact` / `result`,`/focus` 落盘 |
 | `cleanupPeriodDays` | `30` | 会话保留天数,超期未活动的启动时清理 |
 

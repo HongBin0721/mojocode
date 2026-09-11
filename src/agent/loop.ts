@@ -1009,13 +1009,55 @@ export class Agent {
 
     const toolStartedAt = new Map<string, number>();
 
+    // message_start / message_update(Pi 同名):**只在有人听时**才组装部分
+    // 消息——每个 delta 都要 await 一遍处理器,不监听就一分钱都不该花。
+    // 部分消息按 part id 就地追加(text / reasoning 各自的 part),扩展在
+    // message_update 里拿到的 `message` 是累积到此刻的样子。
+    const watchMessages = hooks?.has('message_start') || hooks?.has('message_update');
+    // start-step 一定先于任何 delta 到达,所以这两个在 watchMessages 为真时
+    // 必然已经就位;守卫在**调用点**而不是函数体内——写在体内的话,没人监听
+    // 的常态路径仍要为每个 delta 分配一个 promise、让出一次微任务,而这一段
+    // 的全部意义就是"不监听就一分钱都不该花"(2000 token 的回复 = 2000 个
+    // 白扔的 promise)。
+    let partial: { role: 'assistant'; content: Array<{ type: 'text' | 'reasoning'; text: string }> } = {
+      role: 'assistant',
+      content: [],
+    };
+    const partById = new Map<string, { type: 'text' | 'reasoning'; text: string }>();
+    const messageUpdate = async (
+      kind: 'text' | 'reasoning',
+      id: string,
+      text: string,
+    ): Promise<void> => {
+      let slot = partById.get(id);
+      if (!slot) {
+        slot = { type: kind, text: '' };
+        partById.set(id, slot);
+        partial.content.push(slot);
+      }
+      slot.text += text;
+      await hooks!.notify('message_update', {
+        message: partial as unknown as ModelMessage,
+        delta: { type: kind, id, text },
+        subagent,
+      });
+    };
+
     for await (const part of result.fullStream) {
       switch (part.type) {
+        case 'start-step':
+          if (watchMessages) {
+            partial = { role: 'assistant', content: [] };
+            partById.clear();
+            await hooks!.notify('message_start', { message: partial as unknown as ModelMessage, subagent });
+          }
+          break;
         case 'text-start':
           bus.emit({ type: 'text-start', id: part.id });
           break;
         case 'text-delta':
           bus.emit({ type: 'text-delta', id: part.id, text: part.text });
+          if (watchMessages) await messageUpdate('text', part.id, part.text);
           break;
         case 'text-end':
           bus.emit({ type: 'text-end', id: part.id });
@@ -1025,6 +1067,7 @@ export class Agent {
           break;
         case 'reasoning-delta':
           bus.emit({ type: 'reasoning-delta', id: part.id, text: part.text });
+          if (watchMessages) await messageUpdate('reasoning', part.id, part.text);
           break;
         case 'reasoning-end':
           bus.emit({ type: 'reasoning-end', id: part.id });

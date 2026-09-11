@@ -15,6 +15,8 @@
  * TUI chunk;而 GUI renderer 够不着扩展模块,只能手写字面量,写错了编译期
  * 没人拦。
  */
+import { palette, sgrForeground } from './palette.js';
+
 export const TODO_STATE_KEY = 'todo';
 
 /** 斜杠命令在客户端菜单里的投影(只有元数据;执行走 runCommand)。 */
@@ -90,10 +92,39 @@ export interface ToolScope {
 export type UiRequest =
   | { id: string; kind: 'select'; title: string; items: string[] }
   | { id: string; kind: 'confirm'; title: string; message: string }
-  | { id: string; kind: 'input'; title: string; placeholder?: string };
+  | { id: string; kind: 'input'; title: string; placeholder?: string }
+  /** 多行编辑框(Pi 的 `ctx.ui.editor`):回车提交,行尾 `\` + 回车换行,esc 取消。 */
+  | { id: string; kind: 'editor'; title: string; prefill?: string };
 
-/** select → 选中的项(esc 为 undefined);confirm → 布尔;input → 文本(esc 为 undefined)。 */
+/** select → 选中的项(esc 为 undefined);confirm → 布尔;input / editor → 文本(esc 为 undefined)。 */
 export type UiAnswer = string | boolean | undefined;
+
+/**
+ * Pi 工具 execute 的返回形状(AgentToolResult):`content` 喂模型,`details`
+ * 是**只给画法用**的通道——`renderResult` 收到的是整个对象,模型只看到
+ * `content` 拼成的文本(tool-adapter 用 AI SDK 的 `toModelOutput` 分流)。
+ */
+export interface PiToolResult {
+  content: Array<{ type?: string; text?: string }>;
+  details?: unknown;
+}
+
+export function isPiToolResult(value: unknown): value is PiToolResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as { content?: unknown }).content)
+  );
+}
+
+/** Pi 的 AgentToolResult → 喂给模型的文本;不是那个形状原样返回。零依赖,时间线与适配器共用。 */
+export function flattenPiResult(result: unknown): unknown {
+  if (!isPiToolResult(result)) return result;
+  return result.content
+    .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n');
+}
 
 /**
  * 扩展渲染层(Pi 的 Component / setWidget / renderCall 那一族)。扩展与 TUI
@@ -127,6 +158,25 @@ export interface ExtensionTheme {
   italic(text: string): string;
 }
 
+const sgr = (open: string, close: string, text: string): string =>
+  text ? `\x1b[${open}m${text}\x1b[${close}m` : text;
+
+/**
+ * 那份主题的实现:纯 SGR 序列,零依赖——`ctx.ui.theme`(Pi 同名)在 headless
+ * 下也拿得到同一份,组件的 `host.theme`、工具画法与回滚转储用的也是它。
+ *
+ * 颜色**现查 `palette`**(全产品唯一那张配色表),不是一张写死的 SGR 表:
+ * 写死过一版,于是用户换了主题只有 TUI 自己的边框与文字变色,扩展画的每
+ * 一行、每个 renderCall/renderResult、整段回滚转储全都还是内置色。`text`
+ * 没有对应的配色键,照旧是"终端默认前景"。
+ */
+export const extensionTheme: ExtensionTheme = {
+  fg: (name, text) => sgr(name === 'text' ? '39' : sgrForeground(palette[name]), '39', text),
+  bold: (text) => sgr('1', '22', text),
+  dim: (text) => sgr('2', '22', text),
+  italic: (text) => sgr('3', '23', text),
+};
+
 /**
  * Pi 的 Component 同形:`render(width)` 给出要画的行(可带 ANSI),
  * `handleInput` 收按键——`data` 是 Pi 风格的原始序列(可打印字符原样、
@@ -149,6 +199,28 @@ export type ComponentFactory = (host: ComponentHost) => ExtensionComponent;
 
 /** widget / header / footer 的内容:一组行,或一个按需重画的组件工厂。 */
 export type ExtensionSurface = string[] | ComponentFactory;
+
+/**
+ * 顶替输入框的编辑器组件(Pi 的 `ctx.ui.setEditorComponent`):在 Component
+ * 之上多两个可选的读写口,`getEditorText / setEditorText / pasteToEditor`
+ * 在它挂着时走这里。`submit(text)` 与用户在缺省输入框回车同一条路(斜杠
+ * 命令、`!` 命令、@ 引用展开照常)。
+ */
+export interface ExtensionEditorComponent extends ExtensionComponent {
+  getText?(): string;
+  setText?(text: string): void;
+  /**
+   * 在光标处插入(`ui.pasteToEditor` 的落点)。不实现就退化成追加到末尾
+   * ——组件的光标在它自己肚子里,宿主够不着,想要"在光标处"就得自己接
+   * 这一个方法。
+   */
+  insertText?(text: string): void;
+}
+
+export type EditorComponentFactory = (
+  host: ComponentHost,
+  submit: (text: string) => void,
+) => ExtensionEditorComponent;
 
 /** 工具在时间线里的自定义画法(Pi 的 renderCall / renderResult,只认字符串行)。 */
 export interface ToolRenderers {
@@ -178,6 +250,10 @@ export interface UiSurfaces {
   footer?: ExtensionSurface;
   /** 终端窗口标题。 */
   title?: string;
+  /** 工作状态线里替换「思考中 / 回复中」的文字(Pi 的 setWorkingMessage)。 */
+  workingMessage?: string;
+  /** 顶替缺省输入框的编辑器组件工厂(Pi 的 setEditorComponent)。 */
+  editor?: EditorComponentFactory;
 }
 
 /**
@@ -238,6 +314,8 @@ export interface UiHost {
   available(): boolean;
   getEditorText?(): string;
   setEditorText?(text: string): void;
+  /** 在光标处插入(Pi 的 pasteToEditor);缺省输入框与扩展编辑器都认。 */
+  pasteToEditor?(text: string): void;
 }
 
 /** 扩展经 sendMessage 放进对话的一条自定义消息(时间线与回放都用它)。 */

@@ -38,6 +38,7 @@ import { toError } from './errors.js';
 import type { UsageSnapshot } from './events.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import type { ExtensionContext } from './extension.js';
+import { extensionTheme } from './extension-types.js';
 
 /** 每个钩子输入都带的调用方信息。 */
 export interface HookAgentInfo {
@@ -155,6 +156,42 @@ export interface MessageEndHookInput extends HookAgentInfo {
 export type MessageEndHookResult = { message?: ModelMessage } | undefined | void;
 
 /**
+ * 一条 assistant 消息开始流出(Pi 的 `message_start`):每个 step 一条。
+ * `message` 是此刻的部分消息(content 为空),流式监听的扩展在这里开始记账。
+ */
+export interface MessageStartHookInput extends HookAgentInfo {
+  message: ModelMessage;
+}
+
+/**
+ * assistant 消息的流式增量(Pi 的 `message_update`):`message` 是累积到此刻
+ * 的部分消息(text / reasoning 部件按 id 就地追加),`delta` 是这一份增量。
+ * 只在有人监听时才组装与触发,不监听零开销。
+ */
+export interface MessageUpdateHookInput extends HookAgentInfo {
+  message: ModelMessage;
+  delta: { type: 'text' | 'reasoning'; id: string; text: string };
+}
+
+/**
+ * 用户在输入框敲 `!<command>`(Pi 的 `user_bash`):命令执行前给扩展一次机会。
+ * 返回 `command` 改写要跑的命令;返回 `run` 接管执行(在容器里跑、走远程
+ * 主机之类),第一个给出 `run` 的处理器赢。输出并入历史,不开轮。
+ */
+export interface UserBashHookInput {
+  command: string;
+  cwd: string;
+}
+
+export type UserBashRunner = (input: {
+  command: string;
+  cwd: string;
+  signal: AbortSignal;
+}) => Promise<{ exitCode: number; output: string }>;
+
+export type UserBashHookResult = { command?: string; run?: UserBashRunner } | undefined | void;
+
+/**
  * 发给 provider 的请求参数(Pi 的 `before_provider_request`),经 AI SDK 的
  * 语言模型中间件 `transformParams` 拿到:prompt、tools、providerOptions、
  * headers 全在里面。返回 `params` 即替换——改 headers 也在这里(Pi 的
@@ -249,8 +286,24 @@ export interface AfterProviderResponseHookInput extends HookAgentInfo {
   response: unknown;
 }
 
-/** 扩展贡献资源目录(Pi 的 resources_discover):目前只认技能目录。 */
-export type ResourcesDiscoverHookResult = { skillPaths?: string[] } | undefined | void;
+/** 切换到了另一个会话(`/resume`、扩展的 switchSession)之后,Pi 的 `session_switch`。 */
+export interface SessionSwitchHookInput {
+  id: string;
+}
+
+/** 分叉出了新会话(`/fork`、扩展的 fork)之后,Pi 的 `session_fork`。 */
+export interface SessionForkHookInput {
+  id: string;
+}
+
+/**
+ * 扩展贡献资源目录(Pi 的 resources_discover):技能目录、提示词模板目录
+ * (`*.md`,每个文件一条 `/name` 命令)、主题目录(`*.json`)。相对工作区根。
+ */
+export type ResourcesDiscoverHookResult =
+  | { skillPaths?: string[]; promptPaths?: string[]; themePaths?: string[] }
+  | undefined
+  | void;
 
 /**
  * 会话就位的原因。扩展在这里从会话记录恢复自己的状态(`entries(type)` 读的
@@ -281,8 +334,14 @@ export interface HookMap {
   context: Hook<ContextHookInput, ContextHookResult>;
   /** 发给 provider 的请求参数(经 AI SDK 中间件)。 */
   before_provider_request: Hook<BeforeProviderRequestHookInput, BeforeProviderRequestHookResult>;
+  /** 一条 assistant 消息开始流出(每个 step 一条)。 */
+  message_start: Hook<MessageStartHookInput>;
+  /** assistant 消息的流式增量(累积的部分消息 + 这一份增量)。 */
+  message_update: Hook<MessageUpdateHookInput>;
   /** 一条模型侧消息定稿、并入历史之前。 */
   message_end: Hook<MessageEndHookInput, MessageEndHookResult>;
+  /** 用户敲 `!command`:改写命令或接管执行。 */
+  user_bash: Hook<UserBashHookInput, UserBashHookResult>;
   /** 工具执行前:否决。 */
   tool_call: Hook<ToolCallHookInput, ToolCallHookResult>;
   /** 工具真正开始执行(未被否决)。 */
@@ -319,6 +378,10 @@ export interface HookMap {
   session_before_switch: Hook<SessionBeforeSwitchHookInput, SessionCancelHookResult>;
   /** 即将分叉会话:可取消。 */
   session_before_fork: Hook<undefined, SessionCancelHookResult>;
+  /** 已切到另一个会话(`session_start` reason=resume 之后)。 */
+  session_switch: Hook<SessionSwitchHookInput>;
+  /** 已分叉出新会话(`session_start` reason=fork 之后)。 */
+  session_fork: Hook<SessionForkHookInput>;
   /** 启动时收集扩展贡献的资源目录(技能)。 */
   resources_discover: Hook<undefined, ResourcesDiscoverHookResult>;
 }
@@ -361,17 +424,38 @@ export function noopExtensionContext(): ExtensionContext {
     switchSession: async () => {},
     model: () => ({}) as never,
     config: {} as never,
+    sessionManager: {
+      getSessionId: () => '',
+      getSessionName: () => '',
+      getEntries: () => [],
+      getHistory: () => [],
+      getDisplayHistory: () => [],
+      listSessions: async () => [],
+    },
+    modelRegistry: {
+      getCurrent: () => ({ provider: '', model: '' }),
+      getProviders: () => [],
+      getModels: () => [],
+      find: () => undefined,
+      capabilities: async () => undefined,
+      probe: async () => [],
+    },
     ui: {
       select: async () => undefined,
       confirm: async () => false,
       input: async () => undefined,
+      editor: async () => undefined,
       custom: async () => undefined,
       setWidget: () => {},
       setHeader: () => {},
       setFooter: () => {},
       setTitle: () => {},
+      setWorkingMessage: () => {},
+      setEditorComponent: () => {},
+      theme: extensionTheme,
       getEditorText: () => '',
       setEditorText: () => {},
+      pasteToEditor: () => {},
       notify: () => {},
     },
   };
@@ -575,17 +659,42 @@ export class HookRegistry {
     return { handled: false, text, images };
   }
 
-  /** 收集全部处理器贡献的技能目录;抛错的跳过。 */
-  async resourcesDiscover(): Promise<{ skillPaths: string[] }> {
+  /** 收集全部处理器贡献的资源目录(技能 / 提示词模板 / 主题);抛错的跳过。 */
+  async resourcesDiscover(): Promise<{ skillPaths: string[]; promptPaths: string[]; themePaths: string[] }> {
     const skillPaths: string[] = [];
+    const promptPaths: string[] = [];
+    const themePaths: string[] = [];
     for (const [handler, ctx] of this.list('resources_discover')) {
       try {
         const result = await handler(undefined, ctx);
         if (result?.skillPaths) skillPaths.push(...result.skillPaths);
+        if (result?.promptPaths) promptPaths.push(...result.promptPaths);
+        if (result?.themePaths) themePaths.push(...result.themePaths);
       } catch (err) {
         this.report('resources_discover', err);
       }
     }
-    return { skillPaths };
+    return { skillPaths, promptPaths, themePaths };
+  }
+
+  /**
+   * `!command` 执行前:串行,`command` 接力改写,第一个给出 `run` 的处理器
+   * 接管执行(后面的处理器仍看得到改写后的命令,但它们的 run 不再采纳)。
+   * 抛错的处理器当没说话。
+   */
+  async userBash(input: UserBashHookInput): Promise<{ command: string; run?: UserBashRunner }> {
+    let command = input.command;
+    let run: UserBashRunner | undefined;
+    for (const [handler, ctx] of this.list('user_bash')) {
+      try {
+        const result = await handler({ ...input, command }, ctx);
+        if (!result) continue;
+        if (result.command !== undefined) command = result.command;
+        if (result.run && !run) run = result.run;
+      } catch (err) {
+        this.report('user_bash', err);
+      }
+    }
+    return { command, run };
   }
 }

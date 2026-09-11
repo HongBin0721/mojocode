@@ -1,15 +1,19 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import type { LanguageModel } from 'ai';
-import { isProviderConfigured, resolveProvider, type ResolvedProvider } from '../config/load.js';
 import {
-  apiKeyFromEnv,
+  isProviderConfigured,
+  isProviderEligible,
+  resolveProvider,
+  type ResolvedProvider,
+} from '../config/load.js';
+import {
   BUILTIN_PROVIDER_IDS,
   isBuiltinProvider,
   normalizeModelId,
   PROVIDER_PRESETS,
 } from '../config/providers.js';
-import type { Config } from '../config/schema.js';
+import type { Config, ProviderConfig } from '../config/schema.js';
 
 /**
  * 为解析后的 provider 构建 AI SDK 语言模型。
@@ -226,36 +230,93 @@ const PROBE_TIMEOUT_MS = 10_000;
  * 当前 provider 永远排第一组,其余按预设顺序 + 自定义条目顺序;解析不出
  * (缺 key、自定义条目没 model)的条目直接跳过——它们本来也无法被切换过去。
  */
+/**
+ * 能切过去的厂商 id,**当前厂商永远排第一**,其余按配置条目顺序 + 预设顺序。
+ * 准入是 config 层的 `isProviderEligible`(显式配置过,或内置厂商的预设 env
+ * 变量扫到了 key)。
+ *
+ * 独立成函数是因为有两个消费方:`/models` 的探测(下面)与扩展的
+ * `ctx.modelRegistry.getProviders()`。"哪些厂商存在、按什么顺序"曾在
+ * bootstrap 里被重写过一遍——共用的谓词挡不住各写一遍的**枚举**。
+ *
+ * `explicit` 收的是"显式配置过"的那批:它们的 key 是用户自己写的,探测被拒
+ * 也留着;仅凭共享 env 变量顺带命中的,探测被拒时整组丢弃(见结果映射处)。
+ */
+export function eligibleProviderIds(
+  config: Config,
+  env: NodeJS.ProcessEnv = process.env,
+): { ids: string[]; explicit: Set<string> } {
+  const ids: string[] = [config.provider];
+  const seen = new Set(ids);
+  const explicit = new Set(ids);
+  const tryAdd = (id: string, override?: ProviderConfig): void => {
+    if (seen.has(id) || !isProviderEligible(id, override, env)) return;
+    seen.add(id);
+    ids.push(id);
+    // "已配置"的判定链住在 config 层(resolveProvider 旁),这里只消费。
+    if (override && isProviderConfigured(id, override, env)) explicit.add(id);
+  };
+  for (const [id, override] of Object.entries(config.providers)) {
+    if (override) tryAdd(id, override);
+  }
+  for (const id of BUILTIN_PROVIDER_IDS) tryAdd(id);
+  return { ids, explicit };
+}
+
+/** 模型表里的一条(预设的 contextWindows / 默认模型,或配置 `providers.<id>.models`)。 */
+export interface KnownModel {
+  provider: string;
+  id: string;
+  label?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
+/**
+ * **不联网**就能知道的模型:预设的 contextWindows 表 + 默认模型打底,配置
+ * `providers.<id>.models` 同 id 覆盖。在线列表走 `listProviderModels`。
+ *
+ * 与 `ensurePresetDefault` 比邻而居是有意的——"这个厂商有哪些模型"的离线
+ * 答案只允许有一处;它曾被抄进 bootstrap 一份,于是 `/models` 的离线兜底与
+ * 扩展的 `ctx.modelRegistry.getModels()` 是两条代码路径。id 一律过
+ * `normalizeModelId`,与 resolveProvider 查 contextWindows 时同一条归一
+ * (GLM 的大小写写法因此不会在这里查不到而在别处查得到)。
+ */
+export function knownProviderModels(config: Config, providerId?: string): KnownModel[] {
+  const ids = providerId
+    ? [providerId]
+    : [...new Set([config.provider, ...Object.keys(config.providers), ...BUILTIN_PROVIDER_IDS])];
+  const out: KnownModel[] = [];
+  for (const id of ids) {
+    const byModel = new Map<string, KnownModel>();
+    if (isBuiltinProvider(id)) {
+      const preset = PROVIDER_PRESETS[id];
+      for (const [modelId, contextWindow] of Object.entries(preset.contextWindows)) {
+        byModel.set(normalizeModelId(id, modelId), { provider: id, id: modelId, contextWindow });
+      }
+      const defaultKey = normalizeModelId(id, preset.defaultModel);
+      if (!byModel.has(defaultKey)) byModel.set(defaultKey, { provider: id, id: preset.defaultModel });
+    }
+    for (const entry of config.providers[id]?.models ?? []) {
+      byModel.set(normalizeModelId(id, entry.id), {
+        provider: id,
+        id: entry.id,
+        ...(entry.label !== undefined ? { label: entry.label } : {}),
+        ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
+        ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+      });
+    }
+    out.push(...byModel.values());
+  }
+  return out;
+}
+
 export async function listProviderModels(
   config: Config,
   options: ListProviderModelsOptions = {},
 ): Promise<ProviderModels[]> {
   const env = options.env ?? process.env;
-  const ids: string[] = [config.provider];
-  const seen = new Set(ids);
-  // 显式配置(当前厂商 / 配置文件条目)与"仅凭预设 env 变量扫进来"的组
-  // 待遇不同:后者的 key 是共享变量顺带命中的,探测被拒时整组丢弃
-  // (见结果映射处的说明)。
-  const explicit = new Set(ids);
-  const tryAdd = (id: string, configured: boolean): void => {
-    if (seen.has(id)) return;
-    // 准入:内置厂商 = 显式配置过或预设 env 变量扫到 key;自定义条目 =
-    // 显式配置过(写了 baseURL,本地端点不需要凭据)。三个集合的簿记
-    // 只写这一份尾巴,两个分支只负责算准入。
-    const eligible = isBuiltinProvider(id)
-      ? configured || apiKeyFromEnv(PROVIDER_PRESETS[id].apiKeyEnv, env) !== undefined
-      : configured;
-    if (!eligible) return;
-    seen.add(id);
-    ids.push(id);
-    if (configured) explicit.add(id);
-  };
-  for (const [id, override] of Object.entries(config.providers)) {
-    if (!override) continue;
-    // "已配置"的判定链住在 config 层(resolveProvider 旁),这里只消费。
-    tryAdd(id, isProviderConfigured(id, override, env));
-  }
-  for (const id of BUILTIN_PROVIDER_IDS) tryAdd(id, false);
+  const { ids, explicit } = eligibleProviderIds(config, env);
 
   // 显式标注 U:catch 分支的 `[]` 会让 flatMap 的类型推断退化成 unknown。
   const resolved: ResolvedProvider[] = ids.flatMap<ResolvedProvider>((id) => {

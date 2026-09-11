@@ -3,11 +3,12 @@
  *
  * 一个包就是一个目录,`package.json` 里可选一段 manifest:
  *
- *   "mojocode": { "extensions": ["extensions", "index.ts"], "skills": ["skills"] }
+ *   "mojocode": { "extensions": ["extensions", "index.ts"], "skills": ["skills"], "prompts": ["prompts"], "themes": ["themes"] }
  *
  * 列表项是相对包根的文件或目录:文件直接当扩展模块加载,目录按扩展目录
  * 的规则扫描(`*.ts`/`*.js`/`<name>/index.ts`)。没有 manifest 时按约定找:
- * `extensions/` 目录、根目录的 `index.{ts,js,mjs}`、`skills/` 目录。
+ * `extensions/` 目录、根目录的 `index.{ts,js,mjs}`、`skills/`、`prompts/`、
+ * `themes/` 目录(与 Pi 的四类包资源一一对应)。
  *
  * 装到哪:全局 `~/.mojocode/packages`,`--local` 时 `<root>/.mojocode/packages`。
  * npm 包装进 `<base>/npm/node_modules/<name>`(那一层有个私有 package.json,
@@ -110,7 +111,14 @@ export interface PackageManifest {
   extensions: string[];
   /** 技能目录(绝对路径)。 */
   skills: string[];
+  /** 提示词模板目录(绝对路径,里面每个 `*.md` 一条 `/name`)。 */
+  prompts: string[];
+  /** 主题目录(绝对路径,里面每个 `<name>.json` 一个主题)。 */
+  themes: string[];
 }
+
+/** manifest 的四类资源键,与 Pi 的包 manifest 同名。 */
+const RESOURCE_KEYS = ['extensions', 'skills', 'prompts', 'themes'] as const;
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -126,10 +134,10 @@ async function exists(file: string): Promise<boolean> {
  * 不存在的路径静默跳过——manifest 是包作者写的,写错不该让别的扩展装不上。
  */
 export async function readPackageManifest(dir: string): Promise<PackageManifest> {
-  let declared: { extensions?: unknown; skills?: unknown } | undefined;
+  let declared: Partial<Record<(typeof RESOURCE_KEYS)[number], unknown>> | undefined;
   try {
     const json = JSON.parse(await fs.readFile(path.join(dir, 'package.json'), 'utf8')) as {
-      mojocode?: { extensions?: unknown; skills?: unknown };
+      mojocode?: Partial<Record<(typeof RESOURCE_KEYS)[number], unknown>>;
     };
     declared = json.mojocode;
   } catch {
@@ -141,18 +149,22 @@ export async function readPackageManifest(dir: string): Promise<PackageManifest>
       Array.isArray(value)
         ? value.filter((v): v is string => typeof v === 'string').map((rel) => path.resolve(dir, rel))
         : [];
-    // 列出来但不存在的静默丢掉(见上)。两列互不相干,一起探。
-    const [extensions, skills] = await Promise.all([
-      keepExisting(resolved(declared.extensions)),
-      keepExisting(resolved(declared.skills)),
-    ]);
-    return { extensions, skills };
+    // 列出来但不存在的静默丢掉(见上)。四列互不相干,一起探。
+    const [extensions, skills, prompts, themes] = await Promise.all(
+      RESOURCE_KEYS.map((key) => keepExisting(resolved(declared![key]))),
+    );
+    return { extensions: extensions!, skills: skills!, prompts: prompts!, themes: themes! };
   }
 
   // 约定路径是**探出来的**,不必再 keepExisting 一遍——原来那趟收尾把每条
   // 路径又 stat 了一次,而它刚刚正是靠 stat 才进的表。
-  const [extensions, skills] = await Promise.all([conventionExtensions(dir), conventionSkills(dir)]);
-  return { extensions, skills };
+  const [extensions, skills, prompts, themes] = await Promise.all([
+    conventionExtensions(dir),
+    conventionDir(dir, 'skills'),
+    conventionDir(dir, 'prompts'),
+    conventionDir(dir, 'themes'),
+  ]);
+  return { extensions, skills, prompts, themes };
 }
 
 async function keepExisting(list: readonly string[]): Promise<string[]> {
@@ -170,10 +182,10 @@ async function conventionExtensions(dir: string): Promise<string[]> {
   return hit ? [path.join(dir, hit)] : [];
 }
 
-/** 没写 manifest 时的技能约定:`skills/` 目录。 */
-async function conventionSkills(dir: string): Promise<string[]> {
-  const skillsDir = path.join(dir, 'skills');
-  return (await exists(skillsDir)) ? [skillsDir] : [];
+/** 没写 manifest 时的资源约定:`skills/` / `prompts/` / `themes/` 目录,有就是它。 */
+async function conventionDir(dir: string, name: 'skills' | 'prompts' | 'themes'): Promise<string[]> {
+  const candidate = path.join(dir, name);
+  return (await exists(candidate)) ? [candidate] : [];
 }
 
 export interface ResolvedPackage {

@@ -4,26 +4,10 @@
  * 原始序列——Pi 的组件习惯直接比对 `data === '\\x1b'` / `'\\r'`。
  */
 
-import { normalizeShortcut, type ExtensionTheme, type ExtensionKey } from '../core/extension-types.js';
+import { normalizeShortcut, type ExtensionKey } from '../core/extension-types.js';
 
-const FG: Record<Parameters<ExtensionTheme['fg']>[0], string> = {
-  accent: '36',
-  dim: '90',
-  error: '31',
-  warn: '33',
-  success: '32',
-  text: '39',
-};
-
-const wrap = (open: string, close: string, text: string): string =>
-  text ? `\x1b[${open}m${text}\x1b[${close}m` : text;
-
-export const extensionTheme: ExtensionTheme = {
-  fg: (name, text) => wrap(FG[name], '39', text),
-  bold: (text) => wrap('1', '22', text),
-  dim: (text) => wrap('2', '22', text),
-  italic: (text) => wrap('3', '23', text),
-};
+/** 主题面的实现住在核心(零依赖,headless 的 ctx.ui.theme 也是它);这里只是 TUI 侧的既有 import 路径。 */
+export { extensionTheme } from '../core/extension-types.js';
 
 /** kit 的 (input, key) → Pi 风格的原始按键序列。可打印字符与粘贴原样。 */
 export function keyToData(input: string, key: ExtensionKey): string {

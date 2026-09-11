@@ -1,4 +1,4 @@
-import { discoverSkills, skillLocations } from '../../skills/discovery.js';
+import { discoverSkills, promptLocations, skillLocations } from '../../skills/discovery.js';
 import { t } from '../../i18n/index.js';
 import type { DoctorCheck } from './types.js';
 import { fileExists } from './util.js';
@@ -40,14 +40,25 @@ export async function skillsChecks(root: string): Promise<DoctorCheck[]> {
   });
 
   // 来源分布:只列真实存在的目录,`~/.claude/skills` 一类的缺席是常态。
+  //
+  // 按 `<kind>:<source>` 计数而不是只按 source:提示词模板与技能共用 source
+  // 名(两者都可能是 `project`),只按 source 分的话项目 prompts 目录里的模板
+  // 会被记到项目 skills 目录名下——数量对得上,归属是错的。
+  const kindOf = (skill: (typeof index.skills)[number]): string =>
+    skill.kind === 'prompt' ? 'prompt' : 'skill';
   const bySource = new Map<string, number>();
   for (const skill of index.skills) {
-    bySource.set(skill.source, (bySource.get(skill.source) ?? 0) + 1);
+    const key = `${kindOf(skill)}:${skill.source}`;
+    bySource.set(key, (bySource.get(key) ?? 0) + 1);
   }
   const sourceLines: string[] = [];
-  for (const location of skillLocations(root)) {
+  const locations = [
+    ...skillLocations(root).map((l) => ({ ...l, kind: 'skill' })),
+    ...promptLocations(root).map((l) => ({ ...l, kind: 'prompt' })),
+  ];
+  for (const location of locations) {
     if (!(await fileExists(location.dir))) continue;
-    sourceLines.push(`${location.dir}: ${bySource.get(location.source) ?? 0}`);
+    sourceLines.push(`${location.dir}: ${bySource.get(`${location.kind}:${location.source}`) ?? 0}`);
   }
   if (sourceLines.length > 0) {
     checks.push({
