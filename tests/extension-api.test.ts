@@ -348,15 +348,19 @@ describe('会话控制、快捷键、编辑框、资源', () => {
     expect(events.at(-1)).toEqual({ type: 'session-changed', reason: 'new', id: session.store.id });
 
     const forked = await api.fork();
-    expect(forked.id).toBe(session.store.id);
+    expect(forked).toEqual({ cancelled: false, id: session.store.id });
+    const forkedId = session.store.id;
     expect(events.at(-1)).toMatchObject({ type: 'session-changed', reason: 'fork' });
 
+    // 钩子否决是回执不是异常(Pi 的 { cancelled }):会话没换、没播报。
     (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = true;
-    await expect(api.fork()).rejects.toThrow(/cancelled/);
+    const idBeforeBlocked = session.store.id;
+    await expect(api.fork()).resolves.toEqual({ cancelled: true });
+    expect(session.store.id).toBe(idBeforeBlocked);
     (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = false;
 
     // session_fork / session_switch 的事后通知带新会话 id。
-    expect((globalThis as { __mojoForked?: string }).__mojoForked).toBe(forked.id);
+    expect((globalThis as { __mojoForked?: string }).__mojoForked).toBe(forkedId);
 
     await api.switchSession(before);
     expect(session.store.id).toBe(before);
@@ -364,6 +368,76 @@ describe('会话控制、快捷键、编辑框、资源', () => {
     expect((globalThis as { __mojoSwitched?: string }).__mojoSwitched).toBe(before);
     await expect(api.switchSession('no-such-session-id')).rejects.toThrow();
     off();
+  });
+});
+
+describe('ctx 控制面(Pi 同形)', () => {
+  it('signal / hasPendingMessages / getSystemPrompt / getContextUsage:空闲时的读数', () => {
+    expect(api.ctx.signal).toBeUndefined();
+    expect(api.ctx.hasPendingMessages()).toBe(false);
+    expect(api.ctx.getSystemPrompt()).toBe(session.agent.systemPrompt);
+    expect(api.ctx.getSystemPrompt().length).toBeGreaterThan(0);
+    expect(api.ctx.getContextUsage()).toEqual(api.getContextUsage());
+  });
+
+  it('withSession:切完会话再调,收到的 ctx 已指向新会话', async () => {
+    const before = session.store.id;
+    const seen: string[] = [];
+    const forked = await api.ctx.fork({
+      withSession: (ctx) => {
+        seen.push(ctx.sessionManager.getSessionId());
+      },
+    });
+    expect(forked).toEqual({ cancelled: false, id: session.store.id });
+    expect(seen).toEqual([session.store.id]);
+    expect(seen[0]).not.toBe(before);
+    await expect(
+      api.ctx.switchSession(before, {
+        withSession: (ctx) => {
+          seen.push(ctx.sessionManager.getSessionId());
+        },
+      }),
+    ).resolves.toEqual({ cancelled: false });
+    expect(seen[1]).toBe(before);
+    // 否决时 withSession 不跑。
+    (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = true;
+    let ran = false;
+    await expect(api.ctx.fork({ withSession: () => void (ran = true) })).resolves.toEqual({ cancelled: true });
+    expect(ran).toBe(false);
+    (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = false;
+  });
+
+  it('shutdown:TUI 挂着走 UiHost.exit,没界面记 shutdownRequested', () => {
+    let exited = 0;
+    session.attachUi({ available: () => true, exit: () => exited++ });
+    expect(session.shutdownRequested).toBe(false);
+    api.ctx.shutdown();
+    expect(exited).toBe(1);
+    expect(session.shutdownRequested).toBe(true);
+    session.attachUi(undefined);
+    // 没有退出回调也不炸(-p,以及 TUI 挂上之前):标记已立,cli.tsx 跳过
+    // 还没开的那一轮,runTui 一帧都不起。
+    api.ctx.shutdown();
+    expect(exited).toBe(1);
+    expect(session.shutdownRequested).toBe(true);
+    // 标记是**留存的**:shutdown 落在界面挂上之前时,下一个挂上来的宿主要被
+    // 立刻退掉,否则界面照常起来、扩展的「退出」无声丢失。
+    let lateExits = 0;
+    session.attachUi({ available: () => true, exit: () => lateExits++ });
+    expect(lateExits).toBe(1);
+    session.attachUi(undefined);
+    // 注意:这之后 shutdownRequested 对本文件余下的用例一直为真(没有复位的
+    // 口子)。它们挂的假宿主都不带 exit,`host.exit?.()` 是空操作。
+  });
+
+  it('compact(options):onComplete 在「无事发生」时也回调;与 api.compact 同一份', async () => {
+    // 历史太短:compactMessages 提前返回、不打模型——正好考回调分支不联网。
+    let completed = 0;
+    await expect(
+      api.ctx.compact({ customInstructions: 'keep the file list', onComplete: () => completed++ }),
+    ).resolves.toBeUndefined();
+    expect(completed).toBe(1);
+    expect(api.compact).toBe(api.ctx.compact);
   });
 });
 
@@ -600,5 +674,12 @@ describe('自定义消息与 /reload', () => {
     (globalThis as { __mojoBlockFork?: boolean }).__mojoBlockFork = false;
     api = (globalThis as { __mojoTestApi?: ExtensionAPI }).__mojoTestApi!;
     expect(api.getCommands()).toContain('whoami2');
+  });
+
+  it('并发调用共享同一次:ctx.reload 谁都能调,不该各卸各装', async () => {
+    // `/reload` 命令是串行派发的,但 ctx.reload 没有这层保护:各起一轮的话,
+    // 后进来的会看到已被清空的 diskExtensionIds——什么都不卸却又并发装一遍。
+    const results = await Promise.all([session.reloadExtensions(), session.reloadExtensions()]);
+    expect(results[0]).toBe(results[1]);
   });
 });

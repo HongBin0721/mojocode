@@ -279,12 +279,22 @@ export function App(props: Props): JSX.Element {
   // 按键回调一次)要为一个几乎没人读的镜像在最热的输入路径上多跑一个
   // 响应式节点。
   const editor: EditorRef = {};
+  /**
+   * 退出:双 ctrl+c 与扩展的 `ctx.shutdown()` 同一条路。必须先清掉待触发的
+   * 定时器:cli.tsx 只设置 process.exitCode 而不调用 process.exit(),挂着的
+   * 定时器会让事件循环多活 2 秒才退出。
+   */
+  const requestExit = (): void => {
+    if (ctrlCTimer) clearTimeout(ctrlCTimer);
+    exit();
+  };
   session.attachUi({
     available: () => true,
     getEditorText: () => editor.read?.() ?? '',
     // 缺省输入框走 prefill(它自己在下一帧消费);扩展编辑器挂着时直接写它。
     setEditorText: (text) => (editor.write ? editor.write(text) : setPrefill({ text })),
     pasteToEditor: (text) => editor.insert?.(text),
+    exit: requestExit,
   });
   onCleanup(() => session.attachUi(undefined));
   const uiCustom = createMemo((): UiCustomRequest | undefined => {
@@ -360,10 +370,7 @@ export function App(props: Props): JSX.Element {
     }
     if (key.ctrl && input === 'c') {
       if (ctrlCArmed()) {
-        // 必须清掉待触发的定时器:cli.tsx 只设置 process.exitCode 而不调用
-        // process.exit(),挂着的定时器会让事件循环多活 2 秒才退出。
-        if (ctrlCTimer) clearTimeout(ctrlCTimer);
-        exit();
+        requestExit();
       } else {
         setCtrlCArmed(true);
         ctrlCTimer = setTimeout(() => setCtrlCArmed(false), 2000);
@@ -528,7 +535,9 @@ export function App(props: Props): JSX.Element {
 
   const cmdCtx: CommandContext = {
     session,
-    exit,
+    // `/exit`、`/quit` 与双 ctrl+c、`ctx.shutdown()` 走同一个出口:退出前要做
+    // 什么(清定时器等)只写在 requestExit 一处。
+    exit: requestExit,
     push,
     setItems,
     setUsage,

@@ -316,6 +316,13 @@ export interface UiHost {
   setEditorText?(text: string): void;
   /** 在光标处插入(Pi 的 pasteToEditor);缺省输入框与扩展编辑器都认。 */
   pasteToEditor?(text: string): void;
+  /**
+   * 退出界面(`ctx.shutdown`):与双 ctrl+c 同一条路——卸载 App、转储时间线、
+   * CLI 收尾。与另外三个可选成员不同,这一个**没有可退化的缺省**:不实现就等于
+   * `ctx.shutdown()` 在这个宿主上无声失效。可选只是为了测试里的假宿主能只写
+   * `{ available }`;真正在渲染界面的宿主都该实现它。
+   */
+  exit?(): void;
 }
 
 /** 扩展经 sendMessage 放进对话的一条自定义消息(时间线与回放都用它)。 */

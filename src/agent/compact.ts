@@ -118,6 +118,12 @@ export async function compactMessages(
    * 据此区分「真的去请求模型了」和「无事发生」。
    */
   onProgress?: (chars: number) => void,
+  /**
+   * 附加给摘要模型的指令(Pi 的 `compact({ customInstructions })`):拼在
+   * 缺省指令之后,不替换——缺省那几条是「另一个实例能接着干」的底线,
+   * 扩展只该往上加侧重点(保留某个决策、只记文件清单之类)。
+   */
+  customInstructions?: string,
 ): Promise<CompactionResult> {
   if (messages.length <= keepRecent + 2) {
     return { messages, removedMessages: 0, summaryChars: 0 };
@@ -138,9 +144,12 @@ export async function compactMessages(
   // 失败语义——压缩失败必须让调用方看得见。
   let streamError: unknown;
   onProgress?.(0);
+  const instruction = customInstructions?.trim()
+    ? `${SUMMARY_INSTRUCTION}\n\nAdditional instructions for this summary:\n${customInstructions.trim()}`
+    : SUMMARY_INSTRUCTION;
   const result = streamText({
     model,
-    messages: [...toSummarize, { role: 'user', content: SUMMARY_INSTRUCTION }],
+    messages: [...toSummarize, { role: 'user', content: instruction }],
     onError: ({ error }) => {
       streamError = error;
     },

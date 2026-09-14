@@ -84,7 +84,7 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 
 ## ctx:处理器的第二个参数
 
-钩子与命令处理器都收 `ctx`(`api.ctx` 也是它),与 Pi 的 `ctx` 同形:`cwd`、`hasUI`、`mode`(`'tui' | 'print'`)、`isIdle()`、`abort()`、`waitForIdle()`、`newSession()`、`fork()`、`switchSession(id)`、`model(id?)`、`config`、`sessionManager`、`modelRegistry`,以及与界面打交道的 `ui`。`sessionManager` 是当前会话的**只读**视图(`getSessionId` / `getSessionName` / `getEntries(type?)` / `getHistory` / `getDisplayHistory` / `listSessions`),写入走 API 上的同名成员;`modelRegistry` 是模型表(`getCurrent` / `getProviders` / `getModels(providerId?)` / `find` 同步读配置与预设里已知的模型,`capabilities(provider, model)` 查 models.dev 目录,`probe()` 在线探测,与 `/models` 同一条路)。`isIdle()` 与 `waitForIdle()` 是同一个判据:链条与压缩都不在跑才算空闲——压缩期间往历史里塞消息会被整体替换的历史吞掉。**`ctx` 是每个扩展自己的一份**,`ctx.ui.setWidget` 之类记在这个扩展名下,`/reload` 才撤得干净:
+钩子与命令处理器都收 `ctx`(`api.ctx` 也是它),与 Pi 的 `ctx` 同形:`cwd`、`hasUI`、`mode`(`'tui' | 'print'`)、`isIdle()`、`abort()`、`signal`(正在流的这一轮的 AbortSignal,没有流在跑时 `undefined`——两轮之间也是)、`hasPendingMessages()`、`shutdown()`(优雅退出:中断当前轮,TUI 走与双 ctrl+c 同一条退出路径,`-p` 下由 CLI 正常收尾、还没开跑的那一轮不再开)、`getSystemPrompt()`(核心组装的原文;`before_agent_start` 的改写只在开流那一刻存在)、`getContextUsage()`、`compact({ customInstructions?, onComplete?, onError? })`(指令拼在缺省摘要指令之后;给了 `onError` 就不再 reject)、`waitForIdle()`、`newSession(options?)`、`fork(options?)`、`switchSession(id, options?)`、`reload()`(与 `/reload` 同一条路;在自己的处理器里调它会把自己卸掉,处理器余下的代码跑在旧闭包里)、`model(id?)`、`config`、`sessionManager`、`modelRegistry`,以及与界面打交道的 `ui`。三个会话操作返回 `{ cancelled }`(`fork` 成功时另带 `id`):`session_before_switch` / `session_before_fork` 的否决是回执不是异常,会话不存在之类的真错误照常抛;`options.withSession(ctx)` 在新会话就位后被调,收到的仍是这个 `ctx`——它按引用读当前会话,切完就指向新的那一段。`sessionManager` 是当前会话的**只读**视图(`getSessionId` / `getSessionName` / `getEntries(type?)` / `getHistory` / `getDisplayHistory` / `listSessions`),写入走 API 上的同名成员;`modelRegistry` 是模型表(`getCurrent` / `getProviders` / `getModels(providerId?)` / `find` 同步读配置与预设里已知的模型,`capabilities(provider, model)` 查 models.dev 目录,`probe()` 在线探测,与 `/models` 同一条路)。`isIdle()` 与 `waitForIdle()` 是同一个判据:链条与压缩都不在跑才算空闲——压缩期间往历史里塞消息会被整体替换的历史吞掉。**`ctx` 是每个扩展自己的一份**,`ctx.ui.setWidget` 之类记在这个扩展名下,`/reload` 才撤得干净:
 
 | 成员 | 说明 |
 |---|---|
@@ -100,9 +100,9 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `ui.setEditorComponent((host, submit) => component)` | 顶替缺省输入框:组件自己画、自己收键,`submit(text)` 与在缺省输入框回车同一条路(斜杠命令、`!` 命令、@ 引用照常);组件可选实现 `getText` / `setText` / `insertText`,`getEditorText` / `setEditorText` / `pasteToEditor` 经它们落地(没实现 `insertText` 时粘贴退化成追加到末尾);`undefined` 恢复 |
 | `ui.theme` | 给行上色的主题面(`fg(name, text)` / `bold` / `dim` / `italic`),与组件的 `host.theme` 同一份,headless 下也有 |
 | `ui.getEditorText()` / `ui.setEditorText(text)` / `ui.pasteToEditor(text)` | 读 / 写输入框草稿;在光标处插入 |
+| `ui.notify(message, level?)` | 与 `api.notify` 同一条路 |
 
 挂着扩展编辑器时,**一轮正跑着的 `esc` 永远是「中断」,不转发给组件**——全交给组件的话,一个不处理 `esc` 的编辑器扩展会让用户只剩双 `ctrl+c`,而那是退出整个程序。空闲时 `esc` 照常归组件(`esc` `esc` 回退选择器因此在扩展编辑器挂着时不可用,那是「键盘归组件」这条契约的应有之义)。
-| `ui.notify(message, level?)` | 与 `api.notify` 同一条路 |
 
 两个现成的组件工厂免得每个扩展重写光标与退格:`selectList({ items, onSelect, onCancel?, title?, window? })` 与 `textInput({ placeholder?, initial?, onSubmit, onCancel? })`,都返回可直接交给 `ui.custom` / `setWidget` 的工厂(在 `ui.custom` 里把 `done` 接到 `onSelect` / `onSubmit` 上)。
 
@@ -123,7 +123,7 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `registerShortcut(key, { description, handler })` | 全局快捷键,`key` 形如 `ctrl+g` / `meta+shift+k`,必须带 ctrl 或 meta;TUI 自己占着的 ctrl+c / ctrl+t / ctrl+o / ctrl+r **注册即报错**;覆盖层打开时不派发。返回注销函数 |
 | `sendMessage({ customType, content, display? }, { triggerTurn? })` | 放一条带类型的消息进对话(Pi 的 sendMessage):`triggerTurn` 作为新一轮开跑;否则运行中注入为引导、空闲时并入历史不开轮。历史里是 `[extension message: <type>]` 信封,回放认得 |
 | `registerMessageRenderer(customType, (message, theme) => lines)` | 自定义消息在时间线里的画法;没注册就画 `[type]` 标签加正文 |
-| `mode` / `waitForIdle()` / `newSession()` / `fork()` / `switchSession(id)` | 同 ctx 的同名成员 |
+| `mode` / `waitForIdle()` / `newSession(options?)` / `fork(options?)` / `switchSession(id, options?)` | 同 ctx 的同名成员;其余控制面(`signal` / `shutdown` / `reload` / `getSystemPrompt` / `hasPendingMessages`)只在 `ctx` 上,与 Pi 一致 |
 | `registerTool(name, (scope) => Tool \| undefined, { promptSnippet?, promptGuidelines?, renderCall?, renderResult? }?)` / `unregisterTool(name)` | 模型可调用的工具。传工厂而不是工具本身,按 `scope.subagent` / `scope.mode`(`general` / `explore`)自己决定给不给。内置工具名不可覆盖。带自述的工具由宿主汇成系统提示词的「Extension tools」一节,与实际注册的工具永远一致 |
 | `registerTool({ name, description, parameters, execute, promptSnippet?, promptGuidelines?, renderCall?, renderResult?, scope? })` | Pi 形状的工具定义:`parameters` 是 JSON Schema(TypeBox 的 schema 直接可用),`execute(toolCallId, params, signal, onUpdate, ctx)` 同签名,返回 Pi 的 `{ content: [{ type: 'text', text }], details? }`——模型只看 `content` 拼成的文本,**整个对象**(含 `details`)交给 `renderResult` 与 `tool_result` 钩子,`details` 不进持久历史;`renderCall` / `renderResult` 返回字符串行 |
 | `getAllTools()` / `getActiveTools()` / `setActiveTools(names \| undefined)` | 主工具集里的全部工具名;当前交给模型的;只把这些交给模型(主 agent 与子 agent 都按此过滤),其余仍注册着 |
@@ -136,7 +136,7 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `followUp(text, options?)` | 当前链条收尾后作为新一轮开跑,空闲时立即开跑 |
 | `isRunning()` / `abort()` | 忙碌状态;中断 |
 | `history()` | 模型历史(压缩后是摘要加尾巴) |
-| `compact()` / `getContextUsage()` | 手动压缩(与 `/compact` 同一条路);上下文占用 `{ used, window, percent }` |
+| `compact(options?)` / `getContextUsage()` | 同 ctx:手动压缩(与 `/compact` 同一条路,`customInstructions` 拼在缺省摘要指令之后,并发调用共享同一次);上下文占用 `{ used, window, percent }` |
 | `appendEntry(type, data)` / `entries(type)` | 会话记录里的自定义记录:随会话分叉、随 `/resume` 读回。`session_start` 里从这里恢复自己的状态 |
 | `getSessionName()` / `setSessionName(name)` | 会话标题(会话列表里那一行) |
 | `config` | 会话配置,按引用 |
@@ -161,12 +161,12 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 
 | Pi 有、这里没有 | 这里的对应 |
 |---|---|
-| `registerEntryRenderer` / `registerMarkdownTransformer` | 自定义消息用 `registerMessageRenderer`,工具项用 `renderCall` / `renderResult`,其余用 `setWidget` / `setState` |
-| 会话树:`fork(entryId)`、`navigateTree`、`setLabel`、`session_before_tree` | 会话是线性 JSONL,`/fork` 整体复制 |
+| 会话树:`fork(entryId, { position })`、`navigateTree`、`setLabel`、`session_before_tree` / `session_tree` | 会话是线性 JSONL:`fork()` 只能整体分叉(仍返回 Pi 形状的 `{ cancelled }`,成功另带 `id`),没有 entry 可指 |
 | `registerProvider`、`models.json` | provider 由配置层定义(`providers.<id>`),请求级改写用 `before_provider_request`;`ctx.modelRegistry` 只读 |
-| `project_trust` | 没有权限系统(用户拍板,与 Pi 一致) |
 | 裸 `--my-flag` | `-X my-flag`(commander 对未声明选项只能整体放行,见 `src/extensions/flags.ts`) |
 | pi-tui 的组件类(`Container`、`Text`、`SelectList`…) | 组件只需 `render(width)` + `handleInput`,自己拼行;`host.theme` / `ui.theme` 给颜色 |
-| `ctx.sessionManager` 的写口、裸 `SessionManager` 对象 | 只读视图;写入走 `appendEntry` / `setSessionName` / `newSession` / `fork` / `switchSession` |
+| `ctx.sessionManager` 的写口、`newSession({ setup(sessionManager) })` 里的可写 `SessionManager` | 只读视图;写入走 `appendEntry` / `setSessionName`,新会话就位后的初始化放进 `withSession(ctx)` |
+
+Pi 0.73 自己已经删掉的 `registerEntryRenderer` / `registerMarkdownTransformer` / `project_trust` 不在此列——两边都没有。
 
 Pi 生态的扩展**不能**原样拿来跑:它们从 `@mariozechner/pi-coding-agent` 导入类型、用 pi-tui 的类拼界面。形状一致,改 import、把 pi-tui 的组件换成自己拼行即可。

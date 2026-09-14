@@ -13,6 +13,8 @@ import {
   type ExtensionContext,
   type ExtensionFlagOptions,
   type ExtensionStatusEntry,
+  type CompactOptions,
+  type ExtensionContextUsage,
   type ExtensionCommandOption,
   type ExtensionToolDefinition,
   type ExtensionToolFactory,
@@ -46,7 +48,7 @@ import { createViewImageTool } from '../tools/view-image.js';
 import type { Config, ReasoningEffort } from '../config/schema.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus } from '../core/events.js';
-import { errorMessage } from '../core/errors.js';
+import { errorMessage, toError } from '../core/errors.js';
 import { HookRegistry } from '../core/hooks.js';
 import {
   createModel,
@@ -202,6 +204,12 @@ export interface Session {
   readonly messageRenderers: ReadonlyMap<string, MessageRenderer>;
   /** `/reload`:卸载全部磁盘扩展、换一代模块缓存、重新装载。一方扩展不动。 */
   reloadExtensions: () => Promise<{ loaded: string[]; failed: string[] }>;
+  /**
+   * 有扩展调过 `ctx.shutdown()`。TUI 下 shutdown 直接走 UiHost 的退出回调,
+   * 用不上它;`-p` 下没有界面可退,靠中断当前轮让 CLI 正常收尾,而还没开
+   * 跑的那一轮(setup / session_start 期间就 shutdown)要 CLI 看这个标记跳过。
+   */
+  readonly shutdownRequested: boolean;
   /**
    * 用户在输入框敲 `!<command>`(Pi 的 user bash):先过 `user_bash` 钩子
    * (改写 / 接管),再在工作区跑一条 shell 命令,输出以 `user_bash` 类型的
@@ -397,6 +405,52 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    */
   const isIdle = (): boolean => !agent.isRunning && !agent.isCompacting;
   const waitForIdle = (): Promise<void> => agent.whenIdle();
+  const contextUsage = (): ExtensionContextUsage => {
+    const { used, window } = agent.contextUsage;
+    return { used, window, percent: window > 0 ? (used / window) * 100 : 0 };
+  };
+  /**
+   * `ctx.compact` / `api.compact` 共用:Pi 的 onComplete / onError 回调与我们
+   * 的 promise 两种写法都认。给了 onError 就不再 reject——Pi 的 compact 是
+   * fire-and-forget,照 Pi 写法的扩展不会 await,reject 只会变成一条
+   * unhandled rejection。
+   */
+  const compactImpl = async (options?: CompactOptions): Promise<void> => {
+    try {
+      await agent.compact('manual', { customInstructions: options?.customInstructions });
+    } catch (err) {
+      if (!options?.onError) throw err;
+      options.onError(toError(err));
+      return;
+    }
+    // onComplete 在 try 之外:它自己抛错不该被当成"压缩失败"喂给 onError。
+    options?.onComplete?.();
+  };
+  /**
+   * `ctx.shutdown()`:TUI 挂着就走它的退出回调(与双 ctrl+c 同一条路);
+   * 没有界面(`-p`)时只能中断当前轮、记一个标记,让 CLI 正常收尾。两种情形
+   * 都先 abort:退出回调会卸载 App,而正在流的一轮不该拖着渲染器多活。
+   */
+  let shutdownRequested = false;
+  const shutdown = (): void => {
+    shutdownRequested = true;
+    agent.abort();
+    uiHost?.exit?.();
+  };
+  /**
+   * 会话操作被 `session_before_*` 钩子否决时抛的错:UI 的命令路径照旧当失败
+   * 提示,扩展的 ctx 路径把它认出来变成 `{ cancelled: true }`——取消是钩子的
+   * 正常结局,Pi 的形状也是回执而不是异常。
+   */
+  class SessionOperationCancelled extends Error {}
+  const unlessCancelled = async <T>(operation: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await operation();
+    } catch (err) {
+      if (err instanceof SessionOperationCancelled) return undefined;
+      throw err;
+    }
+  };
 
   /**
    * 一个扩展的 ctx 与 ui(Pi 同形)。**每个扩展一份,由这一个工厂建**:
@@ -476,7 +530,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       },
       notify: (message, level = 'info') => bus.emit({ type: 'notice', level, message }),
     };
-    return {
+    const ctx: ExtensionContext = {
       cwd: root,
       get hasUI() {
         return uiAvailable();
@@ -484,13 +538,40 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       mode: options.mode ?? 'tui',
       isIdle,
       abort: () => agent.abort(),
-      waitForIdle,
-      newSession: async () => {
-        await newSessionImpl();
+      get signal() {
+        return agent.signal;
       },
-      fork: async () => ({ id: (await forkSessionImpl()).id }),
-      switchSession: async (idOrPrefix) => {
-        await resumeSessionImpl(idOrPrefix);
+      hasPendingMessages: () => agent.hasPendingMessages,
+      shutdown,
+      getSystemPrompt: () => agent.systemPrompt,
+      getContextUsage: contextUsage,
+      compact: compactImpl,
+      waitForIdle,
+      // 三个会话操作:`withSession` 收到的就是这个 ctx——它按引用读当前会话
+      // (store / agent 都是可变绑定),切完自然指向新的那一段。
+      newSession: async (opts) => {
+        await newSessionImpl();
+        await opts?.withSession?.(ctx);
+        return { cancelled: false };
+      },
+      // `=== undefined` 而不是 `!store`:兑现值是 SessionStore,永不为假,
+      // 靠真值判断读起来像是在防一个不存在的情况。undefined 才是"被否决"。
+      fork: async (opts) => {
+        const forked = await unlessCancelled(forkSessionImpl);
+        if (forked === undefined) return { cancelled: true };
+        await opts?.withSession?.(ctx);
+        return { cancelled: false, id: forked.id };
+      },
+      switchSession: async (idOrPrefix, opts) => {
+        const switched = await unlessCancelled(() => resumeSessionImpl(idOrPrefix));
+        if (switched === undefined) return { cancelled: true };
+        await opts?.withSession?.(ctx);
+        return { cancelled: false };
+      },
+      // 装了什么、哪个失败了不交回扩展:Pi 的签名就是 `reload(): Promise<void>`,
+      // 失败照旧经 notice 呈现(与 `/reload` 同一条路)。
+      reload: async () => {
+        await reloadExtensions();
       },
       model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
       config,
@@ -517,6 +598,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       },
       ui,
     };
+    return ctx;
   };
   /** 扩展注册的快捷键(normalizeShortcut 后的键 → 处理器)。 */
   const shortcuts = new Map<
@@ -1161,11 +1243,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       isRunning: () => agent.isRunning,
       abort: () => agent.abort(),
       history: () => agent.history,
-      compact: () => agent.compact(),
-      getContextUsage: () => {
-        const { used, window } = agent.contextUsage;
-        return { used, window, percent: window > 0 ? (used / window) * 100 : 0 };
-      },
+      compact: compactImpl,
+      getContextUsage: contextUsage,
       // store 是可变绑定(/new、/resume 换掉它),闭包现读才写进当前会话。
       appendEntry: (type, data) => store.saveCustom(type, data),
       entries: (type) => store.custom(type),
@@ -1268,7 +1347,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    * `/reload`:只动磁盘扩展——逐个撤销注册、换一代模块缓存、重新发现与装载。
    * 一方扩展不动(它们是代码库的一部分,改了就该重启)。失败的照旧变提示。
    */
-  const reloadExtensions = async (): Promise<{ loaded: string[]; failed: string[] }> => {
+  let reloadInFlight: Promise<{ loaded: string[]; failed: string[] }> | undefined;
+  const reloadExtensions = (): Promise<{ loaded: string[]; failed: string[] }> => {
+    // 并发调用共享同一次(与 compactionInFlight 同款)。`/reload` 命令是串行
+    // 派发的,但 `ctx.reload()` 谁都能调:两个扩展在同一个 session_start 里
+    // 各调一次的话,后进来的会看到已经被前一次清空的 diskExtensionIds——什么
+    // 都不卸、却又 bump 一次代数再并发装一遍,于是一半扩展以 id 撞车失败、
+    // 另一半挂在过期代数的 jiti 实例上。
+    reloadInFlight ??= doReload().finally(() => {
+      reloadInFlight = undefined;
+    });
+    return reloadInFlight;
+  };
+  const doReload = async (): Promise<{ loaded: string[]; failed: string[] }> => {
     for (const id of [...diskExtensionIds]) {
       await unloadExtension(id);
       loadedIds.delete(id);
@@ -1315,7 +1406,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const resumeSessionImpl = async (idOrPrefix: string): Promise<SessionStore> => {
     // 扩展可取消(session_before_switch);取消以错误呈现,调用方按失败提示。
     if ((await hooks.cancelable('session_before_switch', { id: idOrPrefix })).cancel) {
-      throw new Error('Session switch cancelled by an extension.');
+      throw new SessionOperationCancelled('Session switch cancelled by an extension.');
     }
     const id = await SessionStore.resolveId(idOrPrefix, { root });
     const opened = await SessionStore.open(id);
@@ -1335,7 +1426,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
   const forkSessionImpl = async (): Promise<SessionStore> => {
     if ((await hooks.cancelable('session_before_fork', undefined)).cancel) {
-      throw new Error('Session fork cancelled by an extension.');
+      throw new SessionOperationCancelled('Session fork cancelled by an extension.');
     }
     // 与 --fork-session 同一条路:eager 拷贝进新文件,源会话从此不再被写。
     // 内存里的历史一概不动——分叉的意义就是"一切照旧,换个 id"。
@@ -1602,6 +1693,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     answerUi,
     attachUi: (host) => {
       uiHost = host;
+      // shutdown 是**留存的状态**,不是一次性的投递:`ctx.shutdown()` 若落在
+      // 界面挂上之前(扩展 setup 里起的定时器、没 await 的 MCP 连接回调),
+      // 当时没有 uiHost 可退,runTui 那次检查也早过去了——不在这里补投就会
+      // 静悄悄地丢掉,界面照常起来。
+      if (host && shutdownRequested) host.exit?.();
     },
     runShortcut: (key) => {
       // 常态是一个扩展快捷键都没注册:早退,别为每次 ctrl/meta 按键白算一遍。
@@ -1636,6 +1732,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return messageRenderers;
     },
     reloadExtensions,
+    get shutdownRequested() {
+      return shutdownRequested;
+    },
     runUserBash,
     themeDirs,
     startSimplify,

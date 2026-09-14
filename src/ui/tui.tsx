@@ -19,6 +19,9 @@ import { t } from '../i18n/index.js';
 
 /** 主 TUI:渲染 App,退出后把时间线 dump 回主屏 scrollback。 */
 export async function runTui(session: SessionHandle): Promise<void> {
+  // 装载期就 shutdown 了(扩展在 setup / session_start 里判定跑不下去):那时
+  // 还没有 UiHost 可退,`ctx.shutdown` 只立了标记。界面一帧都不该起。
+  if (session.shutdownRequested) return;
   const itemsRef: { current: TimelineItem[] } = { current: [] };
   // 主题在 render 之前就地换色(theme-loader.ts 说明了为什么只换这一次)。
   // 找不到 / 解析失败不拦启动;提示要等 App 挂上 bus 之后再发,不然没人听见。

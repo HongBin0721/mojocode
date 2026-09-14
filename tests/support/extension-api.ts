@@ -16,7 +16,6 @@ import {
   type ExtensionToolFactory,
 } from '../../src/core/extension.js';
 import type { SessionCustomRecord } from '../../src/session/store.js';
-import type { Config } from '../../src/config/schema.js';
 import { HookRegistry, noopExtensionContext } from '../../src/core/hooks.js';
 
 export function fakeExtensionApi(overrides: Partial<ExtensionAPI> = {}): ExtensionAPI {
@@ -31,10 +30,13 @@ export function fakeExtensionApi(overrides: Partial<ExtensionAPI> = {}): Extensi
     hasUI: false,
     ctx,
     mode: 'print',
-    waitForIdle: async () => {},
-    newSession: async () => {},
-    fork: async () => ({ id: '' }),
-    switchSession: async () => {},
+    // 与 ctx 同名的成员一律**转交给 ctx**(production 也是这么接的,见
+    // bootstrap 的 `waitForIdle: extCtx.waitForIdle`):各写一份空实现的话,
+    // 每次改这些成员的形状都要在 noopExtensionContext 与这里逐字改两遍。
+    waitForIdle: ctx.waitForIdle,
+    newSession: ctx.newSession,
+    fork: ctx.fork,
+    switchSession: ctx.switchSession,
     registerCommand: () => {},
     getCommands: () => [],
     registerShortcut: () => () => {},
@@ -54,16 +56,16 @@ export function fakeExtensionApi(overrides: Partial<ExtensionAPI> = {}): Extensi
     run: async () => {},
     followUp: () => {},
     isRunning: () => false,
-    abort: () => {},
+    abort: ctx.abort,
     history: () => [],
-    compact: async () => {},
-    getContextUsage: () => ({ used: 0, window: 0, percent: 0 }),
+    compact: ctx.compact,
+    getContextUsage: ctx.getContextUsage,
     appendEntry: async () => {},
     entries: () => [],
     getSessionName: () => '',
     setSessionName: async () => {},
-    config: {} as Config,
-    model: () => ({}) as never,
+    config: ctx.config,
+    model: ctx.model,
     getModel: () => ({ provider: 'test', model: 'test-model' }),
     setModel: async () => {},
     getThinkingLevel: () => 'auto',

@@ -132,5 +132,12 @@ extension: a `tool_call` hook returning `{ block: true, reason }` vetoes; to ask
   wrap-safety margin (`WIDTH_SAFETY`) and truncate by display width (`truncateWidth`).
 - Every extension gets its own `ctx` whose `hasUI` is a getter — never `{ ...ctx }` it.
   Hook/command/shortcut registrations carry that ctx so `/reload` can undo them.
+- `ctx`'s control surface mirrors Pi and lives on ctx only (the API does not mirror it):
+  `signal` is `Agent.signal` (undefined between turns — deliberately not the same test as
+  `isIdle`), `shutdown()` aborts then calls `UiHost.exit` (TUI shares `requestExit` with
+  double ctrl+c; under `-p` it sets `Session.shutdownRequested` so cli.tsx skips a turn
+  that has not started), `compact(options)` shares `compactImpl` with `api.compact`
+  (with `onError` given it never rejects — Pi's compact is fire-and-forget). Session
+  operations resolve to `{ cancelled }` on the ctx path; the UI command path still throws.
 - Core tests live in `tests/*.test.ts` mirroring the module under test on the Node lane;
   UI tests live in `tests/ui/` on the Bun lane with the `tests/support/otui.tsx` harness.

@@ -527,6 +527,15 @@ async function runMain(flags: MainFlags): Promise<void> {
       stream: process.stdout,
       errStream: process.stderr,
     });
+    // 扩展在 setup / session_start 里就 shutdown 了(判定自己跑不下去):这里
+    // 一次挡掉整条 `-p` 路,后面每个分支不必各记一次——顺带也不白跑 @ 引用的
+    // 展开(真实文件 IO,还会为一条永远发不出去的提示词发 attachSkipped 警告)。
+    // 位置在 renderHeadless 之后:装载失败的 startup notices 仍要打给用户。
+    if (session.shutdownRequested) {
+      await session.dispose();
+      process.stdout.write('\n');
+      return;
+    }
     // `-p "/init"` 与 TUI 的 /init 对齐:替换为完整指令。
     const isInit = flags.print!.trim() === '/init';
     // `-p "/技能名 args"` 与 TUI 的斜杠技能调用对齐:runSkill 负责激活、

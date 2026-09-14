@@ -131,6 +131,13 @@ export interface SessionHandle {
   readonly messageRenderers: ReadonlyMap<string, MessageRenderer>;
   /** `/reload`:重载磁盘扩展。 */
   reloadExtensions(): Promise<{ loaded: string[]; failed: string[] }>;
+  /**
+   * 扩展在界面挂上之前就 `ctx.shutdown()` 了(setup / session_start 里判定
+   * 配置不可用之类)。`runTui` 在 render 之前看它:此刻还没有 UiHost 可退,
+   * 不看的话整个界面照常起来,与「shutdown 就是退出」的承诺相反。
+   * 可选:UI 测试的假 session 不必造。
+   */
+  readonly shutdownRequested?: boolean;
   /** 输入框里的 `!command`:过 `user_bash` 钩子、在工作区跑、输出并入历史不开轮。 */
   runUserBash(command: string): Promise<void>;
   /** 包与扩展贡献的主题目录;TUI 起来前按配置 `theme` 查。可选:UI 测试的假 session 不必造。 */

@@ -377,6 +377,30 @@ export class Agent {
   }
 
   /**
+   * 正在流的这一轮的 AbortSignal(Pi 的 ctx.signal):扩展拿它把自己在飞的
+   * 请求跟着一起掐掉。两轮之间(turn_end 钩子期间)controller 已清,这里是
+   * undefined——那时 isRunning 仍为真,两者刻意不同判据:signal 如实反映
+   * 「此刻有没有一个流可以取消」。
+   */
+  get signal(): AbortSignal | undefined {
+    return this.controller?.signal;
+  }
+
+  /** 有没有排队等着进对话的消息:轮内引导与轮后续跑都算(Pi 的 hasPendingMessages)。 */
+  get hasPendingMessages(): boolean {
+    return this.pendingGuidance.length > 0 || this.followUps.length > 0;
+  }
+
+  /**
+   * 核心组装的系统提示词(Pi 的 ctx.getSystemPrompt)。给出的是
+   * `options.systemPrompt` 那份原文:`before_agent_start` 改写后的版本只在
+   * 开流那一刻存在(resolveSystemPrompt),不是一个可以随时读的状态。
+   */
+  get systemPrompt(): string {
+    return this.options.systemPrompt;
+  }
+
+  /**
    * 排队一条轮后消息:当前这一轮完全收尾(finally 已跑完、turn_end 钩子已
    * 跑完)后作为**新的一轮**开跑——有自己的 turn-start / turn-end,进时间线
    * 与历史。与 inject 的区别:inject 把消息塞进正在跑的这一轮里。空闲时
@@ -441,9 +465,13 @@ export class Agent {
     });
   }
 
-  /** 手动触发压缩,例如来自 `/compact` 命令。并发调用共享同一次压缩。 */
-  compact(reason: 'manual' | 'auto' = 'manual'): Promise<void> {
-    this.compactionInFlight ??= this.doCompact(reason).finally(() => {
+  /**
+   * 手动触发压缩,例如来自 `/compact` 命令。并发调用共享同一次压缩——后到的
+   * `customInstructions` 因此搭不上已经在飞的那一次,调用方要独占一次就先
+   * `whenIdle()`。
+   */
+  compact(reason: 'manual' | 'auto' = 'manual', options?: { customInstructions?: string }): Promise<void> {
+    this.compactionInFlight ??= this.doCompact(reason, options?.customInstructions).finally(() => {
       this.compactionInFlight = undefined;
     });
     return this.compactionInFlight;
@@ -489,6 +517,7 @@ export class Agent {
   private async runCompaction(
     messages: ModelMessage[],
     reason: 'manual' | 'auto' | 'in-turn',
+    customInstructions?: string,
   ): Promise<CompactionResult | undefined> {
     const { hooks, bus } = this.options;
     // 扩展可取消(session_before_compact):auto/in-turn 的下一次仍会再问。
@@ -500,8 +529,12 @@ export class Agent {
       });
       if (veto.cancel) return undefined;
     }
-    const result = await compactMessages(messages, this.options.model, undefined, (chars) =>
-      bus.emit({ type: 'compaction-progress', chars }),
+    const result = await compactMessages(
+      messages,
+      this.options.model,
+      undefined,
+      (chars) => bus.emit({ type: 'compaction-progress', chars }),
+      customInstructions,
     );
     if (result.removedMessages === 0) return undefined;
     bus.emit({
@@ -518,9 +551,9 @@ export class Agent {
     return result;
   }
 
-  private async doCompact(reason: 'manual' | 'auto'): Promise<void> {
+  private async doCompact(reason: 'manual' | 'auto', customInstructions?: string): Promise<void> {
     const generation = this.historyGeneration;
-    const result = await this.runCompaction(this.messages, reason);
+    const result = await this.runCompaction(this.messages, reason, customInstructions);
     if (!result) return;
     // 压缩期间历史被换掉了(/new、/clear、恢复会话):这份摘要针对的是
     // 已经不存在的对话,写回去等于让被丢弃的会话复活。

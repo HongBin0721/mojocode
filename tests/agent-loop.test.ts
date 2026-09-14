@@ -509,6 +509,20 @@ describe('并发防护', () => {
     // 进度在前,收尾事件殿后——渲染层靠 compaction 熄灯/交还状态。
     expect(order[order.length - 1]).toBe('compaction');
   });
+
+  it('compact 的 customInstructions 原样穿到 compactMessages(Pi 的 compact({ customInstructions }))', async () => {
+    mockCompactMessages.mockImplementation(async (messages: unknown[]) => ({
+      messages,
+      removedMessages: 0,
+      summaryChars: 0,
+    }));
+    const { agent } = makeAgent();
+    await agent.compact('manual', { customInstructions: 'keep decisions' });
+    expect(mockCompactMessages.mock.calls[0]![4]).toBe('keep decisions');
+    // 不给就是 undefined:缺省指令不变。
+    await agent.compact();
+    expect(mockCompactMessages.mock.calls[1]![4]).toBeUndefined();
+  });
 });
 
 describe('展示文本分离(/init)', () => {

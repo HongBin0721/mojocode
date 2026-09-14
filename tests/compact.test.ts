@@ -167,6 +167,21 @@ describe('流式进度回调', () => {
   });
 });
 
+describe('自定义摘要指令', () => {
+  it('customInstructions 拼在缺省指令之后,不替换;空白等于没给', async () => {
+    await compactMessages(toolLoop(10), {} as never, undefined, undefined, '  Keep the exact file list.  ');
+    const sent = mockStreamText.mock.calls[0]![0].messages as ModelMessage[];
+    const instruction = String(sent.at(-1)!.content);
+    expect(instruction).toMatch(/^Summarise the conversation/);
+    expect(instruction).toMatch(/Additional instructions for this summary:\nKeep the exact file list\.$/);
+
+    mockStreamText.mockClear();
+    await compactMessages(toolLoop(10), {} as never, undefined, undefined, '   ');
+    const plain = mockStreamText.mock.calls[0]![0].messages as ModelMessage[];
+    expect(String(plain.at(-1)!.content)).not.toContain('Additional instructions');
+  });
+});
+
 describe('流式错误语义', () => {
   it('streamText 吞掉的错误被收集并重抛,与 generateText 一致', async () => {
     // 模拟 AI SDK 的行为:错误不进 textStream(流直接结束),只回调 onError。

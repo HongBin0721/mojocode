@@ -12,8 +12,11 @@
  * setWorkingMessage / setEditorComponent / editor / theme / pasteToEditor`、
  * 工具的 `renderCall / renderResult`。组件的形状是 Pi 的(渲染成行 + 处理
  * 按键),不是 pi-tui 的类;核心只传递这些对象,画出来是 TUI 的事。
- * `ctx.sessionManager` / `ctx.modelRegistry` 也在,但收窄成读口。
- * 刻意没有的:会话树、`registerProvider`、`project_trust`。
+ * `ctx.sessionManager` / `ctx.modelRegistry` 也在,但收窄成读口;控制面
+ * (`signal` / `hasPendingMessages` / `shutdown` / `getSystemPrompt` /
+ * `reload` / `compact(options)`、三个会话操作的 `{ cancelled }` 回执与
+ * `withSession`)与 Pi 同形。刻意没有的:会话树(`fork(entryId)` /
+ * `navigateTree` / `setLabel`)、`registerProvider`、可写的 SessionManager。
  *
  * 一方扩展静态打包(src/extensions/index.ts),磁盘扩展由 extensions/loader.ts
  * 三层发现(包 / 全局目录 / 项目目录 / 配置 `extensions` / `-e`),bootstrap
@@ -22,7 +25,7 @@
  */
 
 import type { LanguageModel, ModelMessage, Tool } from 'ai';
-import type { AgentEvent } from './events.js';
+import type { AgentEvent, ContextUsage } from './events.js';
 import type { HookRegistry } from './hooks.js';
 import type { Config, ReasoningEffort } from '../config/schema.js';
 import type { SessionCustomRecord, SessionMeta } from '../session/store.js';
@@ -81,6 +84,31 @@ export interface ExtensionRunOptions {
   display?: string;
   images?: ImageAttachment[];
 }
+
+/**
+ * 扩展看到的上下文占用:核心的 `ContextUsage`(已用 / 窗口)加一个算好的百分比。
+ * 交集而不是重写一遍字段——`ContextUsage` 归 agent 循环所有,它加字段时这里要
+ * 跟着有,而三处手写的结构字面量不会有任何类型错误提醒作者。
+ */
+export type ExtensionContextUsage = ContextUsage & { percent: number };
+
+/** `ctx.compact` / `api.compact` 的选项(Pi 的 CompactOptions)。 */
+export interface CompactOptions {
+  /** 附加给摘要模型的指令,拼在缺省指令之后。 */
+  customInstructions?: string;
+  /** 压缩完成(含「无事发生」——扩展否决、历史太短)。 */
+  onComplete?: () => void;
+  /** 压缩失败;给了它就不再 reject。 */
+  onError?: (error: Error) => void;
+}
+
+/** 三个会话操作共用的选项(Pi 同名):`withSession` 在新会话就位后被调。 */
+export interface SessionSwitchOptions {
+  withSession?: (ctx: ExtensionContext) => void | Promise<void>;
+}
+
+/** `fork()` 的结局:没被否决就带新会话 id。 */
+export type ForkResult = { cancelled: false; id: string } | { cancelled: true };
 
 /** 返回 undefined = 这个作用域里不提供该工具(如 explore 不给有副作用的工具)。 */
 export type ExtensionToolFactory = (scope: ToolScope) => Tool | undefined;
@@ -188,14 +216,55 @@ export interface ExtensionContext {
   /** 空闲 = 没有链条在跑、也没有压缩在跑(与 `waitForIdle` 同一判据)。 */
   isIdle(): boolean;
   abort(): void;
+  /**
+   * 正在流的这一轮的 AbortSignal(Pi 的 ctx.signal);没有流在跑时 undefined。
+   * 两轮之间(turn_end 钩子期间)也是 undefined——那时 `isIdle()` 仍为假,
+   * 它回答的是「此刻有没有一个流可以跟着取消」,不是忙不忙。
+   */
+  readonly signal: AbortSignal | undefined;
+  /** 有没有消息排队等着进对话(轮内引导、轮后续跑都算)。 */
+  hasPendingMessages(): boolean;
+  /**
+   * 优雅退出整个程序(Pi 的 ctx.shutdown):中断当前轮,TUI 走与双 ctrl+c
+   * 同一条退出路径(时间线转储、会话关闭);`-p` 下中断后由 CLI 正常收尾,
+   * 还没开跑的那一轮不再开。
+   */
+  shutdown(): void;
+  /**
+   * 核心组装的系统提示词(Pi 的 ctx.getSystemPrompt)。`before_agent_start`
+   * 改写后的版本只在开流那一刻存在,读到的是改写之前的原文。
+   */
+  getSystemPrompt(): string;
+  /** 上下文占用:已用 / 窗口 / 百分比,与底栏计量条同源(与 api 同一份)。 */
+  getContextUsage(): ExtensionContextUsage;
+  /**
+   * 手动压缩(与 `/compact` 同一条路)。`customInstructions` 拼在缺省摘要指令
+   * 之后;并发调用共享同一次压缩,后到的指令搭不上在飞的那一次。给了
+   * `onError` 就不再 reject(错误交给它),否则失败以 reject 呈现。
+   */
+  compact(options?: CompactOptions): Promise<void>;
   /** 等到 agent 空闲;已空闲则立即兑现。 */
   waitForIdle(): Promise<void>;
-  /** 丢弃当前对话,开一个全新会话(与 `/new` 同一条路)。 */
-  newSession(): Promise<void>;
-  /** 把当前对话分叉进新的会话 id(`/fork`);`session_before_fork` 可取消。 */
-  fork(): Promise<{ id: string }>;
-  /** 切到另一个已存会话(`/resume`,接 id 或前缀);`session_before_switch` 可取消。 */
-  switchSession(idOrPrefix: string): Promise<void>;
+  /**
+   * 丢弃当前对话,开一个全新会话(与 `/new` 同一条路)。`withSession` 在新
+   * 会话就位后被调,收到的仍是这个 ctx——它按引用读当前会话,切完就指向
+   * 新的那一段。开新会话没有可取消的钩子,`cancelled` 恒为 false,形状与另
+   * 两个会话操作保持一致。
+   */
+  newSession(options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
+  /**
+   * 把当前对话分叉进新的会话 id(`/fork`)。`session_before_fork` 否决时
+   * 返回 `{ cancelled: true }` 而不抛——取消是钩子的正常结局,不是错误。
+   * 会话是线性的,没有 Pi 的 `fork(entryId)`:只能整体分叉。
+   */
+  fork(options?: SessionSwitchOptions): Promise<ForkResult>;
+  /**
+   * 切到另一个已存会话(`/resume`,接 id 或前缀)。`session_before_switch`
+   * 否决时返回 `{ cancelled: true }`;会话不存在之类的真错误照常抛。
+   */
+  switchSession(idOrPrefix: string, options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
+  /** 重载磁盘扩展(与 `/reload` 同一条路)。在自己的处理器里调它会把自己卸掉,处理器余下的代码跑在旧闭包里。 */
+  reload(): Promise<void>;
   model(modelId?: string): LanguageModel;
   readonly config: Config;
   /** 当前会话的只读视图(Pi 的 ctx.sessionManager,收窄到读口)。 */
@@ -397,11 +466,11 @@ export interface ExtensionAPI {
   readonly ctx: ExtensionContext;
   /** 同 ctx.mode。 */
   readonly mode: 'tui' | 'print';
-  /** 同 ctx 的四个会话控制成员。 */
+  /** 同 ctx 的四个会话控制成员(其余控制面——signal / shutdown / reload / getSystemPrompt / hasPendingMessages——只在 ctx 上,与 Pi 一致)。 */
   waitForIdle(): Promise<void>;
-  newSession(): Promise<void>;
-  fork(): Promise<{ id: string }>;
-  switchSession(idOrPrefix: string): Promise<void>;
+  newSession(options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
+  fork(options?: SessionSwitchOptions): Promise<ForkResult>;
+  switchSession(idOrPrefix: string, options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
   /**
    * 把一份会话内的运行时快照挂给宿主。目前唯一的消费方是 `/doctor`:它对
    * 「会话里已经拉起来的子进程」有则采信、不再自己拉一份(LSP 的语言服务器、
@@ -427,10 +496,10 @@ export interface ExtensionAPI {
   abort(): void;
   /** 模型历史(压缩后是摘要 + 尾巴)。 */
   history(): ModelMessage[];
-  /** 手动压缩历史(`/compact` 同一条路);并发调用共享同一次。 */
-  compact(): Promise<void>;
+  /** 同 ctx.compact:手动压缩历史(`/compact` 同一条路);并发调用共享同一次。 */
+  compact(options?: CompactOptions): Promise<void>;
   /** 上下文占用:已用 / 窗口 / 百分比,与底栏计量条同源。 */
-  getContextUsage(): { used: number; window: number; percent: number };
+  getContextUsage(): ExtensionContextUsage;
   /** 会话记录里追加一条自定义记录(kind custom);随会话分叉、随 /resume 读回。 */
   appendEntry(type: string, data: unknown): Promise<void>;
   /** 当前会话的自定义记录(写入顺序)。 */

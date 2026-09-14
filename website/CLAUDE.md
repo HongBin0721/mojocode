@@ -54,4 +54,4 @@ node scripts/gen-logo.mjs  # 重新生成像素字 logo 与 favicon(改过 src/u
 - 每页 frontmatter 只需 `title` + `description`;`description` 会进 `<meta name="description">` 与 og 标签。
 - 除首页外全是普通 `.md`;Starlight 的 `:::note` / `:::tip` / `:::caution` 侧栏提示在 `.md` 里直接可用,不必改成 mdx。
 - 中文标点风格与仓库其他文档一致:正文用中文标点,代码、路径、命令与选项名保持原样放在反引号里;斜杠命令与快捷键写成 `` `/think` `` `` `ctrl+t` ``。
-- 扩展示例里的 `api` 不标类型:npm 包不附带 `.d.ts`,`import type { ExtensionAPI } from 'mojocode'` 目前不成立,页面注明类型在 `src/core/extension.ts`。
+- 扩展示例里的 `api` 可以不标类型(例子更短),但**类型是真的能 import 的**:npm 包有 `exports['./extension']`,tsup 的第二个 entry 出 `dist/extension.d.ts`,写法是 `import type { ExtensionAPI } from 'mojocode/extension'`(不是裸 `'mojocode'`)。别再说「npm 包不附带 .d.ts」。
