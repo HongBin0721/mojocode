@@ -8,6 +8,7 @@
  * 在测试里就成了运行期才炸的 undefined。
  */
 
+import type { NoticeLevel } from '../../src/core/events.js';
 import {
   ExtensionEvents,
   type ExtensionAPI,
@@ -93,7 +94,7 @@ export interface RecordingHost {
    */
   statuses: Array<{ text: string | undefined; since?: number }>;
   /** 扩展经 notify 发出的提示。 */
-  notices: Array<{ level: 'info' | 'warn'; message: string }>;
+  notices: Array<{ level: NoticeLevel; message: string }>;
   /** 会话的 custom 记录:appendEntry 追加,entries(type) 按类型读。 */
   entries: SessionCustomRecord[];
 }
@@ -116,7 +117,7 @@ export function recordingExtensionApi(
   const tools = new Map<string, ExtensionToolFactory>();
   const commands = new Map<string, ExtensionCommand>();
   const state = new Map<string, unknown>();
-  const notices: Array<{ level: 'info' | 'warn'; message: string }> = [];
+  const notices: Array<{ level: NoticeLevel; message: string }> = [];
   const entries: SessionCustomRecord[] = options.entries ?? [];
   const statuses: RecordingHost['statuses'] = [];
   const api = fakeExtensionApi({

@@ -89,21 +89,28 @@ Hook and command handlers both receive `ctx` (`api.ctx` is the same object), sha
 
 | Member | Notes |
 |---|---|
-| `ui.select(title, items)` | pick one item; esc gives `undefined` |
-| `ui.confirm(title, message)` | yes / no; esc gives `false` |
-| `ui.input(title, placeholder?)` | one line of text; esc gives `undefined` |
-| `ui.editor(title, prefill?)` | multi-line editor: enter submits, a trailing `\` + enter inserts a newline; esc gives `undefined` |
-| `ui.custom((host, done) => component)` | mount a component that draws itself and handles its own keys (Pi's `ctx.ui.custom`): it replaces the input box, owns the keyboard, and `done(value)` closes it and returns the value |
-| `ui.setWidget(key, lines \| factory)` | a block above the input box; `undefined` clears |
+| `ui.select(title, items, opts?)` | pick one item; esc gives `undefined`. `opts.timeout` (ms) dismisses as "unanswered" when it elapses (the prompt counts down); `opts.signal` aborting does the same |
+| `ui.confirm(title, message, opts?)` | yes / no; esc, timeout and abort all give `false` |
+| `ui.input(title, placeholder?, opts?)` | one line of text; esc gives `undefined` |
+| `ui.editor(title, prefill?, opts?)` | multi-line editor: enter submits, a trailing `\` + enter inserts a newline; esc gives `undefined` |
+| `ui.custom((host, done) => component, options?)` | mount a component that draws itself and handles its own keys (Pi's `ctx.ui.custom`): by default it replaces the input box and owns the keyboard, `done(value)` closes it and returns the value. With `{ overlay: true }` it floats above the timeline and the input box stays put (the keyboard still belongs to the component); `overlayOptions` positions and sizes it (`width` / `height` / `min*` / `max*` as numbers or percentages, `anchor` with nine positions or absolute `row` / `col`, `offsetX/Y`, `margin`, `visible(w, h)`); `onHandle(handle)` hands you `setHidden(bool)` / `hide()`. An overlay **owns the keyboard only while it is drawn**: a hidden one (`setHidden(true)`, or `visible` saying no) hands the keyboard back to the input box; while it owns the keyboard, extension prompts queue behind it and appear once it closes |
+| `ui.setWidget(key, lines \| factory, { placement? })` | a block above (default) or below (`'belowEditor'`) the input box; `undefined` clears |
 | `ui.setHeader(…)` / `ui.setFooter(…)` | a block at the top of the screen; replaces the footer |
 | `ui.setTitle(title)` | terminal window title |
+| `ui.setStatus(key, text)` | **one keyed entry under this extension** in the status line above the input box; `undefined` clears. Coexists with the un-keyed, `since`-ticking `api.setStatus` |
 | `ui.setWorkingMessage(text)` | replaces the "thinking / responding" label in the status line (not while a tool or compaction runs); `undefined` restores |
-| `ui.setEditorComponent((host, submit) => component)` | replaces the default input box: the component draws itself and handles keys, `submit(text)` takes the same path as pressing enter in the default box (slash commands, `!` commands, @ references included); optional `getText` / `setText` / `insertText` back `getEditorText` / `setEditorText` / `pasteToEditor` (without `insertText`, a paste degrades to appending at the end); `undefined` restores |
+| `ui.setWorkingVisible(visible)` | `false` hides the whole working status line (even while running); the input box's top edge falls back to the idle rule |
+| `ui.setWorkingIndicator({ frames, intervalMs? })` | swaps the spinner frames: `['●']` is a static marker, `[]` draws no spinner, custom frames are rendered verbatim (bring your own colours); `intervalMs` defaults to 100 with a floor of 16; omit to restore the default animation |
+| `ui.setHiddenThinkingLabel(label?)` | the label on a collapsed thinking entry (default "Thought …"); omit to restore |
+| `ui.setEditorComponent((host, submit) => component)` / `ui.getEditorComponent()` | replaces the default input box: the component draws itself and handles keys, `submit(text)` takes the same path as pressing enter in the default box (slash commands, `!` commands, @ references included); optional `getText` / `setText` / `insertText` back `getEditorText` / `setEditorText` / `pasteToEditor` (without `insertText`, a paste degrades to appending at the end); `undefined` restores. `getEditorComponent` reads the current factory back |
 | `ui.theme` | the colour helpers (`fg(name, text)` / `bold` / `dim` / `italic`), the same object as a component's `host.theme`, available headless too |
+| `ui.getAllThemes()` / `ui.getTheme(name)` / `ui.setTheme(name \| colors)` | list the selectable themes (built-in `default` plus every `<name>.json` in the theme directories), read one theme's colours by name, switch (by name or with a `colors` object). Unlike `/theme` it **neither persists nor remounts the tree** - it only recomputes nodes that read `theme.x`, because an extension that follows the OS light/dark setting calls this at any time and must not wipe the user's draft. All three return Promises (Pi's are synchronous because it pre-scans at startup; we scan the directories on demand). When `setTheme` calls overlap only the last one takes effect; earlier ones resolve to `{ success: false }` |
+| `ui.getToolsExpanded()` / `ui.setToolsExpanded(expanded)` | the ctrl+r details toggle (thinking text, tool output); headless always `false` / ignored |
+| `ui.onTerminalInput(handler)` | listen to raw terminal sequences (**before** the TUI parses them into keys): return `{ consume: true }` to swallow one so no component sees it. Returns an unsubscribe function. There is no Pi-style `data` rewrite |
 | `ui.getEditorText()` / `ui.setEditorText(text)` / `ui.pasteToEditor(text)` | read / write the input box draft; insert at the cursor |
-| `ui.notify(message, level?)` | same path as `api.notify` |
+| `ui.notify(message, level?)` | same path as `api.notify`; `level` is `info` / `warn` / `error` (Pi's spelling `warning` is accepted too), `error` renders red with a `✗` prefix |
 
-While an extension editor is mounted, **`esc` during a running turn always means "interrupt" and is not forwarded to the component** - handing it over wholesale would leave a user whose editor extension ignores `esc` with nothing but double `ctrl+c`, which exits the whole program. When idle, `esc` goes to the component as usual (so `esc` `esc` rewind is unavailable while an extension editor is mounted - that follows from "the keyboard belongs to the component").
+While an extension editor or an overlay-style `ui.custom` is mounted, **`esc` during a running turn always means "interrupt" and is not forwarded to the component** - handing it over wholesale would leave a user whose editor extension ignores `esc` with nothing but double `ctrl+c`, which exits the whole program. When idle, `esc` goes to the component as usual (so `esc` `esc` rewind is unavailable while an extension editor is mounted - that follows from "the keyboard belongs to the component").
 
 Two ready-made component factories save every extension from rewriting cursor and backspace handling: `selectList({ items, onSelect, onCancel?, title?, window? })` and `textInput({ placeholder?, initial?, onSubmit, onCancel? })`. Both return factories you can hand to `ui.custom` / `setWidget` (inside `ui.custom`, wire `done` to `onSelect` / `onSubmit`).
 
@@ -166,6 +173,9 @@ Loading, hooks, the API surface and the rendering layer mirror Pi; the deliberat
 | `registerProvider`, `models.json` | providers are defined in the config (`providers.<id>`); rewrite requests with `before_provider_request`; `ctx.modelRegistry` is read-only |
 | bare `--my-flag` | `-X my-flag` (commander can only pass unknown options through wholesale, see `src/extensions/flags.ts`) |
 | pi-tui component classes (`Container`, `Text`, `SelectList`, …) | a component only needs `render(width)` + `handleInput`; `selectList` / `textInput` cover the common cases, `host.theme` / `ui.theme` gives colours |
+| `ui.addAutocompleteProvider` | not available. The input box's completion (slash commands, @ files) is built in; an extension that wants its own replaces the whole input box with `setEditorComponent` |
+| the `{ data }` rewrite in `onTerminalInput` | only `{ consume }`: OpenTUI's input handlers can only answer "swallow or not" |
+| synchronous `getAllThemes` / `getTheme` / `setTheme` | all three return Promises - the directories are scanned on demand rather than at startup, so theme files can be added at any time |
 | writable `ctx.sessionManager`, the writable `SessionManager` handed to `newSession({ setup(sessionManager) })` | a read-only view; write through `appendEntry` / `setSessionName`, and put post-switch initialisation in `withSession(ctx)` |
 
 `registerEntryRenderer` / `registerMarkdownTransformer` / `project_trust` are not listed because Pi 0.73 itself has removed them - neither side has them.

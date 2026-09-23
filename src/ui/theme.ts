@@ -2,6 +2,7 @@ import stringWidth from 'string-width';
 import { createSignal } from 'solid-js';
 import { t } from '../i18n/index.js';
 import { palette, type ThemeColorKey } from '../core/palette.js';
+import type { NoticeLevel } from '../core/events.js';
 
 /**
  * 终端文本折行宽度的安全余量(列)。
@@ -66,6 +67,18 @@ export const glyphs = {
 } as const;
 
 /**
+ * 时间线提示的三档怎么画:字形 + 配色键。时间线、退出转储与 `-p` 的 stderr
+ * 共用这一张表——各写一个三元嵌套时,加一档要在三个文件里同步改。颜色给的
+ * 是**键**不是色值:读取方现查(`theme[color]` / `extensionTheme.fg`),换主题
+ * 才跟得上(见 StatusLine 的 phaseColor 那条教训)。
+ */
+export const NOTICE_STYLE: Record<NoticeLevel, { glyph: string; color: 'dim' | 'warn' | 'error' }> = {
+  info: { glyph: '·', color: 'dim' },
+  warn: { glyph: '!', color: 'warn' },
+  error: { glyph: glyphs.failed, color: 'error' },
+};
+
+/**
  * 工具在时间线上的展示名:内建工具首字母大写(Claude Code 风格),
  * MCP 等外部工具保持原名。
  */
@@ -127,6 +140,16 @@ export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+/**
+ * 折叠的思考块那一行的标签:扩展给了(`ui.setHiddenThinkingLabel`)用扩展的,
+ * 否则「已思考 3.2s」/「已思考」。时间线与退出时的回滚转储共用这一处——
+ * 各写一份时,扩展换了标签只有屏幕上变,转储出来的还是缺省文案。
+ */
+export function thoughtLabel(durationMs: number | undefined, override?: string): string {
+  if (override !== undefined) return override;
+  return durationMs ? t('ui.thoughtFor', { duration: formatDuration(durationMs) }) : t('ui.thought');
 }
 
 /**

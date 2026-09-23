@@ -9,7 +9,18 @@ import {
   Show,
   Switch,
 } from 'solid-js';
-import { Box, ScrollArea, useApp, useInput, useSelectionCopy, useTerminalSize, type JSX } from './kit.js';
+import {
+  Box,
+  KeyboardScope,
+  ScrollArea,
+  useApp,
+  useInput,
+  useRawInput,
+  useSelectionCopy,
+  useTerminalSize,
+  type JSX,
+} from './kit.js';
+import { bumpTheme } from './theme.js';
 import { Footer } from './Footer.js';
 import { Input, type CommandOption, type SlashCommand } from './Input.js';
 import { StatusLine, type WorkState } from './StatusLine.js';
@@ -30,7 +41,8 @@ import { APP_NAME } from '../config/paths.js';
 import { collectRewindEntries, replayTimeline, type RewindEntry } from '../session/replay.js';
 import { RewindPicker } from './RewindPicker.js';
 import { UiPrompt } from './UiPrompt.js';
-import { CustomHost, EditorHost, SurfaceView, type EditorRef } from './ExtensionSurface.js';
+import { CustomHost, EditorHost, OverlayHost, SurfaceView, type EditorRef } from './ExtensionSurface.js';
+import { overlayShown } from './overlay-layout.js';
 import { shortcutOf } from './extension-theme.js';
 import { setMessageRenderers, setToolRenderers } from './tool-renderers.js';
 import { SettingsPanel } from './SettingsPanel.js';
@@ -55,7 +67,17 @@ import { ProviderPicker, type ProviderRow } from './ProviderPicker.js';
 import type { ProviderModels } from '../model/registry.js';
 import { saveLanguage, saveStatusBar } from '../config/save.js';
 import { selectableEfforts } from './commands/config-cmds.js';
-import { applyTheme, BUILTIN_THEME_NAME, listThemes, loadTheme, themeLocations, watchThemeFile } from './theme-loader.js';
+import {
+  applyTheme,
+  BUILTIN_THEME_NAME,
+  listAllThemes,
+  loadTheme,
+  resolveTheme,
+  themeLocations,
+  watchThemeFile,
+  type ThemeColors,
+} from './theme-loader.js';
+import { claimPaletteWrite, palette } from '../core/palette.js';
 import { getLocale, setLocale, t, type Locale } from '../i18n/index.js';
 import { createFileLister } from '../app/file-index.js';
 import { expandAtReferences, warnableSkips, type ImageAttachment } from '../app/attachments.js';
@@ -138,9 +160,10 @@ export function App(props: Props): JSX.Element {
       const stop = watchThemeFile(file, () => {
         const name = session.config.theme;
         if (!name) return;
+        const current = claimPaletteWrite();
         void loadTheme(name, themeDirs()).then((result) => {
           if (result.ok) {
-            applyTheme(result.theme.colors);
+            if (current()) applyTheme(result.theme.colors);
             return;
           }
           push({
@@ -158,18 +181,22 @@ export function App(props: Props): JSX.Element {
   );
   // /theme 选择器的预览:光标到哪套配色就换上,esc 收回到已提交的那套。只经
   // applyTheme 的 bump 反应式变色,不重挂(重挂会把开着的选择器关掉)。
-  let previewGen = 0;
+  //
+  // 「已提交的那套」是**预览开始那一刻的整张配色表**,收回就是同步放回去——
+  // 不按 config.theme 的名字去磁盘重读:扩展经 ui.setTheme 直接给的配色对象
+  // 根本没有名字,按名字重读只会把它顶掉。
+  let committed: ThemeColors | undefined;
   const previewTheme = (value: string | undefined) => {
-    const gen = ++previewGen;
-    const name = value ?? session.config.theme ?? BUILTIN_THEME_NAME;
-    if (name === BUILTIN_THEME_NAME) {
-      applyTheme({});
+    const current = claimPaletteWrite();
+    if (value === undefined) {
+      if (committed) applyTheme(committed);
+      committed = undefined;
       return;
     }
-    void loadTheme(name, themeDirs()).then((result) => {
+    committed ??= { ...palette };
+    void resolveTheme(value, themeDirs()).then((result) => {
       // 光标已经移走、或这套主题坏了:不动颜色,提交时命令自己会提示。
-      if (gen !== previewGen || !result.ok) return;
-      applyTheme(result.theme.colors);
+      if (current() && result.ok) applyTheme(result.colors);
     });
   };
   // 命令历史活在 App:整树重挂(切语言、换主题)后上箭头还翻得到。
@@ -195,17 +222,33 @@ export function App(props: Props): JSX.Element {
   const [prefill, setPrefill] = createSignal<{ text: string } | undefined>(undefined);
   const clearPrefill = () => setPrefill(undefined);
   /**
-   * 有覆盖层占着屏幕底部——回退选择器、设置面板、模型/厂商选择器取第一个
-   * 成立的(见下方渲染处的 <Switch>)。它们渲染期间 Input 与 Footer 都已
-   * 卸载,所以任何「靠 footer 回显反馈」的全局快捷键都要拿它挡一下。
+   * 覆盖层式的 custom **此刻拿着键盘**:挂着且画着。它是键盘归属的唯一判据——
+   * 底部区的键盘作用域(`<KeyboardScope>`)、输入框的灰显、扩展提问排在它后面,
+   * 都看这一句。藏起来的(把手 setHidden、`visible(w, h)` 说不画)把键盘还回去:
+   * 画框与收键必须同判据,否则用户对着一个灰掉的输入框,屏幕上没有任何东西
+   * 解释为什么。
    */
-  const overlayOpen = () =>
-    uiCustom() !== undefined ||
-    uiPrompt() !== undefined ||
+  const overlayActive = (): boolean => {
+    const request = uiCustomOverlay();
+    return request !== undefined && overlayShown(request, size.columns, size.rows);
+  };
+  /**
+   * 输入框被顶掉了:下方 <Switch> 取到了 InputArea 以外的某一支(条件与那里
+   * 一一对应)。覆盖层式的 custom 不在其中——它让输入框留在原地。
+   */
+  const inputReplaced = () =>
+    uiCustomInline() !== undefined ||
+    (!overlayActive() && uiPrompt() !== undefined) ||
     rewind() !== undefined ||
     settingsOpen() ||
     modelsPicker() !== undefined ||
     providerPicker() !== undefined;
+  /**
+   * 有东西占着键盘或屏幕底部:输入框被顶掉,或覆盖层拿着键盘。它们期间 Input
+   * 与 Footer 要么卸载、要么不收键,所以任何「靠 footer 回显反馈」的全局快捷键
+   * 都要拿它挡一下。
+   */
+  const overlayOpen = () => inputReplaced() || overlayActive();
 
   /**
    * 事件状态机:AgentEvent → 时间线/流式/状态行/用量(实现见
@@ -295,16 +338,42 @@ export function App(props: Props): JSX.Element {
     setEditorText: (text) => (editor.write ? editor.write(text) : setPrefill({ text })),
     pasteToEditor: (text) => editor.insert?.(text),
     exit: requestExit,
+    getToolsExpanded: detailsExpanded,
+    setToolsExpanded: (expanded) => setDetailsExpanded(expanded),
+    // 扩展的 ui.setTheme 已在 core 里改过 palette:这里让读过 theme.x 的节点
+    // 重算、改盯新文件。刻意**不**整树重挂(与 /theme 不同):自动跟随系统
+    // 明暗的扩展随时会调它,清一次草稿受不了;扩展自拼的 SGR 行等下次重画。
+    themeChanged: (file) => {
+      // 预览开着时扩展换了色:扩展这次是提交,esc 该收回到它而不是预览前那套。
+      if (committed) committed = { ...palette };
+      bumpTheme();
+      setThemeFile(file);
+    },
   });
+  // 原始终端序列先问扩展(ui.onTerminalInput):有人 consume 就到此为止。
+  useRawInput((sequence) => session.runTerminalInput(sequence));
   onCleanup(() => session.attachUi(undefined));
   const uiCustom = createMemo((): UiCustomRequest | undefined => {
     extensionsTick();
     return session.uiCustoms[0];
   });
+  // 两种 custom:顶掉输入框的(缺省),与浮在时间线之上的覆盖层(overlay)。
+  // 键盘都归组件;区别只在输入框还在不在原地。
+  const uiCustomInline = (): UiCustomRequest | undefined => {
+    const request = uiCustom();
+    return request && request.overlay === undefined ? request : undefined;
+  };
+  const uiCustomOverlay = (): UiCustomRequest | undefined => {
+    const request = uiCustom();
+    return request && request.overlay !== undefined ? request : undefined;
+  };
   const uiSurfaces = createMemo(() => {
     extensionsTick();
     return session.uiSurfaces;
   });
+  // 每个思考条目都读它:收成 memo,别的界面区域变了(widget 刷新、工作文字)
+  // 不必让整条时间线的思考标签都重算一遍。
+  const hiddenThinkingLabel = createMemo(() => uiSurfaces().hiddenThinkingLabel);
   createEffect(() => {
     extensionsTick();
     setToolRenderers(session.toolRenderers);
@@ -549,7 +618,7 @@ export function App(props: Props): JSX.Element {
     setThink,
     setTimelineMode,
     refreshTheme: (file) => {
-      previewGen++;
+      committed = undefined;
       setThemeFile(file);
       setThemeEpoch((n) => n + 1);
     },
@@ -688,11 +757,11 @@ export function App(props: Props): JSX.Element {
       // 磁盘上的主题现扫(改了文件不必重启);`default` 是内置配色的保留名。
       theme: async () => {
         const current = session.config.theme ?? BUILTIN_THEME_NAME;
-        const found = await listThemes(themeDirs());
-        return [
-          { value: BUILTIN_THEME_NAME, label: t('themeopt.default'), current: current === BUILTIN_THEME_NAME },
-          ...found.map((entry) => ({ value: entry.name, label: entry.file, current: entry.name === current })),
-        ];
+        return (await listAllThemes(themeDirs())).map((entry) => ({
+          value: entry.name,
+          label: entry.file ?? t('themeopt.default'),
+          current: entry.name === current,
+        }));
       },
       provider: () =>
         BUILTIN_PROVIDER_IDS.map((id) => ({
@@ -784,10 +853,24 @@ export function App(props: Props): JSX.Element {
    * 把它单独画在上方,否则一开框 spinner 与已用时就没了。曾经是两份逐字
    * 相同的 JSX,`label`(扩展的 setWorkingMessage)加进来时要在两处各写一笔。
    */
+  // 扩展 setWorkingVisible(false) 时整条工作状态线不画(跑着也不画),输入框
+  // 的顶边回到空闲的纯线;busy / 占位符照旧按 work() 判,只是不画那一行。
+  const visibleWork = (): WorkState | undefined =>
+    uiSurfaces().workingVisible === false ? undefined : work();
+  /**
+   * 独占键盘的扩展组件(扩展编辑器、覆盖层式 custom)的 esc:一轮跑着的时候
+   * esc 归中断、不转发给组件——否则一个不处理 esc 的组件会让用户只剩双
+   * ctrl+c,而那是退出程序。空闲时返回 false,esc 照常归组件。
+   */
+  const escapeInterrupts = (): boolean => {
+    if (!session.agent.isRunning && !submitGate.pending) return false;
+    handleEscape();
+    return true;
+  };
   const WorkStatus = (p: { when?: boolean }) => (
     // 不加 keyed:work 每次阶段变化都是新对象,keyed 会整块重建,
     // spinner 的定时器跟着重启、已用时清零。
-    <Show when={(p.when ?? true) ? work() : undefined}>
+    <Show when={(p.when ?? true) ? visibleWork() : undefined}>
       {(current: () => WorkState) => (
         <StatusLine
           work={current()}
@@ -795,6 +878,7 @@ export function App(props: Props): JSX.Element {
           tokens={turnTokens()}
           columns={size.columns}
           label={uiSurfaces().workingMessage}
+          indicator={uiSurfaces().workingIndicator}
         />
       )}
     </Show>
@@ -804,8 +888,9 @@ export function App(props: Props): JSX.Element {
   const DefaultInput = () => (
     <Input
       onSubmit={handleSubmit}
-      disabled={false}
-      work={work()}
+      // 覆盖层式的 custom 拿着键盘时:输入框留在原地但不收键、变灰。
+      disabled={overlayActive()}
+      work={visibleWork()}
       todoHint={todoHint()}
       turnTokens={turnTokens()}
       placeholder={running() || work() ? t('input.steer') : t('input.placeholder')}
@@ -820,6 +905,7 @@ export function App(props: Props): JSX.Element {
       readClipboardImage={readClipboardImage}
       onImageNotice={(message) => push({ kind: 'notice', level: 'warn', message })}
       workingMessage={uiSurfaces().workingMessage}
+      workingIndicator={uiSurfaces().workingIndicator}
     />
   );
 
@@ -831,7 +917,9 @@ export function App(props: Props): JSX.Element {
       {/* 扩展的状态行贴在输入框正上方靠右(如 /goal 的「目标 3/10 · 1m04s」):
           一眼能看到进度而不必敲命令去问。回退选择器或设置面板打开时不渲染
           (它们走的是那串互斥分支的其他支)。 */}
-      <For each={uiSurfaces().widgets}>{(widget) => <SurfaceView surface={widget.surface} />}</For>
+      <For each={uiSurfaces().widgets.filter((w) => w.placement !== 'belowEditor')}>
+        {(widget) => <SurfaceView surface={widget.surface} />}
+      </For>
       <ExtensionStatusLine entries={extensionStatus} columns={size.columns} />
       {/* 扩展的 setEditorComponent 顶替缺省输入框(Pi 同款):它换掉的只是输入框,
           widget、状态行、底栏照旧——那是"编辑器"与"覆盖层"的区别,所以它留在
@@ -843,17 +931,16 @@ export function App(props: Props): JSX.Element {
             <EditorHost
               factory={factory}
               onSubmit={handleSubmit}
-              // 跑着的时候 esc 归中断,不转发给组件(见 EditorHost 的注释)。
-              onEscape={() => {
-                if (!session.agent.isRunning && !submitGate.pending) return false;
-                handleEscape();
-                return true;
-              }}
+              onEscape={escapeInterrupts}
               editorRef={editor}
             />
           </>
         )}
       </Show>
+      {/* placement: 'belowEditor' 的 widget:输入框之下、底栏之上。 */}
+      <For each={uiSurfaces().widgets.filter((w) => w.placement === 'belowEditor')}>
+        {(widget) => <SurfaceView surface={widget.surface} />}
+      </For>
       {/* 扩展的 setFooter 整个替换底栏(Pi 同款:换了就由扩展负责画全)。 */}
       <Show
         when={uiSurfaces().footer}
@@ -907,7 +994,12 @@ export function App(props: Props): JSX.Element {
       <ScrollArea>
         <For each={visibleItems()}>
           {(item) => (
-            <TimelineEntry item={item} columns={size.columns} expanded={detailsExpanded()} />
+            <TimelineEntry
+              item={item}
+              columns={size.columns}
+              expanded={detailsExpanded()}
+              thinkingLabel={hiddenThinkingLabel()}
+            />
           )}
         </For>
 
@@ -929,19 +1021,22 @@ export function App(props: Props): JSX.Element {
           这里的 marginTop 是时间线与下方内容(状态行/待办面板/输入框/各
           覆盖层)之间**唯一**的分隔——子块一律不再自带顶部 margin,否则
           缝叠成两行(时间线与输入框之间那道多出来的空行就是这么来的)。 */}
+      {/* 覆盖层拿着键盘时整个底部区让出键盘:输入框、扩展编辑器、提问框、各个
+          选择器一起停收——逐个订阅者接开关的话,漏一个就一次回车两处生效。 */}
+      <KeyboardScope active={() => !overlayActive()}>
       <Box flexDirection="column" marginTop={1} flexShrink={0}>
         <Show when={todoPanelVisible()}>
           <TodoPanel todos={todos()} columns={size.columns} />
         </Show>
         {/* 覆盖层顶掉输入框时,状态线留在覆盖层上方(见 WorkStatus)。 */}
-        <WorkStatus when={overlayOpen()} />
+        <WorkStatus when={inputReplaced()} />
 
         {/* 屏幕底部同一时刻只归一个东西所有(overlayOpen 就是这句话的谓词):
             扩展组件 > 扩展提问 > 回退选择器 > 设置面板 > 模型/厂商选择器 > 常态输入框,按这个优先级
             取第一个成立的。用 Switch 而不是层层嵌套的 Show/fallback——后者每
             加一个覆盖层就多一级缩进,还得改上一个人的那支。 */}
         <Switch fallback={<InputArea />}>
-          <Match when={uiCustom()} keyed>
+          <Match when={uiCustomInline()} keyed>
             {(request: UiCustomRequest) => (
               <CustomHost
                 request={request}
@@ -949,7 +1044,10 @@ export function App(props: Props): JSX.Element {
               />
             )}
           </Match>
-          <Match when={uiPrompt()} keyed>
+          {/* 覆盖层拿着键盘时扩展的提问排在它后面(与覆盖层式 custom 出现之前,
+              custom 那支排在提问前面是同一个优先级):两个组件同时收键,
+              一次回车既答了提问又转发给覆盖层。 */}
+          <Match when={overlayActive() ? undefined : uiPrompt()} keyed>
             {(request: UiRequest) => (
               <UiPrompt
                 request={request}
@@ -1004,6 +1102,20 @@ export function App(props: Props): JSX.Element {
           </Match>
         </Switch>
       </Box>
+      </KeyboardScope>
+      {/* 覆盖层式的 ui.custom:浮在一切之上,输入框留在原地(键盘仍归组件)。
+          按 id 键控:换了一个 custom 才重建,把手的 setHidden 换引用不重建
+          ——重建会把扩展的组件工厂再跑一遍。 */}
+      <Show when={uiCustomOverlay()?.id} keyed>
+        {(id: string) => (
+          <OverlayHost
+            request={uiCustomOverlay()!}
+            onDone={(value) => session.resolveCustom(id, value)}
+            shown={overlayActive}
+            onEscape={escapeInterrupts}
+          />
+        )}
+      </Show>
     </Box>
   );
 

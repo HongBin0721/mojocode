@@ -32,6 +32,13 @@ export interface ContextUsage {
   window: number;
 }
 
+/**
+ * 时间线提示的级别。`error` 是 Pi 的 `ui.notify(message, 'error')` 带进来的:
+ * 红色、`✗` 前缀,给扩展报「这件事没成」用——它不是 `error` 事件(那个终结
+ * 一轮),只是一条更响的提示。
+ */
+export type NoticeLevel = 'info' | 'warn' | 'error';
+
 export type AgentEvent =
   // display:时间线展示用的替代文本(如 `/init`);userText 才是喂给模型的内容。
   | { type: 'turn-start'; userText: string; display?: string; imageCount?: number }
@@ -95,7 +102,7 @@ export type AgentEvent =
   | { type: 'run-end' }
   | { type: 'aborted' }
   | { type: 'error'; error: Error; recoverable: boolean }
-  | { type: 'notice'; level: 'info' | 'warn'; message: string }
+  | { type: 'notice'; level: NoticeLevel; message: string }
   /**
    * 扩展向用户提问(见 extension-types.ts 的 UiRequest):前端弹提示框,答案
    * 经 `answerUi` 送回;`ui-resolved` 表示已有答案(别的客户端答的、或超时/

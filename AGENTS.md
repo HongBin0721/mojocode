@@ -139,5 +139,20 @@ extension: a `tool_call` hook returning `{ block: true, reason }` vetoes; to ask
   that has not started), `compact(options)` shares `compactImpl` with `api.compact`
   (with `onError` given it never rejects — Pi's compact is fire-and-forget). Session
   operations resolve to `{ cancelled }` on the ctx path; the UI command path still throws.
+- `ctx.ui` covers the rest of Pi's surface too: dialog `timeout`/`signal` (the host computes
+  `deadline` and owns the timer; `UiPrompt` only draws the countdown), `notify` level `error`
+  (`NoticeLevel` in `core/events.ts`), keyed `ui.setStatus`, the `workingVisible` /
+  `workingIndicator` / `hiddenThinkingLabel` slots, widget `placement`, overlay `ui.custom`
+  (`ui/overlay-layout.ts` is the pure layout; `OverlayHost` renders an absolute Box; the
+  `<Show>` is keyed by id so `setHidden` never re-runs the factory), `getToolsExpanded` /
+  `setToolsExpanded` and `themeChanged` as `UiHost` callbacks, theme file access moved to
+  `app/theme-files.ts` (bootstrap cannot import `src/ui/`), `applyPalette` in core, and
+  `onTerminalInput` via `Session.runTerminalInput` + kit's `useRawInput` (prepend handler,
+  consume only - no `data` rewrite).
+- Keyboard ownership under an overlay is one kit `KeyboardScope` around App's whole bottom
+  area, not a per-subscriber `active` flag. Async palette writers (preview, `/theme`, hot
+  reload, `ui.setTheme`) share `claimPaletteWrite()` in `core/palette.ts` so the latest
+  *issued* write wins. StatusLine memoizes the indicator and timer interval — reading
+  `props.indicator` directly rebuilt the timer on every streaming delta and froze the spinner.
 - Core tests live in `tests/*.test.ts` mirroring the module under test on the Node lane;
   UI tests live in `tests/ui/` on the Bun lane with the `tests/support/otui.tsx` harness.

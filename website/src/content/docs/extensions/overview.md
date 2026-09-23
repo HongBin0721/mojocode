@@ -88,21 +88,28 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 
 | 成员 | 说明 |
 |---|---|
-| `ui.select(title, items)` | 列表选一项;esc 为 `undefined` |
-| `ui.confirm(title, message)` | 是 / 否;esc 为 `false` |
-| `ui.input(title, placeholder?)` | 一行文本;esc 为 `undefined` |
-| `ui.editor(title, prefill?)` | 多行编辑框:回车提交,行尾 `\` + 回车换行;esc 为 `undefined` |
-| `ui.custom((host, done) => component)` | 挂一个自己画、自己处理按键的组件(Pi 的 `ctx.ui.custom`):它顶掉输入框、独占键盘,`done(value)` 收尾并把 value 交回 |
-| `ui.setWidget(key, lines \| factory)` | 输入框上方的一块小部件;`undefined` 清除 |
+| `ui.select(title, items, opts?)` | 列表选一项;esc 为 `undefined`。`opts.timeout`(毫秒)到点按「没答」兑现,提示里倒数;`opts.signal` 中止同样按「没答」 |
+| `ui.confirm(title, message, opts?)` | 是 / 否;esc、超时、中止都是 `false` |
+| `ui.input(title, placeholder?, opts?)` | 一行文本;esc 为 `undefined` |
+| `ui.editor(title, prefill?, opts?)` | 多行编辑框:回车提交,行尾 `\` + 回车换行;esc 为 `undefined` |
+| `ui.custom((host, done) => component, options?)` | 挂一个自己画、自己处理按键的组件(Pi 的 `ctx.ui.custom`):缺省它顶掉输入框、独占键盘,`done(value)` 收尾并把 value 交回。`{ overlay: true }` 则浮在时间线之上、输入框留在原地(键盘仍归组件);`overlayOptions` 定位与尺寸(`width` / `height` / `min*` / `max*` 数字或百分比、`anchor` 九个位置或 `row` / `col` 绝对位置、`offsetX/Y`、`margin`、`visible(w, h)`);`onHandle(handle)` 拿到 `setHidden(bool)` / `hide()`。覆盖层**画着才拿键盘**:藏起来的(`setHidden(true)`、`visible` 说不画)把键盘还给输入框;拿着键盘时扩展的提问排在它后面,等它收尾再弹 |
+| `ui.setWidget(key, lines \| factory, { placement? })` | 输入框上方(缺省)或下方(`'belowEditor'`)的一块小部件;`undefined` 清除 |
 | `ui.setHeader(…)` / `ui.setFooter(…)` | 屏幕顶部的一块;替换底栏 |
 | `ui.setTitle(title)` | 终端窗口标题 |
+| `ui.setStatus(key, text)` | 输入框上方状态行里**这个扩展名下按 key 分的一条**;`undefined` 清除。与不带 key、带 `since` 走秒的 `api.setStatus` 并存 |
 | `ui.setWorkingMessage(text)` | 工作状态线里替换「思考中 / 回复中」的文字(跑工具、压缩时不替换);`undefined` 恢复 |
-| `ui.setEditorComponent((host, submit) => component)` | 顶替缺省输入框:组件自己画、自己收键,`submit(text)` 与在缺省输入框回车同一条路(斜杠命令、`!` 命令、@ 引用照常);组件可选实现 `getText` / `setText` / `insertText`,`getEditorText` / `setEditorText` / `pasteToEditor` 经它们落地(没实现 `insertText` 时粘贴退化成追加到末尾);`undefined` 恢复 |
+| `ui.setWorkingVisible(visible)` | `false` 时整条工作状态线不画(跑着也不画),输入框顶边回到空闲的纯线 |
+| `ui.setWorkingIndicator({ frames, intervalMs? })` | 换 spinner 的帧:`['●']` 静态标记,`[]` 不画 spinner,自定义帧原样画(颜色自己带);`intervalMs` 缺省 100,最低 16;不给恢复缺省动画 |
+| `ui.setHiddenThinkingLabel(label?)` | 折叠的思考块那一行的标签(缺省「已思考 …」);不给恢复 |
+| `ui.setEditorComponent((host, submit) => component)` / `ui.getEditorComponent()` | 顶替缺省输入框:组件自己画、自己收键,`submit(text)` 与在缺省输入框回车同一条路(斜杠命令、`!` 命令、@ 引用照常);组件可选实现 `getText` / `setText` / `insertText`,`getEditorText` / `setEditorText` / `pasteToEditor` 经它们落地(没实现 `insertText` 时粘贴退化成追加到末尾);`undefined` 恢复。`getEditorComponent` 读回当前工厂 |
 | `ui.theme` | 给行上色的主题面(`fg(name, text)` / `bold` / `dim` / `italic`),与组件的 `host.theme` 同一份,headless 下也有 |
+| `ui.getAllThemes()` / `ui.getTheme(name)` / `ui.setTheme(name \| colors)` | 列可选主题(内置 `default` + 各目录的 `<name>.json`)、按名读一套配色、切换配色(给名字或直接给 `colors` 对象)。与 `/theme` 不同:**不落盘、不整树重挂**,只让读过 `theme.x` 的节点重算——自动跟随系统明暗的扩展随时会调它,不该清用户的草稿。三个都是 Promise(Pi 的是同步的,它启动时预扫;这里现扫目录)。连着调 `setTheme` 时只有最后一次生效,先发的回报 `{ success: false }` |
+| `ui.getToolsExpanded()` / `ui.setToolsExpanded(expanded)` | ctrl+r 的详情开关(思考正文、工具输出);headless 恒 `false` / 忽略 |
+| `ui.onTerminalInput(handler)` | 监听原始终端序列(在 TUI 解析成按键**之前**):返回 `{ consume: true }` 就吞掉,任何组件都不再收到。返回注销函数。没有 Pi 的 `data` 改写 |
 | `ui.getEditorText()` / `ui.setEditorText(text)` / `ui.pasteToEditor(text)` | 读 / 写输入框草稿;在光标处插入 |
-| `ui.notify(message, level?)` | 与 `api.notify` 同一条路 |
+| `ui.notify(message, level?)` | 与 `api.notify` 同一条路;`level` 是 `info` / `warn` / `error`(Pi 拼法的 `warning` 也认),`error` 红色 `✗` 前缀 |
 
-挂着扩展编辑器时,**一轮正跑着的 `esc` 永远是「中断」,不转发给组件**——全交给组件的话,一个不处理 `esc` 的编辑器扩展会让用户只剩双 `ctrl+c`,而那是退出整个程序。空闲时 `esc` 照常归组件(`esc` `esc` 回退选择器因此在扩展编辑器挂着时不可用,那是「键盘归组件」这条契约的应有之义)。
+挂着扩展编辑器或覆盖层式 `ui.custom` 时,**一轮正跑着的 `esc` 永远是「中断」,不转发给组件**——全交给组件的话,一个不处理 `esc` 的编辑器扩展会让用户只剩双 `ctrl+c`,而那是退出整个程序。空闲时 `esc` 照常归组件(`esc` `esc` 回退选择器因此在扩展编辑器挂着时不可用,那是「键盘归组件」这条契约的应有之义)。
 
 两个现成的组件工厂免得每个扩展重写光标与退格:`selectList({ items, onSelect, onCancel?, title?, window? })` 与 `textInput({ placeholder?, initial?, onSubmit, onCancel? })`,都返回可直接交给 `ui.custom` / `setWidget` 的工厂(在 `ui.custom` 里把 `done` 接到 `onSelect` / `onSubmit` 上)。
 
@@ -165,6 +172,9 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `registerProvider`、`models.json` | provider 由配置层定义(`providers.<id>`),请求级改写用 `before_provider_request`;`ctx.modelRegistry` 只读 |
 | 裸 `--my-flag` | `-X my-flag`(commander 对未声明选项只能整体放行,见 `src/extensions/flags.ts`) |
 | pi-tui 的组件类(`Container`、`Text`、`SelectList`…) | 组件只需 `render(width)` + `handleInput`,自己拼行;`host.theme` / `ui.theme` 给颜色 |
+| `ui.addAutocompleteProvider` | 没有。输入框的补全(斜杠命令、@ 文件)是内置的,扩展要自己的补全就 `setEditorComponent` 整个换掉输入框 |
+| `onTerminalInput` 的 `{ data }` 改写 | 只有 `{ consume }`:OpenTUI 的输入处理器只能回答「吞不吞」 |
+| `getAllThemes` / `getTheme` / `setTheme` 同步 | 三个都是 Promise——现扫目录而不是启动时预扫,主题文件可以随时往目录里加 |
 | `ctx.sessionManager` 的写口、`newSession({ setup(sessionManager) })` 里的可写 `SessionManager` | 只读视图;写入走 `appendEntry` / `setSessionName`,新会话就位后的初始化放进 `withSession(ctx)` |
 
 Pi 0.73 自己已经删掉的 `registerEntryRenderer` / `registerMarkdownTransformer` / `project_trust` 不在此列——两边都没有。

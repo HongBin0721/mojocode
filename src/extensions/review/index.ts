@@ -15,6 +15,7 @@
  * 留在 `src/agent/review.ts`:`/simplify` 共用它们。扩展直接调它们。
  */
 
+import type { NoticeLevel } from '../../core/events.js';
 import {
   collectReviewCommits,
   collectReviewSummary,
@@ -37,7 +38,7 @@ import { buildReviewPrompt } from './prompt.js';
  * 就会提醒补文案。`/simplify` 有自己的一份(它的措辞不同),两处各自穷举
  * 比一张双列表更经得起拆分——命令搬走时只带走自己那一列。
  */
-const FAILURE_NOTICES: Record<ReviewFailure, { key: MessageKey; level: 'info' | 'warn' }> = {
+const FAILURE_NOTICES: Record<ReviewFailure, { key: MessageKey; level: NoticeLevel }> = {
   'no-repo': { key: 'notice.reviewNoRepo', level: 'warn' },
   'clean-tree': { key: 'notice.reviewCleanTree', level: 'info' },
   'no-commits': { key: 'notice.reviewNoCommits', level: 'info' },

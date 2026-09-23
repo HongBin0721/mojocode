@@ -11,7 +11,7 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { EventBus } from '../core/events.js';
+import type { EventBus, NoticeLevel } from '../core/events.js';
 import type { Config, ReasoningEffort } from '../config/schema.js';
 import type { ResolvedProvider } from '../config/load.js';
 import type {
@@ -99,7 +99,7 @@ export interface SessionHandle {
    * bootstrap 里 emit 赶在任何订阅之前——所以由 App 挂载时自己来取。
    * 可选字段:UI 测试的假 session 不必造。
    */
-  readonly startupNotices?: ReadonlyArray<{ level: 'warn' | 'info'; message: string }>;
+  readonly startupNotices?: ReadonlyArray<{ level: NoticeLevel; message: string }>;
   /** 扩展注册的斜杠命令投影(命令菜单用),同步读取。 */
   readonly extensionCommands: ExtensionCommandInfo[];
   /** 扩展贴在输入框上方的状态行,同步读取。 */
@@ -118,6 +118,8 @@ export interface SessionHandle {
   answerUi(id: string, answer: UiAnswer): void;
   /** TUI 挂上会话(有人在看、读写输入框草稿)。App 挂载时调,卸载时传 undefined。 */
   attachUi(host: UiHost | undefined): void;
+  /** 原始终端序列先问扩展(`ui.onTerminalInput`);true = 已被吞掉。App 用渲染器级钩子接进来。 */
+  runTerminalInput(data: string): boolean;
   /** 带修饰键的组合先问扩展(键名由 shortcutOf 归一);认领返回 true。 */
   runShortcut(key: string): boolean;
   /** `ui.custom` 挂出来的组件(画第一条);done 之后经 resolveCustom 交回。 */

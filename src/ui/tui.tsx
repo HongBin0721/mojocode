@@ -31,7 +31,11 @@ export async function runTui(session: SessionHandle): Promise<void> {
   await instance.waitUntilExit();
   // 此刻 alternate screen 已还原,stdout 回到主屏。
   if (itemsRef.current.length > 0) {
-    process.stdout.write(formatTranscript(itemsRef.current, process.stdout.columns ?? 80));
+    process.stdout.write(
+      formatTranscript(itemsRef.current, process.stdout.columns ?? 80, {
+        thinkingLabel: session.uiSurfaces.hiddenThinkingLabel,
+      }),
+    );
   }
 }
 

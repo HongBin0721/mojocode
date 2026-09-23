@@ -1,3 +1,4 @@
+import type { WorkingIndicator } from '../core/extension-types.js';
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
 import { Box, Text, useInput, useTerminalSize, type JSX, type ScrollDirection } from './kit.js';
 import { theme, glyphs } from './theme.js';
@@ -121,6 +122,8 @@ interface Props {
   editorRef?: { read?: () => string; insert?: (text: string) => void };
   /** 透传给顶边线:替换「思考中 / 回复中」的文字(扩展的 setWorkingMessage)。 */
   workingMessage?: string;
+  /** 透传给顶边线:spinner 的帧(扩展的 setWorkingIndicator)。 */
+  workingIndicator?: WorkingIndicator;
   /**
    * @ 文件引用补全的数据源(相对 posix 路径列表)。通过 prop 注入而不是
    * 组件自己扫盘:保持 Input 不碰文件系统,测试时注入假列表即可。
@@ -807,6 +810,7 @@ export function Input(props: Props): JSX.Element {
     columns: size.columns,
     color: borderColor(),
     label: props.workingMessage,
+    indicator: props.workingIndicator,
   }));
 
   return (

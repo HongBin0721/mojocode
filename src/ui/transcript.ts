@@ -6,6 +6,8 @@ import {
   formatTokens,
   formatToolInput,
   glyphs,
+  NOTICE_STYLE,
+  thoughtLabel,
   toolDisplayName,
   truncateWidth,
 } from './theme.js';
@@ -19,6 +21,8 @@ const DIM = (s: string) => extensionTheme.dim(s);
 const CYAN = (s: string) => extensionTheme.fg('accent', s);
 const RED = (s: string) => extensionTheme.fg('error', s);
 const YELLOW = (s: string) => extensionTheme.fg('warn', s);
+/** 提示三档的上色:档位 → 配色键在 theme.ts 的 NOTICE_STYLE,配色键 → 转储里怎么画在这里。 */
+const NOTICE_PAINT = { dim: DIM, warn: YELLOW, error: RED } as const;
 
 /**
  * 把时间线序列化成纯文本(带少量 ANSI 着色),供 TUI 退出后写回主屏。
@@ -27,7 +31,12 @@ const YELLOW = (s: string) => extensionTheme.fg('warn', s);
  * 终端历史之后,让整场会话仍然留在原生 scrollback 里可回看、可复制。
  * 版式尽量贴近时间线本身(> 用户 / ⏺ 回复与工具 / ⎿ 摘要)。
  */
-export function formatTranscript(items: TimelineItem[], columns: number): string {
+export function formatTranscript(
+  items: TimelineItem[],
+  columns: number,
+  /** 扩展的 `ui.setHiddenThinkingLabel`:与时间线同一个标签,转储才与屏幕一致。 */
+  options: { thinkingLabel?: string } = {},
+): string {
   const width = Math.max(40, columns);
   const out: string[] = [];
   for (const item of items) {
@@ -50,13 +59,7 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
       case 'reasoning':
         out.push(
           '',
-          DIM(
-            `${glyphs.thinking} ${
-              item.durationMs
-                ? t('ui.thoughtFor', { duration: formatDuration(item.durationMs) })
-                : t('ui.thought')
-            }`,
-          ),
+          DIM(`${glyphs.thinking} ${thoughtLabel(item.durationMs, options.thinkingLabel)}`),
         );
         break;
       case 'tool': {
@@ -105,7 +108,7 @@ export function formatTranscript(items: TimelineItem[], columns: number): string
         );
         break;
       case 'notice':
-        out.push('', item.level === 'warn' ? YELLOW(`! ${item.message}`) : DIM(`· ${item.message}`));
+        out.push('', NOTICE_PAINT[NOTICE_STYLE[item.level].color](`${NOTICE_STYLE[item.level].glyph} ${item.message}`));
         break;
       case 'error':
         out.push('', RED(`${glyphs.failed} ${item.message}`));

@@ -1,5 +1,5 @@
-import { createMemo, createSignal, For, onCleanup, untrack } from 'solid-js';
-import { Box, Text, useInput, useTerminalSize, type JSX } from './kit.js';
+import { createEffect, createMemo, createSignal, For, onCleanup, untrack } from 'solid-js';
+import { Box, KeyboardScope, Text, useInput, useTerminalSize, type JSX } from './kit.js';
 import type {
   ComponentHost,
   EditorComponentFactory,
@@ -9,6 +9,8 @@ import type {
   UiCustomRequest,
 } from '../core/extension-types.js';
 import { extensionTheme, keyToData } from './extension-theme.js';
+import { theme } from './theme.js';
+import { overlayOptionsOf, resolveOverlayLayout } from './overlay-layout.js';
 
 /**
  * 扩展渲染层在 TUI 里的落点(Pi 的 Component 同形):
@@ -51,6 +53,20 @@ function instantiate<T extends ExtensionComponent>(
 }
 
 /**
+ * 独占键盘的扩展组件共用的收键:esc 先问宿主(`escape()` 返回 true 表示宿主
+ * 已消费——运行中的中断),其余按键还原成 Pi 风格的原始序列交给组件,按完
+ * 重画一次(Pi 的组件多半靠宿主在每次按键后重画,不必每个 handleInput 都
+ * 手动要求)。CustomHost 与 EditorHost 共用:「esc 归谁」只写在这一处。
+ */
+function useComponentKeys(instance: Instance, escape: () => boolean): void {
+  useInput((input, key) => {
+    if (key.escape && escape()) return;
+    instance.component.handleInput?.(keyToData(input, key), key);
+    instance.requestRender();
+  });
+}
+
+/**
  * 扩展给出的一组行(可带 ANSI)。**唯一的一处**:widget / header / footer、
  * `ui.custom` 的组件、工具的 renderCall / renderResult、自定义消息都画成
  * 这个样子——"扩展写的行怎么截断"只允许有一个答案。
@@ -86,30 +102,89 @@ export function SurfaceView(props: { surface: ExtensionSurface }): JSX.Element {
 export function CustomHost(props: {
   request: UiCustomRequest;
   onDone: (value: unknown) => void;
+  /** 组件可画的宽度;缺省整个终端(覆盖层给的是框内宽度)。 */
+  width?: () => number;
+  /** 返回 true 表示这次 esc 已被宿主消费(运行中的中断),不再转发给组件。见 EditorHost。 */
+  onEscape?: () => boolean;
+  /** 渲染出的行数变了就报一声(覆盖层据此按内容高度定位)。 */
+  onLines?: (count: number) => void;
 }): JSX.Element {
   const size = useTerminalSize();
+  const width = (): number => props.width?.() ?? size.columns;
   let finished = false;
   const done = (value: unknown): void => {
     if (finished) return;
     finished = true;
     props.onDone(value);
   };
-  const instance = instantiate((host) => props.request.factory(host, done), () => size.columns);
+  const instance = instantiate((host) => props.request.factory(host, done), width);
   const lines = createMemo((): string[] => {
     instance.tick();
-    return instance.component.render(size.columns);
+    return instance.component.render(width());
   });
-  useInput((input, key) => {
-    instance.component.handleInput?.(keyToData(input, key), key);
-    // 组件自己不 requestRender 的话按键之后也重画一次:Pi 的组件多半靠宿主
-    // 在每次按键后重画,不必每个 handleInput 都手动要求。
-    instance.requestRender();
-  });
+  createEffect(() => props.onLines?.(lines().length));
+  useComponentKeys(instance, () => props.onEscape?.() ?? false);
   onCleanup(() => {
     // 覆盖层被顶掉(会话关闭等)时组件没 done:按「没答」收尾,扩展不会挂住。
     done(undefined);
   });
   return <Lines lines={lines()} />;
+}
+
+/**
+ * `ui.custom(…, { overlay: true })` 的宿主:浮在时间线之上的一个圆角框,输入框
+ * 留在原地(但键盘归组件,与 CustomHost 一样独占)。位置与尺寸由
+ * overlay-layout.ts 按终端尺寸现算,终端一变就重排;`hidden`(把手的
+ * setHidden,或 `visible(w, h)` 说了不画)时整块不画也不占布局,组件仍活着。
+ * 框宽 = 内容宽 + 边框 2 + 内边距 2。
+ */
+export function OverlayHost(props: {
+  request: UiCustomRequest;
+  onDone: (value: unknown) => void;
+  /**
+   * 此刻画不画(App 的 overlayActive,即 `overlayShown`)。由 App 传进来而不是
+   * 这里再算一遍:画框与收键必须是**同一个**判据,它也管着底部区的键盘作用域。
+   */
+  shown: () => boolean;
+  /** 跑着的时候 esc 归中断(同 EditorHost):一个不处理 esc 的覆盖层不该让用户只剩双 ctrl+c。 */
+  onEscape?: () => boolean;
+}): JSX.Element {
+  const size = useTerminalSize();
+  // 内容行数:没给 height 的覆盖层按它定位(居中、贴底才对得上);框高 = 行数 + 上下边框。
+  const [rows, setRows] = createSignal<number | undefined>(undefined);
+  const layout = createMemo(() => {
+    const content = rows();
+    return resolveOverlayLayout(
+      overlayOptionsOf(props.request),
+      size.columns,
+      size.rows,
+      content === undefined ? undefined : content + 2,
+    );
+  });
+  const CHROME = 4;
+  return (
+    <Box
+      position="absolute"
+      zIndex={100}
+      visible={props.shown()}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.accent}
+      paddingX={1}
+      {...layout()}
+    >
+      {/* 藏起来的覆盖层把键盘还回去:组件还活着,只是不画、不收键。 */}
+      <KeyboardScope active={props.shown}>
+        <CustomHost
+          request={props.request}
+          onDone={props.onDone}
+          width={() => Math.max(1, layout().width - CHROME)}
+          onLines={setRows}
+          onEscape={props.onEscape}
+        />
+      </KeyboardScope>
+    </Box>
+  );
 }
 
 /**
@@ -166,11 +241,7 @@ export function EditorHost(props: {
     instance.tick();
     return component.render(size.columns);
   });
-  useInput((input, key) => {
-    if (key.escape && props.onEscape?.()) return;
-    component.handleInput?.(keyToData(input, key), key);
-    instance.requestRender();
-  });
+  useComponentKeys(instance, () => props.onEscape?.() ?? false);
   onCleanup(() => {
     if (!ref) return;
     delete ref.read;

@@ -48,13 +48,21 @@ import type {
   ExtensionStatusEntry,
   ExtensionSurface,
   ExtensionTheme,
+  ExtensionUIDialogOptions,
   MessageRenderer,
+  OverlayHandle,
+  OverlayOptions,
   PiToolResult,
+  TerminalInputHandler,
   ToolRenderers,
   ToolScope,
   UiAnswer,
   UiRequest,
+  WidgetPlacement,
+  WorkingIndicator,
 } from './extension-types.js';
+import type { NoticeLevel } from './events.js';
+import type { ThemeColors } from './palette.js';
 
 export { selectList, textInput } from './ui-kit.js';
 export type { SelectListOptions, TextInputOptions } from './ui-kit.js';
@@ -72,13 +80,28 @@ export type {
   ExtensionStatusEntry,
   ExtensionSurface,
   ExtensionTheme,
+  ExtensionUIDialogOptions,
   MessageRenderer,
+  OverlayHandle,
+  OverlayOptions,
   PiToolResult,
+  TerminalInputHandler,
   ToolRenderers,
   ToolScope,
   UiAnswer,
   UiRequest,
+  WidgetPlacement,
+  WorkingIndicator,
+  NoticeLevel,
+  ThemeColors,
 };
+
+/** `ui.custom` 的选项(Pi 同名):`overlay` 让组件浮在时间线之上而不是顶掉输入框。 */
+export interface CustomComponentOptions {
+  overlay?: boolean;
+  overlayOptions?: OverlayOptions | (() => OverlayOptions);
+  onHandle?: (handle: OverlayHandle) => void;
+}
 
 export interface ExtensionRunOptions {
   display?: string;
@@ -155,44 +178,88 @@ export interface ExtensionToolDefinition extends ToolRenderers {
  * 区域类(setWidget / setHeader / setFooter / setTitle)在 headless 下被忽略。
  */
 export interface ExtensionUI {
-  select(title: string, items: string[]): Promise<string | undefined>;
-  confirm(title: string, message: string): Promise<boolean>;
-  input(title: string, placeholder?: string): Promise<string | undefined>;
+  /** 列表选一项;esc、超时、中止都是 undefined。 */
+  select(title: string, items: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+  /** 是 / 否;esc、超时、中止都是 false。 */
+  confirm(title: string, message: string, opts?: ExtensionUIDialogOptions): Promise<boolean>;
+  input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
   /** 多行编辑框(Pi 的 ctx.ui.editor):回车提交,行尾 `\\` + 回车换行;esc 为 undefined。 */
-  editor(title: string, prefill?: string): Promise<string | undefined>;
+  editor(title: string, prefill?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
   /**
-   * 挂一个自己画、自己处理按键的组件(Pi 的 ctx.ui.custom):它顶掉输入框、
-   * 独占键盘,`done(value)` 收尾并把 value 交回;会话关闭时以 undefined 收尾。
+   * 挂一个自己画、自己处理按键的组件(Pi 的 ctx.ui.custom)。缺省它顶掉输入框、
+   * 独占键盘;`{ overlay: true }` 则浮在时间线之上、输入框留在原地(键盘仍归
+   * 它),`overlayOptions` 定位与尺寸,`onHandle` 拿到藏 / 撤的把手。`done(value)`
+   * 收尾并把 value 交回;会话关闭时以 undefined 收尾。
    */
   custom<T>(
     factory: (host: ComponentHost, done: (value: T) => void) => ExtensionComponent,
+    options?: CustomComponentOptions,
   ): Promise<T | undefined>;
-  /** 输入框上方的一块小部件:一组行,或按需重画的组件;undefined 清除。 */
-  setWidget(key: string, surface: ExtensionSurface | undefined): void;
+  /** 输入框上方(缺省)或下方的一块小部件:一组行,或按需重画的组件;undefined 清除。 */
+  setWidget(key: string, surface: ExtensionSurface | undefined, options?: { placement?: WidgetPlacement }): void;
   /** 屏幕顶部(时间线之上)的一块;undefined 清除。 */
   setHeader(surface: ExtensionSurface | undefined): void;
   /** 替换底栏;undefined 恢复缺省底栏。 */
   setFooter(surface: ExtensionSurface | undefined): void;
   /** 终端窗口标题;undefined 恢复。 */
   setTitle(title: string | undefined): void;
+  /**
+   * 输入框上方状态行里**这个扩展名下的一条**(Pi 的 ui.setStatus(key, text)):
+   * 同一扩展可以按 key 挂多条;undefined 清除。`api.setStatus` 是不带 key 的
+   * 那一条(带 `since` 走秒),两者并存。
+   */
+  setStatus(key: string, text: string | undefined): void;
   /** 工作状态线里替换「思考中 / 回复中」的文字(Pi 的 setWorkingMessage);undefined 恢复。 */
   setWorkingMessage(message: string | undefined): void;
+  /** 整条工作状态线画不画(Pi 的 setWorkingVisible);false 时跑着也不画。 */
+  setWorkingVisible(visible: boolean): void;
+  /**
+   * 工作状态线的 spinner(Pi 的 setWorkingIndicator):不给恢复缺省动画;
+   * `frames: ['●']` 静态标记;`frames: []` 不画 spinner。
+   */
+  setWorkingIndicator(options?: WorkingIndicator): void;
+  /** 折叠的思考块那一行的标签(Pi 的 setHiddenThinkingLabel);不给恢复缺省。 */
+  setHiddenThinkingLabel(label?: string): void;
   /**
    * 顶替缺省输入框的编辑器组件(Pi 的 setEditorComponent):工厂收 host 与
    * `submit(text)`,组件自己画、自己收键,`submit` 与在缺省输入框回车同一条路。
    * undefined 恢复缺省输入框。
    */
   setEditorComponent(factory: EditorComponentFactory | undefined): void;
+  /** 当前顶替着输入框的编辑器工厂;缺省输入框时 undefined。 */
+  getEditorComponent(): EditorComponentFactory | undefined;
   /** 给行上色的主题面(Pi 的 ctx.ui.theme),与组件的 `host.theme` 同一份。 */
   readonly theme: ExtensionTheme;
+  /**
+   * 可选的主题:内置的 `default`(`path` 为 undefined)加各主题目录里的
+   * `<name>.json`。Pi 的是同步的(它启动时预扫);这里现扫目录,所以是
+   * Promise——主题文件可以随时往目录里加。
+   */
+  getAllThemes(): Promise<Array<{ name: string; path: string | undefined }>>;
+  /** 按名字读一套配色(不切换);找不到或解析失败为 undefined。 */
+  getTheme(name: string): Promise<ThemeColors | undefined>;
+  /**
+   * 切换配色:给名字就找 `<name>.json`(`default` 回内置),给对象就直接用。
+   * 与 `/theme` 不同:**不落盘**,也不整树重挂——只让读过 `theme.x` 的节点
+   * 重算,用户正在打的草稿不会清掉(自动跟随系统明暗的扩展就是这么用的)。
+   */
+  setTheme(theme: string | ThemeColors): Promise<{ success: boolean; error?: string }>;
+  /** ctrl+r 的详情开关(思考正文、工具输出)。headless 恒为 false / 忽略。 */
+  getToolsExpanded(): boolean;
+  setToolsExpanded(expanded: boolean): void;
+  /**
+   * 监听原始终端输入(Pi 的 onTerminalInput):返回 `{ consume: true }` 就吞掉
+   * 这个序列,TUI 里没人再收到。返回注销函数。没有 Pi 的 `data` 改写。
+   */
+  onTerminalInput(handler: TerminalInputHandler): () => void;
   /** 输入框当前草稿(headless 恒为空串)。 */
   getEditorText(): string;
   /** 覆盖输入框草稿(headless 忽略)。 */
   setEditorText(text: string): void;
   /** 在光标处插入一段文本(Pi 的 pasteToEditor;headless 忽略)。 */
   pasteToEditor(text: string): void;
-  /** 与 api.notify 同一条路,参数顺序照 Pi(message 在前)。 */
-  notify(message: string, level?: 'info' | 'warn'): void;
+  /** 与 api.notify 同一条路,参数顺序照 Pi(message 在前);`warning` 是 Pi 的拼法,等于 `warn`。 */
+  notify(message: string, level?: NoticeLevel | 'warning'): void;
 }
 
 /** 扩展注册的快捷键(Pi 的 registerShortcut)。 */
@@ -457,7 +524,7 @@ export interface ExtensionAPI {
    */
   setState(key: string, value: unknown): void;
   /** 用户可见的一条提示(时间线 notice)。 */
-  notify(level: 'info' | 'warn', message: string): void;
+  notify(level: NoticeLevel, message: string): void;
   /** 向用户提问(select / confirm / input),见 ExtensionUI。 */
   readonly ui: ExtensionUI;
   /** 此刻有没有前端在看。 */

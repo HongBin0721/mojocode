@@ -162,7 +162,9 @@ export function useInput(
   handler: (input: string, key: Key) => void,
   options: UseInputOptions = {},
 ): void {
+  const scope = useContext(KeyboardScopeContext);
   const isActive = (): boolean => {
+    if (!scope()) return false;
     const active = options.isActive;
     if (typeof active === 'function') return active();
     return active !== false;
@@ -201,6 +203,17 @@ export function useInput(
     flush();
     handler(text, emptyKey());
   });
+}
+
+/**
+ * 渲染器级的原始输入钩子(扩展的 `ui.onTerminalInput`):在 OpenTUI 把序列
+ * 解析成 keypress **之前**问一声,返回 true 就吞掉——之后任何 useInput 都收
+ * 不到它。挂在最前(prepend),卸载即摘除。
+ */
+export function useRawInput(handler: (sequence: string) => boolean): void {
+  const renderer = useRenderer();
+  renderer.prependInputHandler(handler);
+  onCleanup(() => renderer.removeInputHandler(handler));
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +447,22 @@ export async function render(
 
 /** true = 已处于某个 <Text> 内部,再嵌套要渲染成 <span>。 */
 const NestedText = createContext(false);
+
+/**
+ * 键盘作用域:这棵子树里的 useInput 此刻收不收键。与 Ink 一样,所有活跃的
+ * useInput 都收到每一个键——互斥靠各处自己判;这个作用域把「一整块界面让出
+ * 键盘」收成**一处**:覆盖层式的 ui.custom 拿着键盘时,App 把整个底部区包在
+ * `active={() => !overlayActive()}` 里,输入框、扩展编辑器、提问框与各个选择器
+ * 一起停收,而不是每个订阅者各自接一个开关(接漏一个,一次回车就两处生效)。
+ * 作用域可以嵌套,取与。
+ */
+const KeyboardScopeContext = createContext<() => boolean>(() => true);
+
+export function KeyboardScope(props: { active: () => boolean; children?: JSX.Element }): JSX.Element {
+  const parent = useContext(KeyboardScopeContext);
+  const active = (): boolean => parent() && props.active();
+  return <KeyboardScopeContext.Provider value={active}>{props.children}</KeyboardScopeContext.Provider>;
+}
 
 export interface TextProps {
   color?: string;
@@ -801,6 +830,15 @@ export interface BoxProps {
    */
   borderSides?: BorderSide[];
   borderColor?: string;
+  /**
+   * 绝对定位(扩展的覆盖层用):相对最近的定位祖先——App 的根容器,坐标从
+   * 它的左上角算。`zIndex` 大的盖在上面;`visible` 为假时既不画也不占布局。
+   */
+  position?: 'absolute' | 'relative';
+  top?: number | `${number}%`;
+  left?: number | `${number}%`;
+  zIndex?: number;
+  visible?: boolean;
   /** 左键单击(判定见 clickHandlers)。命中区就是这个 Box 的布局矩形。 */
   onClick?: (info: ClickInfo) => void;
   /**

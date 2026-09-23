@@ -236,6 +236,7 @@ export const en = {
   'uiPrompt.confirmHint': 'y / n · enter confirm · esc = no',
   'uiPrompt.inputHint': 'enter submit · esc cancel',
   'uiPrompt.editorHint': 'enter submit · trailing `\\` + enter for newline · esc cancel',
+  'uiPrompt.timeout': 'auto-dismiss in {s}s',
   'notice.mcpNone': 'No MCP servers configured. Add them under "mcpServers" in .mojocode/config.json.',
   'notice.doctorRunning': 'Running checks …',
   'notice.mcpTools': '{n} tools',

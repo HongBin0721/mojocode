@@ -11,6 +11,8 @@ import { wrapCustomMessage } from '../src/agent/loop.js';
 import { adaptToolDefinition } from '../src/extensions/tool-adapter.js';
 import { flattenPiResult } from '../src/core/extension-types.js';
 import { PROVIDER_PRESETS } from '../src/config/providers.js';
+import { BUILTIN_PALETTE, palette } from '../src/core/palette.js';
+import type { OverlayHandle } from '../src/core/extension-types.js';
 
 /**
  * Pi 对齐的那批 ExtensionAPI 成员,走**真 bootstrap**:一个磁盘扩展把自己
@@ -681,5 +683,189 @@ describe('自定义消息与 /reload', () => {
     // 后进来的会看到已被清空的 diskExtensionIds——什么都不卸却又并发装一遍。
     const results = await Promise.all([session.reloadExtensions(), session.reloadExtensions()]);
     expect(results[0]).toBe(results[1]);
+  });
+});
+
+describe('ui 面的第五批对齐(Pi 的 ctx.ui 余下成员)', () => {
+  it('提问框的 timeout / signal:到点或中止都按「没答」兑现,请求带 deadline', async () => {
+    session.attachUi({ available: () => true });
+    const before = Date.now();
+    const confirmed = api.ui.confirm('t', 'm', { timeout: 30 });
+    const request = session.uiRequests[0]!;
+    expect(request.kind).toBe('confirm');
+    expect(request.deadline).toBeGreaterThanOrEqual(before + 30);
+    await expect(confirmed).resolves.toBe(false);
+    expect(session.uiRequests).toEqual([]);
+
+    const controller = new AbortController();
+    const selected = api.ui.select('t', ['a', 'b'], { signal: controller.signal });
+    expect(session.uiRequests).toHaveLength(1);
+    controller.abort();
+    await expect(selected).resolves.toBeUndefined();
+    expect(session.uiRequests).toEqual([]);
+    // 已经中止的 signal:根本不进队列。
+    await expect(api.ui.input('t', undefined, { signal: controller.signal })).resolves.toBeUndefined();
+    expect(session.uiRequests).toEqual([]);
+    session.attachUi(undefined);
+  });
+
+  it('ui.notify 的 error 与 Pi 拼法的 warning 都上总线', () => {
+    const levels: string[] = [];
+    const off = session.bus.on((e) => {
+      if (e.type === 'notice') levels.push(e.level);
+    });
+    api.ui.notify('boom', 'error');
+    api.ui.notify('hm', 'warning');
+    api.ui.notify('ok');
+    off();
+    expect(levels).toEqual(['error', 'warn', 'info']);
+  });
+
+  it('ui.setStatus(key, text):同一扩展按 key 多条,与 api.setStatus 互不相撞', () => {
+    api.ui.setStatus('a', 'one');
+    api.ui.setStatus('b', 'two');
+    api.setStatus('plain');
+    const ids = session.extensionStatus.map((entry) => entry.id).sort();
+    expect(ids).toEqual(['capture', 'capture:a', 'capture:b']);
+    api.ui.setStatus('a', undefined);
+    api.setStatus(undefined);
+    expect(session.extensionStatus.map((entry) => entry.id)).toEqual(['capture:b']);
+    api.ui.setStatus('b', undefined);
+  });
+
+  it('工作状态线的三个槽位与 widget 的位置进 uiSurfaces;getEditorComponent 读回工厂', () => {
+    api.ui.setWorkingVisible(false);
+    api.ui.setWorkingIndicator({ frames: ['●'], intervalMs: 500 });
+    api.ui.setHiddenThinkingLabel('pondered');
+    api.ui.setWidget('below', ['under'], { placement: 'belowEditor' });
+    api.ui.setWidget('above', ['over']);
+    expect(session.uiSurfaces).toMatchObject({
+      workingVisible: false,
+      workingIndicator: { frames: ['●'], intervalMs: 500 },
+      hiddenThinkingLabel: 'pondered',
+      widgets: [
+        { key: 'below', surface: ['under'], placement: 'belowEditor' },
+        { key: 'above', surface: ['over'] },
+      ],
+    });
+    // 可见是缺省,存一个 true 没有意义:槽位直接消失。
+    api.ui.setWorkingVisible(true);
+    api.ui.setWorkingIndicator();
+    api.ui.setHiddenThinkingLabel();
+    api.ui.setWidget('below', undefined);
+    api.ui.setWidget('above', undefined);
+    expect(session.uiSurfaces).toEqual({ widgets: [] });
+
+    const factory = () => ({ render: () => ['ed'] });
+    expect(api.ui.getEditorComponent()).toBeUndefined();
+    api.ui.setEditorComponent(factory);
+    expect(api.ui.getEditorComponent()).toBe(factory);
+    api.ui.setEditorComponent(undefined);
+  });
+
+  it('ui.custom 的 overlay:请求带选项,把手 setHidden 换引用、hide 以 undefined 收尾', async () => {
+    session.attachUi({ available: () => true });
+    let handle: OverlayHandle | undefined;
+    const pending = api.ui.custom(() => ({ render: () => ['x'] }), {
+      overlay: true,
+      overlayOptions: { width: 30 },
+      onHandle: (h) => {
+        handle = h;
+      },
+    });
+    const first = session.uiCustoms[0]!;
+    expect(first.overlay).toEqual({ width: 30 });
+    expect(first.hidden).toBeUndefined();
+    handle!.setHidden(true);
+    const second = session.uiCustoms[0]!;
+    expect(second).not.toBe(first);
+    expect(second.hidden).toBe(true);
+    handle!.setHidden(true); // 幂等:不换引用
+    expect(session.uiCustoms[0]).toBe(second);
+    handle!.hide();
+    await expect(pending).resolves.toBeUndefined();
+    expect(session.uiCustoms).toEqual([]);
+    // `overlay: true` 不给选项就是空对象;不给 overlay 就是顶掉输入框的那种。
+    const plain = api.ui.custom(() => ({ render: () => [] }));
+    expect(session.uiCustoms[0]!.overlay).toBeUndefined();
+    session.resolveCustom(session.uiCustoms[0]!.id, undefined);
+    await plain;
+    session.attachUi(undefined);
+  });
+
+  it('onTerminalInput:先注册的先问,第一个 consume 的赢;注销后不再问', () => {
+    const seen: string[] = [];
+    const offA = api.ui.onTerminalInput((data) => {
+      seen.push(`a:${data}`);
+      return data === 'x' ? { consume: true } : undefined;
+    });
+    const offB = api.ui.onTerminalInput((data) => {
+      seen.push(`b:${data}`);
+      return undefined;
+    });
+    expect(session.runTerminalInput('x')).toBe(true);
+    expect(session.runTerminalInput('y')).toBe(false);
+    expect(seen).toEqual(['a:x', 'a:y', 'b:y']);
+    offA();
+    offB();
+    expect(session.runTerminalInput('x')).toBe(false);
+  });
+
+  it('getToolsExpanded / setToolsExpanded 打到宿主;没有宿主恒 false', () => {
+    expect(api.ui.getToolsExpanded()).toBe(false);
+    let expanded = false;
+    session.attachUi({
+      available: () => true,
+      getToolsExpanded: () => expanded,
+      setToolsExpanded: (next) => {
+        expanded = next;
+      },
+    });
+    api.ui.setToolsExpanded(true);
+    expect(api.ui.getToolsExpanded()).toBe(true);
+    session.attachUi(undefined);
+  });
+
+  it('getAllThemes / getTheme / setTheme:列目录、读配色、就地换色并通知宿主;不落盘', async () => {
+    const dir = path.join(root, '.mojocode', 'themes');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'dusk.json');
+    await fs.writeFile(file, JSON.stringify({ colors: { accent: '#7aa2f7' } }));
+    const changed: Array<string | undefined> = [];
+    session.attachUi({ available: () => true, themeChanged: (f) => changed.push(f) });
+    try {
+      const all = await api.ui.getAllThemes();
+      expect(all[0]).toEqual({ name: 'default', path: undefined });
+      expect(all).toContainEqual({ name: 'dusk', path: file });
+      expect(await api.ui.getTheme('dusk')).toEqual({ accent: '#7aa2f7' });
+      expect(await api.ui.getTheme('nope')).toBeUndefined();
+      expect(await api.ui.getTheme('default')).toEqual({ ...BUILTIN_PALETTE });
+
+      expect(await api.ui.setTheme('dusk')).toEqual({ success: true });
+      expect(palette.accent).toBe('#7aa2f7');
+      expect(session.config.theme).toBe('dusk');
+      expect(changed).toEqual([file]);
+      expect(await api.ui.setTheme('nope')).toMatchObject({ success: false });
+      // 直接给对象:没给的键回内置(accent 不再是 dusk 的)。
+      expect(await api.ui.setTheme({ dim: 'white' })).toEqual({ success: true });
+      expect(palette.dim).toBe('white');
+      expect(palette.accent).toBe(BUILTIN_PALETTE.accent);
+      expect(changed.at(-1)).toBeUndefined();
+      // 给配色对象就不再对应任何主题名:留着 dusk 的话,/theme 选择器 esc 收回
+      // 预览会按名字从磁盘重读 dusk,把扩展的配色顶掉。
+      expect(session.config.theme).toBeUndefined();
+
+      // 连发两次(读盘是异步的):只有后发的那次生效,先发的回报被顶替。
+      const [first, second] = await Promise.all([api.ui.setTheme('dusk'), api.ui.setTheme('default')]);
+      expect(first).toMatchObject({ success: false });
+      expect(second).toEqual({ success: true });
+      expect(palette.accent).toBe(BUILTIN_PALETTE.accent);
+      expect(session.config.theme).toBeUndefined();
+    } finally {
+      await api.ui.setTheme('default');
+      session.attachUi(undefined);
+    }
+    expect(palette.dim).toBe(BUILTIN_PALETTE.dim);
+    expect(session.config.theme).toBeUndefined();
   });
 });

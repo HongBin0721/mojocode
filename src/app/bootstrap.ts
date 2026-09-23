@@ -15,6 +15,8 @@ import {
   type ExtensionStatusEntry,
   type CompactOptions,
   type ExtensionContextUsage,
+  type ExtensionUIDialogOptions,
+  type CustomComponentOptions,
   type ExtensionCommandOption,
   type ExtensionToolDefinition,
   type ExtensionToolFactory,
@@ -32,9 +34,14 @@ import {
   type ComponentHost,
   type ExtensionComponent,
   type UiCustomRequest,
+  type TerminalInputHandler,
   type UiHost,
   type UiSurfaces,
+  type WidgetPlacement,
 } from '../core/extension-types.js';
+import type { NoticeLevel } from '../core/events.js';
+import { applyPalette, claimPaletteWrite, type ThemeColors } from '../core/palette.js';
+import { BUILTIN_THEME_NAME, listAllThemes, resolveTheme, themeLocations } from './theme-files.js';
 import { normalizeShortcut, RESERVED_SHORTCUTS } from '../core/extension-types.js';
 import type { ExtensionShortcutOptions } from '../core/extension.js';
 import path from 'node:path';
@@ -109,7 +116,7 @@ export interface Session {
    * (刚连上的 client 得知道它连上之前发生过什么),headless 在 `bus.on`
    * 之后立刻发。
    */
-  startupNotices: ReadonlyArray<{ level: 'warn' | 'info'; message: string }>;
+  startupNotices: ReadonlyArray<{ level: NoticeLevel; message: string }>;
   store: SessionStore;
   /** 丢弃当前对话,换一个全新的 SessionStore 从头记录(`/new`、`/clear`)。 */
   newSession: () => Promise<SessionStore>;
@@ -190,6 +197,11 @@ export interface Session {
    * 卸载时传 undefined;headless 从不调——扩展的提问立即按缺省兑现。
    */
   attachUi: (host: UiHost | undefined) => void;
+  /**
+   * 原始终端序列先问扩展(`ui.onTerminalInput`):有人 consume 就返回 true,
+   * TUI 的键盘处理器不再收到它。App 挂载时用渲染器级的钩子接进来。
+   */
+  runTerminalInput: (data: string) => boolean;
   /** TUI 按到带修饰键的组合时问一声:有扩展认领就跑它的处理器并返回 true。 */
   runShortcut: (key: string) => boolean;
   /** `ui.custom` 挂出来、还没 done 的组件(TUI 画第一条,独占键盘)。 */
@@ -298,15 +310,39 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   let uiCounter = 0;
   const uiPending = new Map<
     string,
-    { request: UiRequest; resolve: (answer: UiAnswer) => void; owner?: string }
+    { request: UiRequest; resolve: (answer: UiAnswer) => void; owner?: string; cleanup?: () => void }
   >();
   type UiRequestSpec = UiRequest extends infer R ? (R extends UiRequest ? Omit<R, 'id'> : never) : never;
-  const askUi = (request: UiRequestSpec, owner?: string): Promise<UiAnswer> => {
-    if (!uiAvailable()) return Promise.resolve(undefined);
+  /**
+   * 「没答」的缺省值:confirm 是 false,其余 undefined——esc、超时、中止、
+   * headless 四条来路同一个结局,扩展不必分辨。
+   */
+  const defaultAnswer = (kind: UiRequest['kind']): UiAnswer => (kind === 'confirm' ? false : undefined);
+  const askUi = (
+    request: UiRequestSpec,
+    owner?: string,
+    opts?: ExtensionUIDialogOptions,
+  ): Promise<UiAnswer> => {
+    // 没人看、或 signal 在发起前就已中止:不进队列,直接按「没答」兑现。
+    if (!uiAvailable() || opts?.signal?.aborted) return Promise.resolve(defaultAnswer(request.kind));
     const id = `ui-${++uiCounter}`;
-    const full = { ...request, id } as UiRequest;
+    // 超时是绝对时刻进请求:TUI 只画倒计时,计时的只有这里这一个定时器。
+    const deadline = opts?.timeout !== undefined ? Date.now() + opts.timeout : undefined;
+    const full = { ...request, id, ...(deadline !== undefined ? { deadline } : {}) } as UiRequest;
     return new Promise<UiAnswer>((resolve) => {
-      uiPending.set(id, { request: full, resolve, ...(owner ? { owner } : {}) });
+      const dismiss = (): void => answerUi(id, defaultAnswer(request.kind));
+      const timer = opts?.timeout !== undefined ? setTimeout(dismiss, opts.timeout) : undefined;
+      const signal = opts?.signal;
+      signal?.addEventListener('abort', dismiss, { once: true });
+      uiPending.set(id, {
+        request: full,
+        resolve,
+        ...(owner ? { owner } : {}),
+        cleanup: () => {
+          if (timer) clearTimeout(timer);
+          signal?.removeEventListener('abort', dismiss);
+        },
+      });
       // 先通知订阅者(TUI 据 uiRequests 画框),再上总线(headless --json 的
       // 事件流与扩展的 onEvent 看得到)。
       extensionsChanged();
@@ -317,6 +353,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     const entry = uiPending.get(id);
     if (!entry) return; // 已经答过,或已被取消
     uiPending.delete(id);
+    entry.cleanup?.();
     entry.resolve(answer);
     bus.emit({ type: 'ui-resolved', id });
     extensionsChanged();
@@ -381,20 +418,45 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   };
 
   /** 界面区域的三个原语(下面的 ctx 工厂在它们外面加"记在谁名下")。 */
-  const setWidgetImpl = (key: string, surface: ExtensionSurface | undefined): void => {
+  const setWidgetImpl = (
+    key: string,
+    surface: ExtensionSurface | undefined,
+    placement?: WidgetPlacement,
+  ): void => {
     const index = uiSurfaces.widgets.findIndex((w) => w.key === key);
     if (surface === undefined) {
       if (index === -1) return;
       uiSurfaces = { ...uiSurfaces, widgets: uiSurfaces.widgets.filter((w) => w.key !== key) };
-    } else if (index === -1) {
-      uiSurfaces = { ...uiSurfaces, widgets: [...uiSurfaces.widgets, { key, surface }] };
     } else {
-      if (uiSurfaces.widgets[index]!.surface === surface) return;
+      const current = uiSurfaces.widgets[index];
+      if (current && current.surface === surface && current.placement === placement) return;
+      const entry = { key, surface, ...(placement ? { placement } : {}) };
       const widgets = [...uiSurfaces.widgets];
-      widgets[index] = { key, surface };
+      if (index === -1) widgets.push(entry);
+      else widgets[index] = entry;
       uiSurfaces = { ...uiSurfaces, widgets };
     }
     extensionsChanged();
+  };
+  /**
+   * 扩展的原始终端输入监听(`ui.onTerminalInput`)。表住在这里而不是 UiHost
+   * 上:处理器多在 setup 里注册,那时界面还没挂;TUI 挂上后只需一个渲染器级
+   * 的钩子来问 `runTerminalInput`。先注册的先问,第一个说 consume 的赢。
+   */
+  const terminalInputHandlers = new Set<TerminalInputHandler>();
+  const runTerminalInput = (data: string): boolean => {
+    for (const handler of terminalInputHandlers) {
+      try {
+        if (handler(data)?.consume) return true;
+      } catch (err) {
+        bus.emit({
+          type: 'notice',
+          level: 'warn',
+          message: t('notice.hookFailed', { hook: 'onTerminalInput', message: errorMessage(err) }),
+        });
+      }
+    }
+    return false;
   };
 
   /**
@@ -467,6 +529,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const createExtensionContext = (
     owner: string,
     undoOnce: (key: string, undo: () => void) => void,
+    /** 不按键去重的撤销(一次注册一条,如 onTerminalInput):压一条、原样交回退订。 */
+    track: (off: () => void) => () => void,
   ): ExtensionContext => {
     /**
      * 一个单值槽位的 setter:记一笔"卸载时清掉"再写进去。撤销键与槽位键
@@ -479,56 +543,134 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         undoOnce(slot, () => setSurface(slot, undefined));
         setSurface(slot, value);
       };
+    // 只有 false 才占槽位:缺省就是画,存一个 true 没有意义。
+    const workingVisibleSlot = ownedSlot('workingVisible');
     const ui: ExtensionUI = {
       custom: <T,>(
         factory: (host: ComponentHost, done: (value: T) => void) => ExtensionComponent,
+        customOptions?: CustomComponentOptions,
       ): Promise<T | undefined> => {
         if (!uiAvailable()) return Promise.resolve(undefined);
         const id = `custom-${++uiCustomCounter}`;
         return new Promise<T | undefined>((resolve) => {
+          const overlay = customOptions?.overlay ? (customOptions.overlayOptions ?? {}) : undefined;
           uiCustoms.set(id, {
-            request: { id, factory: factory as UiCustomRequest['factory'] },
+            request: {
+              id,
+              factory: factory as UiCustomRequest['factory'],
+              ...(overlay !== undefined ? { overlay } : {}),
+            },
             resolve: (value) => resolve(value as T | undefined),
             owner,
           });
           extensionsChanged();
+          if (overlay !== undefined && customOptions?.onHandle) {
+            // 把手:藏 / 撤。藏是**换引用**改 request(TUI 的 memo 按身份判变),
+            // 撤就是以 undefined 收尾——与 esc / 会话关闭同一个结局。
+            customOptions.onHandle({
+              setHidden: (hidden) => {
+                const entry = uiCustoms.get(id);
+                if (!entry || Boolean(entry.request.hidden) === hidden) return;
+                entry.request = { ...entry.request, hidden };
+                extensionsChanged();
+              },
+              hide: () => resolveCustom(id, undefined),
+            });
+          }
         });
       },
-      setWidget: (key, surface) => {
+      setWidget: (key, surface, widgetOptions) => {
         undoOnce(`widget:${key}`, () => setWidgetImpl(key, undefined));
-        setWidgetImpl(key, surface);
+        setWidgetImpl(key, surface, widgetOptions?.placement);
       },
       setHeader: ownedSlot('header'),
       setFooter: ownedSlot('footer'),
       setTitle: ownedSlot('title'),
       setWorkingMessage: ownedSlot('workingMessage'),
       setEditorComponent: ownedSlot('editor'),
+      getEditorComponent: () => uiSurfaces.editor,
+      setWorkingVisible: (visible) => workingVisibleSlot(visible ? undefined : false),
+      setWorkingIndicator: ownedSlot('workingIndicator'),
+      setHiddenThinkingLabel: ownedSlot('hiddenThinkingLabel'),
+      // 这个扩展名下按 key 分的多条状态:id 是 `<扩展>:<key>`,与不带 key 的
+      // `api.setStatus`(id 就是扩展 id)互不相撞。
+      setStatus: (key, text) => {
+        const entryId = `${owner}:${key}`;
+        undoOnce(`status:${key}`, () => writeStatus(entryId, undefined));
+        writeStatus(entryId, text === undefined ? undefined : { id: entryId, text });
+      },
       theme: extensionTheme,
+      getAllThemes: async () =>
+        (await listAllThemes(themeSearch())).map((entry) => ({ name: entry.name, path: entry.file })),
+      getTheme: async (name) => {
+        const result = await resolveTheme(name, themeSearch());
+        return result.ok ? result.colors : undefined;
+      },
+      setTheme: async (spec) => {
+        // 领号在读盘之前:连发两次(跟随系统明暗的扩展连切 dark→light)、或读盘
+        // 期间用户在 /theme 里动了,都只让最后发起的那次落地(见 claimPaletteWrite)。
+        const current = claimPaletteWrite();
+        let colors: ThemeColors;
+        let file: string | undefined;
+        if (typeof spec === 'string') {
+          const result = await resolveTheme(spec, themeSearch());
+          if (!result.ok) {
+            return {
+              success: false,
+              error: result.reason === 'not-found' ? `theme "${spec}" not found` : (result.detail ?? spec),
+            };
+          }
+          ({ colors, file } = result);
+        } else {
+          colors = spec;
+        }
+        if (!current()) return { success: false, error: 'superseded by a later theme change' };
+        // 与 /theme 一样记进会话配置(不落盘):`/theme` 的用法提示里才显示得对。
+        // 直接给配色对象时它不对应任何主题名。
+        config.theme = typeof spec === 'string' && spec !== BUILTIN_THEME_NAME ? spec : undefined;
+        // 表在 core 里就地改(headless 下 extensionTheme.fg 也立刻换色),
+        // 让 TUI 重算是宿主的事。
+        applyPalette(colors);
+        uiHost?.themeChanged?.(file);
+        return { success: true };
+      },
+      getToolsExpanded: () => uiHost?.getToolsExpanded?.() ?? false,
+      setToolsExpanded: (expanded) => uiHost?.setToolsExpanded?.(expanded),
+      onTerminalInput: (handler) => {
+        terminalInputHandlers.add(handler);
+        return track(() => {
+          terminalInputHandlers.delete(handler);
+        });
+      },
       getEditorText: () => uiHost?.getEditorText?.() ?? '',
       setEditorText: (text) => uiHost?.setEditorText?.(text),
       pasteToEditor: (text) => uiHost?.pasteToEditor?.(text),
-      editor: async (title, prefill) => {
+      editor: async (title, prefill, opts) => {
         const answer = await askUi(
           { kind: 'editor', title, ...(prefill !== undefined ? { prefill } : {}) },
           owner,
+          opts,
         );
         return typeof answer === 'string' ? answer : undefined;
       },
-      select: async (title, items) => {
-        const answer = await askUi({ kind: 'select', title, items }, owner);
+      select: async (title, items, opts) => {
+        const answer = await askUi({ kind: 'select', title, items }, owner, opts);
         // 答案必须是列表里的一项:提示框只会发这些,但 answerUi 谁都能调。
         return typeof answer === 'string' && items.includes(answer) ? answer : undefined;
       },
-      confirm: async (title, message) =>
-        (await askUi({ kind: 'confirm', title, message }, owner)) === true,
-      input: async (title, placeholder) => {
+      confirm: async (title, message, opts) =>
+        (await askUi({ kind: 'confirm', title, message }, owner, opts)) === true,
+      input: async (title, placeholder, opts) => {
         const answer = await askUi(
           { kind: 'input', title, ...(placeholder !== undefined ? { placeholder } : {}) },
           owner,
+          opts,
         );
         return typeof answer === 'string' ? answer : undefined;
       },
-      notify: (message, level = 'info') => bus.emit({ type: 'notice', level, message }),
+      // `warning` 是 Pi 的拼法;总线上只有 warn。
+      notify: (message, level = 'info') =>
+        bus.emit({ type: 'notice', level: level === 'warning' ? 'warn' : level, message }),
     };
     const ctx: ExtensionContext = {
       cwd: root,
@@ -665,7 +807,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // 扩展包先解析到磁盘:它既可能带扩展也可能带技能,后者要在 SkillManager
   // 建好之前知道目录。配置里记着却找不到的包不是致命错误——提示用户重新
   // install 即可,别的扩展照装。
-  const startupNotices: Array<{ level: 'warn' | 'info'; message: string }> = [];
+  const startupNotices: Array<{ level: NoticeLevel; message: string }> = [];
   const resolved = await resolvePackages(config.packages, { root });
   for (const spec of resolved.missing) {
     startupNotices.push({ level: 'warn', message: t('notice.packageMissing', { spec }) });
@@ -677,6 +819,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   });
   /** 包与扩展贡献的主题目录;TUI 起来前按配置 `theme` 在这些目录里找。 */
   const themeDirs: string[] = resolved.packages.flatMap((pkg) => pkg.manifest.themes);
+  /** 主题查找目录(扩展经 resources_discover 贡献的会在装载后并进 themeDirs,所以现算)。 */
+  const themeSearch = (): string[] => themeLocations(root, themeDirs);
 
   // env 可变:refreshEnvironment(`/init` 写完 AGENTS.md 后)会整体换新。
   // 技能初扫并入同一批:tools 组装(下方)读 skillManager.current() 决定
@@ -935,6 +1079,20 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   const sameJson = (a: unknown, b: unknown): boolean =>
     a !== undefined && JSON.stringify(a) === JSON.stringify(b);
   /**
+   * 状态行的一条:写入或清除,没变就不通知。`api.setStatus`(id = 扩展 id,带
+   * since)与 `ui.setStatus(key, …)`(id = `<扩展>:<key>`)共用这一处——两份各写
+   * 一遍时去重判据就已经不一致了(一个比 text、一个比整条)。
+   */
+  const writeStatus = (entryId: string, entry: ExtensionStatusEntry | undefined): void => {
+    if (entry === undefined) {
+      if (!extensionStatus.delete(entryId)) return;
+    } else {
+      if (sameJson(extensionStatus.get(entryId), entry)) return;
+      extensionStatus.set(entryId, entry);
+    }
+    extensionsChanged();
+  };
+  /**
    * 扩展发布的运行时快照(见 ExtensionAPI.publishRuntime)。只在会话进程里
    * 读,不进任何 wire 快照——它描述的是本进程里的活物(已拉起的子进程)。
    */
@@ -1094,7 +1252,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
      * 都记在它名下(卸载时才撤得干净)。**它必须一路传到处理器手上**——
      * 钩子、命令、快捷键、Pi 形状工具的 execute 收到的都是这一份。
      */
-    const extCtx = createExtensionContext(id, registerUndoOnce);
+    const extCtx = createExtensionContext(id, registerUndoOnce, track);
     const ui = extCtx.ui;
     return {
       id,
@@ -1155,15 +1313,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         extensionsChanged();
       },
       setStatus: (text, opts) => {
-        registerUndoOnce('status', () => extensionStatus.delete(id));
-        if (text === undefined) {
-          if (!extensionStatus.delete(id)) return;
-        } else {
-          const next = { id, text, ...(opts?.since !== undefined ? { since: opts.since } : {}) };
-          if (sameJson(extensionStatus.get(id), next)) return;
-          extensionStatus.set(id, next);
-        }
-        extensionsChanged();
+        registerUndoOnce('status', () => writeStatus(id, undefined));
+        writeStatus(
+          id,
+          text === undefined ? undefined : { id, text, ...(opts?.since !== undefined ? { since: opts.since } : {}) },
+        );
       },
       setState: (key, value) => {
         registerUndoOnce(`state:${key}`, () => extensionState.delete(key));
@@ -1715,6 +1869,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       });
       return true;
     },
+    runTerminalInput,
     get uiCustoms() {
       return [...uiCustoms.values()].map((entry) => entry.request);
     },

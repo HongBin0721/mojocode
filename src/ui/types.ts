@@ -3,6 +3,8 @@
  * 继续读 text 里的 `[image: 文件名]` 占位标签——两者并存,标签不因图存在
  * 而从 text 里去掉。
  */
+
+import type { NoticeLevel } from '../core/events.js';
 export interface TimelineImage {
   mediaType: string;
   data: string;
@@ -50,7 +52,7 @@ export type TimelineItem =
       inputTokens?: number;
       cachedTokens?: number;
     }
-  | { key: string; kind: 'notice'; level: 'info' | 'warn'; message: string }
+  | { key: string; kind: 'notice'; level: NoticeLevel; message: string }
   | { key: string; kind: 'error'; message: string }
   | { key: string; kind: 'divider'; label: string }
   /** 扩展经 sendMessage 放进对话的自定义消息;画法按 customType 找扩展注册的渲染器。 */

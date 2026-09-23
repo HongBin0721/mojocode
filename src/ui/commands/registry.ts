@@ -1,3 +1,4 @@
+import type { NoticeLevel } from '../../core/events.js';
 import { t, type MessageKey } from '../../i18n/index.js';
 import type { SlashCommand } from '../Input.js';
 import type { ReasoningEffort, TimelineMode } from '../../config/schema.js';
@@ -93,7 +94,7 @@ export const FOCUS_DESCRIPTIONS: Record<TimelineMode, MessageKey> = {
  */
 export const SIMPLIFY_FAILURE_NOTICES: Record<
   ReviewFailure,
-  { key: MessageKey; level: 'info' | 'warn' }
+  { key: MessageKey; level: NoticeLevel }
 > = {
   'no-repo': { key: 'notice.simplifyNoRepo', level: 'warn' },
   'clean-tree': { key: 'notice.simplifyCleanTree', level: 'info' },

@@ -5,7 +5,8 @@ import {
   type TimelineMode,
 } from '../../config/schema.js';
 import { saveReasoningEffort, saveTheme, saveTimelineMode } from '../../config/save.js';
-import { applyTheme, BUILTIN_THEME_NAME, listThemes, loadTheme, themeLocations } from '../theme-loader.js';
+import { applyTheme, BUILTIN_THEME_NAME, listAllThemes, resolveTheme, themeLocations } from '../theme-loader.js';
+import { claimPaletteWrite } from '../../core/palette.js';
 import { supportedEfforts } from '../../model/reasoning.js';
 import type { ReasoningEffort } from '../../config/schema.js';
 import type { SessionHandle } from '../../app/session-handle.js';
@@ -107,7 +108,7 @@ export const theme: CommandHandler = async (ctx, arg) => {
   const name = arg;
   const dirs = themeLocations(ctx.session.root, ctx.session.themeDirs ?? []);
   if (!name) {
-    const names = [BUILTIN_THEME_NAME, ...(await listThemes(dirs)).map((entry) => entry.name)];
+    const names = (await listAllThemes(dirs)).map((entry) => entry.name);
     ctx.push({
       kind: 'notice',
       level: 'info',
@@ -118,30 +119,26 @@ export const theme: CommandHandler = async (ctx, arg) => {
     });
     return;
   }
-  let file: string | undefined;
-  if (name === BUILTIN_THEME_NAME) {
-    applyTheme({});
-    ctx.session.config.theme = undefined;
-  } else {
-    const result = await loadTheme(name, dirs);
-    if (!result.ok) {
-      // 选择器里光标经过时换上的预览色,在它关闭时已收回到已提交的那套
-      // (Input 的 onHighlight(undefined)),这里只提示。
-      ctx.push({
-        kind: 'notice',
-        level: 'warn',
-        message:
-          result.reason === 'not-found'
-            ? t('notice.themeNotFound', { name })
-            : t('notice.themeInvalid', { detail: result.detail ?? name }),
-      });
-      return;
-    }
-    applyTheme(result.theme.colors);
-    ctx.session.config.theme = name;
-    file = result.theme.file;
+  // 领号:读盘期间还在飞的预览、扩展的 setTheme 都作废(见 claimPaletteWrite)。
+  // 用户这次提交本身不看号——一条显式命令不该被别的写入者无声吞掉。
+  claimPaletteWrite();
+  const result = await resolveTheme(name, dirs);
+  if (!result.ok) {
+    // 选择器里光标经过时换上的预览色,在它关闭时已收回到已提交的那套
+    // (Input 的 onHighlight(undefined)),这里只提示。
+    ctx.push({
+      kind: 'notice',
+      level: 'warn',
+      message:
+        result.reason === 'not-found'
+          ? t('notice.themeNotFound', { name })
+          : t('notice.themeInvalid', { detail: result.detail ?? name }),
+    });
+    return;
   }
-  ctx.refreshTheme(file);
+  applyTheme(result.colors);
+  ctx.session.config.theme = name === BUILTIN_THEME_NAME ? undefined : name;
+  ctx.refreshTheme(result.file);
   ctx.push({ kind: 'notice', level: 'info', message: t('notice.themeSet', { name }) });
   await saveTheme(name === BUILTIN_THEME_NAME ? undefined : name, ctx.session.root).catch((err: Error) => {
     ctx.push({ kind: 'notice', level: 'warn', message: t('notice.themeSaveFailed', { message: err.message }) });

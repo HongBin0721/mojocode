@@ -16,108 +16,34 @@
  */
 
 import { watch, type FSWatcher } from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
-import { globalThemesDir, projectThemesDir } from '../config/paths.js';
-import { BUILTIN_PALETTE, palette, THEME_COLOR_KEYS, type ThemeColorKey } from '../core/palette.js';
+import { applyPalette, type ThemeColors } from '../core/palette.js';
 import { bumpTheme } from './theme.js';
 
-/** `/theme` 里代表内置配色的保留名。 */
-export const BUILTIN_THEME_NAME = 'default';
-
-export type ThemeColors = Partial<Record<ThemeColorKey, string>>;
-
-export interface LoadedTheme {
-  name: string;
-  file: string;
-  colors: ThemeColors;
-}
-
-export type ThemeLoadResult =
-  | { ok: true; theme: LoadedTheme }
-  | { ok: false; reason: 'not-found' | 'invalid'; detail?: string };
-
-/** 主题目录,优先级从高到低。 */
-export function themeLocations(root: string, extraDirs: readonly string[] = []): string[] {
-  return [projectThemesDir(root), globalThemesDir(), ...extraDirs];
-}
+// 文件的查找与解析搬去了 app/theme-files.ts(理由见那边的文件头:扩展的
+// `ui.getAllThemes / getTheme / setTheme` 由 bootstrap 实现,而它 import 不了
+// src/ui/)。这里原样 re-export,TUI 侧的调用方一个都不用改。
+export {
+  BUILTIN_THEME_NAME,
+  listAllThemes,
+  listThemes,
+  loadTheme,
+  resolveTheme,
+  parseThemeColors,
+  themeLocations,
+  type LoadedTheme,
+  type ThemeColors,
+  type ThemeLoadResult,
+} from '../app/theme-files.js';
 
 /**
- * 列出各目录里可选的主题名(`<name>.json` 去掉后缀),按目录优先级去重——
- * 同名时高优先级目录的赢,与 loadTheme 的取法一致。不解析文件:坏文件
- * 也列出来,选中时 loadTheme 会报 invalid,比在列表里悄悄消失更好查。
- * 保留名 `default` 不列(调用方自己加,它不在磁盘上)。
- */
-export async function listThemes(dirs: readonly string[]): Promise<Array<{ name: string; file: string }>> {
-  const seen = new Map<string, string>();
-  for (const dir of dirs) {
-    let entries: string[];
-    try {
-      entries = await fs.readdir(dir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries.sort()) {
-      if (!entry.endsWith('.json')) continue;
-      const name = entry.slice(0, -'.json'.length);
-      if (!name || name === BUILTIN_THEME_NAME || seen.has(name)) continue;
-      seen.set(name, path.join(dir, entry));
-    }
-  }
-  return [...seen].map(([name, file]) => ({ name, file }));
-}
-
-/** 解析主题 JSON 的 `colors` 段:只收已知键、字符串值,其余静默丢掉。 */
-export function parseThemeColors(raw: unknown): ThemeColors | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const colors = (raw as { colors?: unknown }).colors;
-  if (!colors || typeof colors !== 'object') return undefined;
-  const out: ThemeColors = {};
-  for (const key of THEME_COLOR_KEYS) {
-    const value = (colors as Record<string, unknown>)[key];
-    if (typeof value === 'string' && value.trim()) out[key] = value.trim();
-  }
-  return out;
-}
-
-/** 按名字在目录里找 `<name>.json` 并解析;第一个命中的目录赢。 */
-export async function loadTheme(name: string, dirs: readonly string[]): Promise<ThemeLoadResult> {
-  for (const dir of dirs) {
-    const file = path.join(dir, `${name}.json`);
-    let text: string;
-    try {
-      text = await fs.readFile(file, 'utf8');
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch (err) {
-      return { ok: false, reason: 'invalid', detail: `${file}: ${(err as Error).message}` };
-    }
-    const colors = parseThemeColors(parsed);
-    if (!colors) return { ok: false, reason: 'invalid', detail: `${file}: missing "colors"` };
-    return { ok: true, theme: { name, file, colors } };
-  }
-  return { ok: false, reason: 'not-found' };
-}
-
-/**
- * 就地覆盖配色表:给了的键取主题值,没给的键回到内置配色;返回被改掉的键数。
- * 改的是 `core/palette.ts` 那**一张**表,TUI 的组件与扩展的 `ExtensionTheme`
- * 因此一起变色;有改动就 bump 版本,JSX 里读过 `theme.x` 的节点跟着重算。
- * 传空对象即回到内置配色(`/theme default`)。
+ * 就地覆盖配色表并让 TUI 重算:`applyPalette` 改 `core/palette.ts` 那**一张**表
+ * (给了的键取主题值,没给的回内置配色),有改动就 bump 版本,JSX 里读过
+ * `theme.x` 的节点跟着重算。传空对象即回到内置配色(`/theme default`)。
+ * 返回被改掉的键数。
  */
 export function applyTheme(colors: ThemeColors): number {
-  let changed = 0;
-  for (const key of THEME_COLOR_KEYS) {
-    const value = colors[key] ?? BUILTIN_PALETTE[key];
-    if (palette[key] !== value) {
-      palette[key] = value;
-      changed += 1;
-    }
-  }
+  const changed = applyPalette(colors);
   if (changed > 0) bumpTheme();
   return changed;
 }

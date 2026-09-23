@@ -19,6 +19,7 @@ export function stubExtensions() {
     uiRequests: [],
     answerUi: async () => {},
     attachUi: () => {},
+    runTerminalInput: () => false,
     runShortcut: () => false,
     uiCustoms: [],
     resolveCustom: () => {},

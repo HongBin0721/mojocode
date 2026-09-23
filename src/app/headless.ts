@@ -1,7 +1,7 @@
 import type { AgentEvent } from '../core/events.js';
 import type { Session } from './bootstrap.js';
 import { t } from '../i18n/index.js';
-import { formatCacheHit, formatToolInput, toolDisplayName, truncateWidth } from '../ui/theme.js';
+import { formatCacheHit, formatToolInput, NOTICE_STYLE, toolDisplayName, truncateWidth } from '../ui/theme.js';
 
 export interface HeadlessOptions {
   /** 输出以换行分隔的 JSON 事件,而不是普通文本。 */
@@ -49,7 +49,7 @@ export function renderHeadless(session: Session, options: HeadlessOptions): void
         errStream.write(`  · ${t('headless.compacted', { n: event.removedMessages })}\n`);
         break;
       case 'notice':
-        errStream.write(`  ${event.level === 'warn' ? '!' : '·'} ${event.message}\n`);
+        errStream.write(`  ${NOTICE_STYLE[event.level].glyph} ${event.message}\n`);
         break;
       case 'custom-message':
         errStream.write(`  · [${event.customType}] ${event.display ?? event.content}\n`);

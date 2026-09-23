@@ -89,12 +89,28 @@ export interface ToolScope {
  * 送回,随后 `ui-resolved` 播报。没有前端在看(headless)时宿主立即按缺省值
  * 兑现——`hasUI` 就是这个判定。
  */
-export type UiRequest =
-  | { id: string; kind: 'select'; title: string; items: string[] }
-  | { id: string; kind: 'confirm'; title: string; message: string }
-  | { id: string; kind: 'input'; title: string; placeholder?: string }
+export type UiRequest = {
+  id: string;
+  title: string;
+  /** 给了 `timeout` 时的绝对到期时刻(见 ExtensionUIDialogOptions)。 */
+  deadline?: number;
+} & (
+  | { kind: 'select'; items: string[] }
+  | { kind: 'confirm'; message: string }
+  | { kind: 'input'; placeholder?: string }
   /** 多行编辑框(Pi 的 `ctx.ui.editor`):回车提交,行尾 `\` + 回车换行,esc 取消。 */
-  | { id: string; kind: 'editor'; title: string; prefill?: string };
+  | { kind: 'editor'; prefill?: string }
+);
+
+/**
+ * 提问框的选项(Pi 的 ExtensionUIDialogOptions):`timeout` 到点按「没答」兑现
+ * (TUI 在提示里倒数),`signal` 中止同样按「没答」兑现。`deadline` 是宿主
+ * 算好塞进 UiRequest 的绝对时刻,TUI 只管画倒计时,不自己计时。
+ */
+export interface ExtensionUIDialogOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+}
 
 /** select → 选中的项(esc 为 undefined);confirm → 布尔;input / editor → 文本(esc 为 undefined)。 */
 export type UiAnswer = string | boolean | undefined;
@@ -234,16 +250,83 @@ export interface ToolRenderers {
   ): string[] | undefined;
 }
 
+/** 覆盖层的锚点(Pi 的 9 个位置)。 */
+export type OverlayAnchor =
+  | 'center'
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'left-center'
+  | 'right-center'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
+
+/**
+ * `ui.custom(…, { overlay: true, overlayOptions })` 的定位与尺寸(Pi 同名同义的
+ * 子集):数字是格数,`"50%"` 按终端尺寸算;`anchor` 与 `row`/`col` 二选一
+ * (给了 row/col 就按绝对位置放);`margin` 是与终端边缘的最小距离;`visible`
+ * 让覆盖层在窄终端上自己让路。算法在 ui/overlay-layout.ts。
+ */
+export interface OverlayOptions {
+  width?: number | `${number}%`;
+  height?: number | `${number}%`;
+  minWidth?: number;
+  maxWidth?: number | `${number}%`;
+  minHeight?: number;
+  maxHeight?: number | `${number}%`;
+  anchor?: OverlayAnchor;
+  offsetX?: number;
+  offsetY?: number;
+  row?: number | `${number}%`;
+  col?: number | `${number}%`;
+  margin?: number | { top?: number; right?: number; bottom?: number; left?: number };
+  visible?: (termWidth: number, termHeight: number) => boolean;
+}
+
+/** `onHandle` 交给扩展的把手:临时藏起来 / 永久撤掉(等于以 undefined 收尾)。 */
+export interface OverlayHandle {
+  setHidden(hidden: boolean): void;
+  hide(): void;
+}
+
 /** `ui.custom` 挂出来的一个待画组件;TUI 画它,done 之后经 resolveCustom 收尾。 */
 export interface UiCustomRequest {
   id: string;
   factory: (host: ComponentHost, done: (value: unknown) => void) => ExtensionComponent;
+  /**
+   * 给了就是覆盖层:浮在时间线之上、不顶掉输入框(但键盘仍归它)。函数形态
+   * 每次布局现取(Pi 允许动态选项)。
+   */
+  overlay?: OverlayOptions | (() => OverlayOptions);
+  /** `handle.setHidden(true)` 之后:组件留着、只是不画。换引用不就地改,TUI 的 memo 才看得见。 */
+  hidden?: boolean;
 }
+
+/** widget 放在输入框上方还是下方(Pi 的 WidgetPlacement)。缺省上方。 */
+export type WidgetPlacement = 'aboveEditor' | 'belowEditor';
+
+/**
+ * 工作状态线的 spinner(Pi 的 setWorkingIndicator):`frames` 空数组 = 不画
+ * spinner;单帧 = 静态标记;自定义帧原样画,颜色由扩展自己带。
+ */
+export interface WorkingIndicator {
+  frames: string[];
+  intervalMs?: number;
+}
+
+/**
+ * 扩展的原始终端输入监听(Pi 的 onTerminalInput):`data` 是终端送来的原始
+ * 序列,返回 `{ consume: true }` 就吞掉——TUI 的任何组件都不再收到它。
+ * 没有 Pi 的 `data` 改写:OpenTUI 的输入处理器只能回答「吞不吞」,改写
+ * 序列没有可挂的口。
+ */
+export type TerminalInputHandler = (data: string) => { consume?: boolean } | undefined | void;
 
 /** 扩展占用的几块固定界面区域。 */
 export interface UiSurfaces {
-  /** 输入框上方的小部件,按 key 去重、注册顺序排列。 */
-  widgets: Array<{ key: string; surface: ExtensionSurface }>;
+  /** 输入框上方(缺省)或下方的小部件,按 key 去重、注册顺序排列。 */
+  widgets: Array<{ key: string; surface: ExtensionSurface; placement?: WidgetPlacement }>;
   /** 屏幕顶部(时间线之上)。 */
   header?: ExtensionSurface;
   /** 替换底栏。 */
@@ -254,6 +337,12 @@ export interface UiSurfaces {
   workingMessage?: string;
   /** 顶替缺省输入框的编辑器组件工厂(Pi 的 setEditorComponent)。 */
   editor?: EditorComponentFactory;
+  /** 只在扩展 `setWorkingVisible(false)` 时存在(值为 false);缺省画。 */
+  workingVisible?: boolean;
+  /** 工作状态线的 spinner 帧(Pi 的 setWorkingIndicator);缺省内置动画。 */
+  workingIndicator?: WorkingIndicator;
+  /** 折叠的思考块那一行的标签(Pi 的 setHiddenThinkingLabel);缺省「已思考 …」。 */
+  hiddenThinkingLabel?: string;
 }
 
 /**
@@ -323,6 +412,14 @@ export interface UiHost {
    * `{ available }`;真正在渲染界面的宿主都该实现它。
    */
   exit?(): void;
+  /** ctrl+r 的详情开关(思考正文、工具输出),扩展经 `ui.getToolsExpanded / setToolsExpanded` 读写。 */
+  getToolsExpanded?(): boolean;
+  setToolsExpanded?(expanded: boolean): void;
+  /**
+   * 配色表已被 `ui.setTheme` 就地改过(core 的 applyPalette):TUI 让读过
+   * `theme.x` 的节点重算,并改盯 `file`(undefined = 没有文件可盯)。
+   */
+  themeChanged?(file: string | undefined): void;
 }
 
 /** 扩展经 sendMessage 放进对话的一条自定义消息(时间线与回放都用它)。 */

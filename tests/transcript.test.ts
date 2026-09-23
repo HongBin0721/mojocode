@@ -92,4 +92,16 @@ describe('formatTranscript 保真度(退出 dump 是唯一留档)', () => {
   });
 });
 
+describe('折叠思考块的标签', () => {
+  const reasoning: TimelineItem = { key: 'r1', kind: 'reasoning', text: 'hmm', durationMs: 3200 };
+
+  it('缺省「Thought for …」;扩展给了标签(setHiddenThinkingLabel)就与时间线用同一个', () => {
+    setLocale('en');
+    expect(formatTranscript([reasoning], 80)).toContain('Thought for 3.2s');
+    const custom = formatTranscript([reasoning], 80, { thinkingLabel: 'pondered' });
+    expect(custom).toContain('pondered');
+    expect(custom).not.toContain('Thought for');
+  });
+});
+
 afterEach(() => setLocale('en'));

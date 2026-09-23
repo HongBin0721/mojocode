@@ -1,3 +1,4 @@
+import type { NoticeLevel } from '../src/core/events.js';
 import { describe, expect, it } from 'vitest';
 import { collapseItems } from '../src/ui/focus.js';
 import type { TimelineItem } from '../src/ui/types.js';
@@ -29,7 +30,7 @@ const tool = (toolName = 'read'): TimelineItem => ({
   isError: false,
   durationMs: 10,
 });
-const notice = (level: 'info' | 'warn'): TimelineItem => ({
+const notice = (level: NoticeLevel): TimelineItem => ({
   key: key(),
   kind: 'notice',
   level,

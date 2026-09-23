@@ -1,11 +1,19 @@
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from 'solid-js';
 import { Box, Text, useInput, type JSX } from './kit.js';
 import type { UiAnswer, UiRequest } from '../core/extension-types.js';
 import { theme, glyphs } from './theme.js';
-import { t } from '../i18n/index.js';
+import { t, type MessageKey } from '../i18n/index.js';
 import { applyTextKey, centeredWindowStart } from './picker-utils.js';
 
 const WINDOW = 8;
+
+/** 每种提问框底下那行操作提示。 */
+const HINT_KEYS: Record<UiRequest['kind'], MessageKey> = {
+  select: 'uiPrompt.selectHint',
+  confirm: 'uiPrompt.confirmHint',
+  input: 'uiPrompt.inputHint',
+  editor: 'uiPrompt.editorHint',
+};
 
 interface Props {
   request: UiRequest;
@@ -86,15 +94,23 @@ export function UiPrompt(props: Props): JSX.Element {
   const bufferLines = createMemo(() => buffer().split('\n'));
   const windowStart = createMemo(() => centeredWindowStart(cursor(), items().length, WINDOW));
   const visible = createMemo(() => items().slice(windowStart(), windowStart() + WINDOW));
+  // 超时倒计时(扩展给了 `timeout`):宿主把绝对时刻写进 request 并自己计时,
+  // 到点按「没答」兑现;这里只按秒重读、画剩余秒数——两处各计一次时,
+  // 显示的 0 与真正关掉的那一刻会差一拍。
+  const [now, setNow] = createSignal(Date.now());
+  createEffect(() => {
+    if (props.request.deadline === undefined) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    onCleanup(() => clearInterval(timer));
+  });
+  const remaining = (): number | undefined => {
+    const deadline = props.request.deadline;
+    return deadline === undefined ? undefined : Math.max(0, Math.ceil((deadline - now()) / 1000));
+  };
   const hint = (): string => {
-    const kind = props.request.kind;
-    return kind === 'input'
-      ? t('uiPrompt.inputHint')
-      : kind === 'editor'
-        ? t('uiPrompt.editorHint')
-      : kind === 'confirm'
-        ? t('uiPrompt.confirmHint')
-        : t('uiPrompt.selectHint');
+    const base = t(HINT_KEYS[props.request.kind]);
+    const left = remaining();
+    return left === undefined ? base : `${base} · ${t('uiPrompt.timeout', { s: left })}`;
   };
 
   return (

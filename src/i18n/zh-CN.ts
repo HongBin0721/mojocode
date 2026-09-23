@@ -222,6 +222,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'uiPrompt.confirmHint': 'y / n · 回车确认 · esc 视为否',
   'uiPrompt.inputHint': '回车提交 · esc 取消',
   'uiPrompt.editorHint': '回车提交 · 行尾 `\\` + 回车换行 · esc 取消',
+  'uiPrompt.timeout': '{s}s 后自动关闭',
   'notice.mcpNone': '未配置 MCP 服务器。可在 .mojocode/config.json 的 "mcpServers" 中添加。',
   'notice.doctorRunning': '体检中 …',
   'notice.mcpTools': '{n} 个工具',

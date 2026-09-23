@@ -10,6 +10,8 @@ import {
   formatDuration,
   formatTokens,
   formatToolInput,
+  NOTICE_STYLE,
+  thoughtLabel,
   toolDisplayName,
   truncateWidth,
   WIDTH_SAFETY,
@@ -36,6 +38,8 @@ export function TimelineEntry(props: {
   columns: number;
   /** ctrl+r 的全局详情开关:思考正文与工具输出跟着它展开/收起。 */
   expanded?: boolean;
+  /** 折叠的思考块那一行的标签(扩展的 setHiddenThinkingLabel);缺省「已思考 …」。 */
+  thinkingLabel?: string;
 }): JSX.Element {
   // item 定稿后不可变(App 只整条替换,从不原位修改),按创建时的值分支。
   const item = props.item;
@@ -74,9 +78,9 @@ export function TimelineEntry(props: {
       // 既是重复,又会把回复和工具记录挤出屏幕(见 types.ts 的说明)。
       // 耗时从历史回放不出来,那时只写"已思考"。ctrl+r 展开时才摊开正文,
       // 行尾的 +/- 是这件事的唯一提示。
-      const label = item.durationMs
-        ? t('ui.thoughtFor', { duration: formatDuration(item.durationMs) })
-        : t('ui.thought');
+      // 取值函数而不是常量:条目定稿后不重建,扩展中途 setHiddenThinkingLabel
+      // 要让已在屏幕上的条目也换掉——JSX 里调用才订阅得到 props 的变化。
+      const label = () => thoughtLabel(item.durationMs, props.thinkingLabel);
       const hasText = Boolean(item.text.trim());
       return (
         <Box marginTop={1} flexDirection="column">
@@ -85,7 +89,7 @@ export function TimelineEntry(props: {
                 没有耗时的历史条目会读成"已思考 -"。没有正文可展开时空占两列,
                 若干条思考之间不会错位。 */}
             {hasText ? `${props.expanded ? glyphs.expanded : glyphs.expandable} ` : '  '}
-            {glyphs.thinking} {label}
+            {glyphs.thinking} {label()}
           </Text>
           <Show when={hasText && props.expanded}>
             <Box paddingLeft={4} paddingRight={WIDTH_SAFETY}>
@@ -118,15 +122,18 @@ export function TimelineEntry(props: {
     case 'custom':
       return <CustomEntry item={item} />;
 
-    case 'notice':
+    case 'notice': {
+      // error 是扩展 `ui.notify(…, 'error')` 带进来的第三档:仍是一条提示,不是
+      // 终结一轮的 error 条目。
+      const style = NOTICE_STYLE[item.level];
       return (
         <Box marginTop={1}>
-          <Text color={item.level === 'warn' ? theme.warn : theme.dim}>
-            {item.level === 'warn' ? '! ' : '· '}
-            {item.message}
+          <Text color={theme[style.color]}>
+            {style.glyph} {item.message}
           </Text>
         </Box>
       );
+    }
 
     case 'error':
       return (

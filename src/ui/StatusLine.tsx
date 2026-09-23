@@ -1,4 +1,5 @@
-import { createMemo, createSignal, onCleanup } from 'solid-js';
+import { createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
+import type { WorkingIndicator } from '../core/extension-types.js';
 import stringWidth from 'string-width';
 import { Text, type JSX } from './kit.js';
 import { theme, formatTokens, meterBar, toolDisplayName, truncateWidth } from './theme.js';
@@ -44,6 +45,11 @@ interface Props {
    */
   label?: string;
   /**
+   * spinner 的帧(扩展的 `ui.setWorkingIndicator`):缺省内置动画;空数组不画
+   * spinner;单帧是静态标记。自定义帧原样画,颜色由扩展自己带。
+   */
+  indicator?: WorkingIndicator;
+  /**
    * 整行的颜色,缺省用阶段色。输入框传自己的边框色进来——那一句
    * `borderColor()` 同时喂给顶线与底边,「这条线就是框的边」因此是一个
    * 表达式用两处,而不是两条各自演化的规则。
@@ -53,6 +59,12 @@ interface Props {
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 const FRAME_MS = 100;
+/**
+ * 扩展给的帧间隔下限。`intervalMs: 0`(或负数、NaN)照原样用的话,setInterval
+ * 退化成尽快触发、一轮跑着就钉满一个核,帧下标还会算成 NaN、spinner 悄悄消失。
+ * 16ms ≈ 60fps,再快人眼也分不出。
+ */
+const MIN_FRAME_MS = 16;
 
 /** 进度条格数,与 Footer 的上下文表同宽,视觉上是同一族。 */
 const BAR_CELLS = 10;
@@ -76,8 +88,6 @@ const RULE = '─';
 /** 标题左侧的引线。 */
 const LEAD = `${RULE}${RULE} `;
 const LEAD_WIDTH = stringWidth(LEAD);
-/** spinner 帧加它后面那个空格。 */
-const SPINNER_WIDTH = 2;
 /** 标题右侧至少保留 ` ─`:内容顶到行尾会像没画完。 */
 const MIN_TRAIL = 2;
 
@@ -133,10 +143,34 @@ export function IdleRule(props: { columns: number; color: string }): JSX.Element
  */
 export function StatusLine(props: Props): JSX.Element {
   const [now, setNow] = createSignal(Date.now());
-  const timer = setInterval(() => setNow(Date.now()), FRAME_MS);
-  onCleanup(() => clearInterval(timer));
+  // **先收成 memo 再用**:Input 的顶边经 mergeProps 把一个每个 delta 都换新的
+  // 对象(edgeProps,里面有 work 与 token)展开进来,直接读 `props.indicator`
+  // 等于订阅了那整个对象——下面的定时器 effect 于是每个流式 delta 重建一次,
+  // 而 delta 间隔短于帧间隔时定时器永远等不到触发,spinner 与秒数整段流式
+  // 期间冻住。memo 按身份 / 数值判等,只有指示器真的换了才往下传。
+  const indicator = createMemo(() => props.indicator);
+  const frames = createMemo((): readonly string[] => indicator()?.frames ?? FRAMES);
+  const frameMs = createMemo((): number => {
+    const ms = indicator()?.intervalMs;
+    return ms !== undefined && Number.isFinite(ms) && ms > 0 ? Math.max(MIN_FRAME_MS, ms) : FRAME_MS;
+  });
+  // 定时器同时驱动 spinner 帧与秒数刷新;帧不动(静态标记 / 不画 spinner)时
+  // 只按秒走,别为一个不变的字符每 100ms 重画一次。间隔真的变了才重建定时器。
+  const tickMs = createMemo(() => (frames().length > 1 ? frameMs() : 1000));
+  createEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), tickMs());
+    onCleanup(() => clearInterval(timer));
+  });
 
-  const frame = () => FRAMES[Math.floor(now() / FRAME_MS) % FRAMES.length]!;
+  const frame = (): string => {
+    const list = frames();
+    return list.length === 0 ? '' : list[Math.floor(now() / frameMs()) % list.length]!;
+  };
+  // spinner 占的列数按最宽的一帧算(加后面那个空格):帧宽不齐时排版不抖。
+  const spinnerWidth = createMemo(() => {
+    const list = frames();
+    return list.length === 0 ? 0 : Math.max(...list.map((f) => stringWidth(f))) + 1;
+  });
   // 秒数单独成 memo:每 100ms 的滴答里它一秒才变一次,排版(parts)因此不必
   // 跟着 spinner 帧重算。注意这只挡住了定时器这一路——流式期间 beginWork 每
   // 个 delta 都新建一个 WorkState 对象,parts 仍会随之重算,量下来一秒几十次、
@@ -160,9 +194,9 @@ export function StatusLine(props: Props): JSX.Element {
     // 标题(spinner + 阶段 + 进度条 + 尾巴)可占的列数。
     const avail = Math.max(1, props.columns - LEAD_WIDTH - MIN_TRAIL);
 
-    // 头部(spinner 两列 + 阶段)本身就超宽的极窄终端:硬截阶段名,绝不折行。
-    const fitted = truncateWidth(label(), Math.max(1, avail - SPINNER_WIDTH));
-    let head = SPINNER_WIDTH + stringWidth(fitted);
+    // 头部(spinner + 阶段)本身就超宽的极窄终端:硬截阶段名,绝不折行。
+    const fitted = truncateWidth(label(), Math.max(1, avail - spinnerWidth()));
+    let head = spinnerWidth() + stringWidth(fitted);
 
     // 进度条:` ▰▰▰▱▱▱▱▱▱▱ 42%`。装不下时整条不画(尾部各段随后按 DROP_ORDER
     // 让路),绝不折行、绝不截半条。
@@ -205,7 +239,7 @@ export function StatusLine(props: Props): JSX.Element {
   return (
     <Text color={color()} wrap="truncate-end">
       {LEAD}
-      {frame()}{' '}
+      {frame() ? `${frame()} ` : ''}
       <Text bold>{parts().label}</Text>
       {parts().bar?.filled ?? ''}
       <Text color={theme.dim}>{parts().bar?.rest ?? ''}</Text>

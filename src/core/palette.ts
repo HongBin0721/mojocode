@@ -69,6 +69,42 @@ export const palette: Record<ThemeColorKey, string> = {
 /** 内置配色的冻结快照:`applyTheme` 的基线,`/theme default` 回到它。 */
 export const BUILTIN_PALETTE: Readonly<Record<ThemeColorKey, string>> = Object.freeze({ ...palette });
 
+/** 主题文件 `colors` 段(与扩展 `ui.getTheme` / `ui.setTheme` 交换的形状):没写的键取内置配色。 */
+export type ThemeColors = Partial<Record<ThemeColorKey, string>>;
+
+/**
+ * 就地覆盖配色表:给了的键取主题值,没给的键回到内置配色;返回被改掉的键数。
+ * 改的是这**一张**表,TUI 的组件与扩展的 `ExtensionTheme` 因此一起变色。传空
+ * 对象即回到内置配色。**只改表不通知**:通知 TUI 重算(`bumpTheme`)是 ui 侧
+ * 的事——这一步住在零依赖的 core 里,是因为 headless 下扩展的 `ui.setTheme`
+ * 也要让 `extensionTheme.fg` 立刻换色,而 core 不能 import solid-js。
+ */
+/**
+ * 异步换色的排号。换主题要先读盘,几路写入者(`/theme` 选择器的预览、`/theme`
+ * 提交、主题文件热重载、扩展的 `ui.setTheme`)的读盘可能交错完成;按**完成**
+ * 顺序落地会让先发起的盖掉后发起的。每个写入者在发起时领一个号,读完盘问
+ * 「我还是最新的吗」,不是就放弃。**全产品一个号段**——配色表只有一张,各管
+ * 各的代数(曾经是预览一个、扩展一个)防不住跨写入者的交错,还得手工互相
+ * 递增才勉强接上。同步的写入(收回预览)也领号:它要让在飞的预览作废。
+ */
+let paletteWriteSeq = 0;
+export function claimPaletteWrite(): () => boolean {
+  const mine = ++paletteWriteSeq;
+  return () => mine === paletteWriteSeq;
+}
+
+export function applyPalette(colors: ThemeColors): number {
+  let changed = 0;
+  for (const key of THEME_COLOR_KEYS) {
+    const value = colors[key] ?? BUILTIN_PALETTE[key];
+    if (palette[key] !== value) {
+      palette[key] = value;
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
 /** 命名色 → SGR 前景码。表以外的名字按"终端默认前景"处理。 */
 const NAMED_SGR: Record<string, string> = {
   black: '30',
