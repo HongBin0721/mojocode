@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -867,5 +867,227 @@ describe('ui 面的第五批对齐(Pi 的 ctx.ui 余下成员)', () => {
     }
     expect(palette.dim).toBe(BUILTIN_PALETTE.dim);
     expect(session.config.theme).toBeUndefined();
+  });
+});
+
+describe('Pi 的钩子载荷与消息投递(真 bootstrap)', () => {
+  it('tool_execution_update 从总线的增量桥接:带工具名、args 与 partialResult(旧叫法照填)', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const off = session.hooks.on('tool_execution_update', (e) => void seen.push({ ...e }));
+    session.bus.emit({ type: 'tool-start', callId: 'u1', toolName: 'bash', input: { command: 'ls' } });
+    session.bus.emit({ type: 'tool-output-delta', callId: 'u1', chunk: 'a.ts' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    off();
+    session.bus.emit({ type: 'tool-end', callId: 'u1', toolName: 'bash', summary: '', output: '', isError: false, durationMs: 0 });
+    expect(seen).toEqual([
+      {
+        toolCallId: 'u1',
+        toolName: 'bash',
+        args: { command: 'ls' },
+        partialResult: 'a.ts',
+        subagent: false,
+        callId: 'u1',
+        chunk: 'a.ts',
+      },
+    ]);
+  });
+
+  it('session_before_switch 在 /new 上也问(reason: new),否决是回执;resume 给确定的 id 与会话文件', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    let block = true;
+    const off = session.hooks.on('session_before_switch', (e) => {
+      seen.push({ ...e });
+      return e.reason === 'new' && block ? { cancel: true } : undefined;
+    });
+    const before = session.store.id;
+    await expect(api.ctx.newSession()).resolves.toEqual({ cancelled: true });
+    expect(session.store.id).toBe(before);
+    expect(seen[0]).toEqual({ reason: 'new' });
+    block = false;
+    await expect(api.ctx.newSession()).resolves.toEqual({ cancelled: false });
+    await api.ctx.switchSession(before.slice(0, 8));
+    // 前缀已解析成完整 id,会话文件是确定的绝对路径。
+    expect(seen.at(-1)).toMatchObject({ reason: 'resume', id: before });
+    expect(String(seen.at(-1)!.targetSessionFile)).toMatch(new RegExp(`${before}\\.jsonl$`));
+    off();
+  });
+
+  it('session_start 带上一个会话的文件路径', async () => {
+    const starts: Array<Record<string, unknown>> = [];
+    const off = session.hooks.on('session_start', (e) => void starts.push({ ...e }));
+    const previous = session.store.id;
+    await api.ctx.fork();
+    expect(starts.at(-1)).toMatchObject({ reason: 'fork' });
+    expect(String(starts.at(-1)!.previousSessionFile)).toMatch(new RegExp(`${previous}\\.jsonl$`));
+    off();
+  });
+
+  it('model_select / thinking_level_select 带切换前的值', async () => {
+    const models: Array<Record<string, unknown>> = [];
+    const levels: Array<Record<string, unknown>> = [];
+    const offA = session.hooks.on('model_select', (e) => void models.push({ ...e }));
+    const offB = session.hooks.on('thinking_level_select', (e) => void levels.push({ ...e }));
+    const { provider: prevProvider, model: prevModel } = api.getModel();
+    const prevLevel = api.getThinkingLevel();
+    await api.setModel({ model: 'deepseek-reasoner' });
+    await api.setThinkingLevel('high');
+    await new Promise((resolve) => setTimeout(resolve, 5)); // 两个都是 void 通知
+    expect(models.at(-1)).toMatchObject({
+      model: 'deepseek-reasoner',
+      previousProvider: prevProvider,
+      previousModel: prevModel,
+      source: 'set',
+    });
+    expect(levels.at(-1)).toMatchObject({ level: 'high', previousLevel: prevLevel });
+    await api.setModel({ model: prevModel });
+    await api.setThinkingLevel(prevLevel);
+    offA();
+    offB();
+  });
+
+  it('exec 认 Pi 的 timeout(与 timeoutMs 同义)', async () => {
+    const started = Date.now();
+    const result = await api.exec('sleep', ['5'], { timeout: 150 });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  it('sendUserMessage:空闲开新的一轮;运行中不给 deliverAs 抛错,steer / followUp 各走各的路;图片部件成附件', async () => {
+    const agent = session.agent as unknown as {
+      followUp: (...args: unknown[]) => void;
+      inject: (...args: unknown[]) => Promise<boolean>;
+    };
+    const originalFollowUp = agent.followUp;
+    const originalInject = agent.inject;
+    const followUp = vi.fn();
+    const inject = vi.fn(async () => true);
+    agent.followUp = followUp;
+    agent.inject = inject;
+    let running = false;
+    Object.defineProperty(session.agent, 'isRunning', { configurable: true, get: () => running });
+    try {
+      await api.sendUserMessage([
+        { type: 'text', text: 'look' },
+        { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+      ]);
+      expect(followUp).toHaveBeenLastCalledWith('look', {
+        source: 'extension',
+        images: [{ mediaType: 'image/png', data: 'AAAA' }],
+      });
+      running = true;
+      await expect(api.sendUserMessage('mid')).rejects.toThrow(/deliverAs/);
+      await api.ctx.sendUserMessage('mid', { deliverAs: 'steer' });
+      expect(inject).toHaveBeenLastCalledWith('mid', undefined, 'extension');
+      // steer 输给「轮恰好收尾」的竞态:改成开新的一轮,不丢。
+      inject.mockResolvedValueOnce(false);
+      await api.sendUserMessage('raced', { deliverAs: 'steer' });
+      expect(followUp).toHaveBeenLastCalledWith('raced', { source: 'extension' });
+      await api.sendUserMessage('later', { deliverAs: 'followUp' });
+      expect(followUp).toHaveBeenLastCalledWith('later', { source: 'extension' });
+    } finally {
+      agent.followUp = originalFollowUp;
+      agent.inject = originalInject;
+      delete (session.agent as unknown as { isRunning?: boolean }).isRunning;
+    }
+  });
+
+  it('sendMessage 的 display: false 与 details 经 api 落到 Agent', async () => {
+    const events: AgentEvent[] = [];
+    const off = session.bus.on((e) => events.push(e));
+    await api.sendMessage({ customType: 'shown', content: [{ type: 'text', text: 'a' }], details: { v: 1 } });
+    await api.sendMessage({ customType: 'hidden', content: 'b', display: false });
+    off();
+    const custom = events.filter((e) => e.type === 'custom-message');
+    expect(custom).toEqual([{ type: 'custom-message', customType: 'shown', content: 'a', details: { v: 1 } }]);
+    expect(session.agent.history.at(-1)).toEqual({ role: 'user', content: wrapCustomMessage('hidden', 'b', true) });
+  });
+
+  it('/reload:重新装上的扩展收到 session_start(reload)与 resources_discover(reload);卸下的收到 session_shutdown(reload);没被重载的不再被通知', async () => {
+    const g = globalThis as { __mojoV3?: Array<Record<string, unknown>> };
+    g.__mojoV3 = [];
+    await fs.writeFile(
+      path.join(root, 'ext', 'capture.mjs'),
+      `export default (api) => {
+  globalThis.__mojoTestApi = api;
+  api.on('session_start', (e) => { globalThis.__mojoV3.push({ hook: 'start', ...e }); });
+  api.on('resources_discover', (e) => { globalThis.__mojoV3.push({ hook: 'discover', ...e }); });
+  api.on('session_shutdown', (e) => { globalThis.__mojoV3.push({ hook: 'shutdown', ...e }); });
+};
+`,
+    );
+    // 直接挂在会话上的处理器不属于任何磁盘扩展:它在重载前就在,不该再收到 session_start。
+    const outsider = vi.fn();
+    const off = session.hooks.on('session_start', outsider);
+    await session.reloadExtensions();
+    expect(g.__mojoV3).toEqual([
+      { hook: 'discover', cwd: root, reason: 'reload' },
+      { hook: 'start', reason: 'reload' },
+    ]);
+    expect(outsider).not.toHaveBeenCalled();
+    // 再重载一次:上一代收到自己的 session_shutdown(reload)。
+    await session.reloadExtensions();
+    expect(g.__mojoV3).toContainEqual({ hook: 'shutdown', reason: 'reload' });
+    off();
+    api = (globalThis as { __mojoTestApi?: ExtensionAPI }).__mojoTestApi!;
+  });
+
+  it('资源目录每次 /reload 整体替换:不重复累加,被删掉的扩展贡献的目录撤掉', async () => {
+    const write = (body: string) =>
+      fs.writeFile(path.join(root, 'ext', 'capture.mjs'), `export default (api) => {\n  globalThis.__mojoTestApi = api;\n${body}\n};\n`);
+    await write(`  api.on('resources_discover', () => ({ skillPaths: ['extskills'], themePaths: ['extthemes'] }));`);
+    await session.reloadExtensions();
+    await session.reloadExtensions();
+    const themeDir = path.join(root, 'extthemes');
+    expect(session.themeDirs.filter((dir) => dir === themeDir)).toHaveLength(1);
+    expect(session.skills.map((s) => s.name)).toContain('extskill');
+    await write('');
+    await session.reloadExtensions();
+    expect(session.themeDirs).not.toContain(themeDir);
+    expect(session.skills.map((s) => s.name)).not.toContain('extskill');
+  });
+
+  it('ctx.reload() 在启动装载期间报错(是那句说明,不是暂时性死区的 ReferenceError)', async () => {
+    const file = path.join(root, 'ext', 'startup-reload.mjs');
+    await fs.writeFile(
+      file,
+      `export default async (api) => {
+  try { await api.ctx.reload(); } catch (err) { globalThis.__mojoStartupReload = err.message; }
+};
+`,
+    );
+    const g = globalThis as { __mojoStartupReload?: string };
+    g.__mojoStartupReload = undefined;
+    const loaded = await loadConfig({
+      root,
+      env: { HOME: home, MOJOCODE_PROVIDER: 'deepseek', MOJOCODE_MODEL: 'deepseek-chat', DEEPSEEK_API_KEY: 'k' },
+    });
+    const other = await bootstrap({ root, loaded, extensionPaths: [file] });
+    try {
+      expect(g.__mojoStartupReload).toMatch(/not available while extensions are loading or reloading/);
+    } finally {
+      await other.dispose?.();
+      await fs.rm(file, { force: true });
+      // 那个会话也经配置装了 capture.mjs,把全局的 api 换成了它的:换回来。
+      (globalThis as { __mojoTestApi?: ExtensionAPI }).__mojoTestApi = api;
+    }
+  });
+
+  it('ctx.reload() 在装载 / 重载期间报错而不是死锁(新一代的 setup 里调它)', async () => {
+    const g = globalThis as { __mojoReloadError?: string };
+    g.__mojoReloadError = undefined;
+    await fs.writeFile(
+      path.join(root, 'ext', 'capture.mjs'),
+      `export default async (api) => {
+  globalThis.__mojoTestApi = api;
+  try { await api.ctx.reload(); } catch (err) { globalThis.__mojoReloadError = err.message; }
+};
+`,
+    );
+    await session.reloadExtensions();
+    expect(g.__mojoReloadError).toMatch(/not available while extensions are loading or reloading/);
+    api = (globalThis as { __mojoTestApi?: ExtensionAPI }).__mojoTestApi!;
+    // 重载收尾之后又可以用了。
+    await fs.writeFile(path.join(root, 'ext', 'capture.mjs'), `export default (api) => { globalThis.__mojoTestApi = api; };\n`);
+    await expect(api.ctx.reload()).resolves.toBeUndefined();
   });
 });

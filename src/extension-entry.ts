@@ -55,6 +55,9 @@ export type {
   AgentEndHookInput,
   SessionStartHookInput,
   SessionStartReason,
+  SessionShutdownHookInput,
+  ResourcesDiscoverHookInput,
+  BeforeAgentStartMessage,
 } from './core/hooks.js';
 export type {
   ExtensionShortcutInfo,
@@ -62,7 +65,7 @@ export type {
   UiSurfaces,
   UiHost,
 } from './core/extension-types.js';
-export { extensionTheme, flattenPiResult, isPiToolResult } from './core/extension-types.js';
+export { extensionTheme, flattenPiResult, isPiToolResult, piContentText, toPiContent } from './core/extension-types.js';
 export type { AgentEvent, UsageSnapshot, ContextUsage } from './core/events.js';
 export type { Config, ReasoningEffort } from './config/schema.js';
 export type { SessionCustomRecord } from './session/store.js';

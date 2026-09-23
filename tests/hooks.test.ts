@@ -170,7 +170,7 @@ describe('HookRegistry', () => {
     hooks.on('tool_call', () => {
       order.push('c');
     });
-    const veto = await hooks.toolCall({ callId: '1', toolName: 'x', input: {}, subagent: false });
+    const veto = await hooks.toolCall({ toolCallId: '1', toolName: 'x', input: {}, subagent: false });
     expect(veto).toEqual({ block: true, reason: 'no' });
     expect(order).toEqual(['a', 'b']);
   });
@@ -181,7 +181,7 @@ describe('HookRegistry', () => {
     hooks.on('tool_call', () => {
       throw new Error('boom');
     });
-    const veto = await hooks.toolCall({ callId: '1', toolName: 'x', input: {}, subagent: false });
+    const veto = await hooks.toolCall({ toolCallId: '1', toolName: 'x', input: {}, subagent: false });
     expect(veto?.block).toBe(true);
     expect(veto?.reason).toContain('tool_call');
     expect(veto?.reason).toContain('boom');
@@ -205,14 +205,14 @@ describe('HookRegistry', () => {
       return { output: `${String(output)}+2` };
     });
     const out = await hooks.toolResult({
-      callId: '1',
+      toolCallId: '1',
       toolName: 'x',
       input: {},
       output: 'raw',
       isError: false,
       subagent: false,
     });
-    expect(out).toBe('raw+1+2');
+    expect(out).toEqual({ output: 'raw+1+2', isError: false });
     expect(seen).toEqual(['raw', 'raw+1']);
     expect(failures.map((f) => f.hook)).toEqual(['tool_result']);
   });
@@ -602,7 +602,7 @@ describe('Agent × Pi 对齐的钩子', () => {
 
   it('before_agent_start 的 message 只在本轮首个流注入,进历史', async () => {
     const hooks = new HookRegistry();
-    hooks.on('before_agent_start', ({ userText }) => ({ message: `context for ${userText}` }));
+    hooks.on('before_agent_start', ({ prompt }) => ({ message: `context for ${prompt}` }));
     const { agent } = makeAgent({ hooks });
     onStream = async (n) => {
       if (n === 1) await agent.inject('steer'); // 触发第二个流
@@ -646,8 +646,8 @@ describe('Agent × Pi 对齐的钩子', () => {
     hooks.on('tool_execution_start', ({ toolName }) => {
       order.push(`start:${toolName}`);
     });
-    hooks.on('tool_execution_end', ({ output, isError }) => {
-      order.push(`end:${String(output)}:${isError}`);
+    hooks.on('tool_execution_end', ({ result, isError }) => {
+      order.push(`end:${String(result)}:${isError}`);
     });
     hooks.on('tool_result', () => {
       order.push('result');
@@ -767,19 +767,19 @@ describe('Agent × Pi 对齐的钩子', () => {
 
   it('sendMessage:triggerTurn 开轮(带信封与 display);空闲不开轮直接进历史并播报;运行中注入为引导', async () => {
     const { agent, events } = makeAgent({});
-    await agent.sendMessage('note', 'remember this', { display: 'note!' });
+    await agent.sendMessage({ customType: 'note', content: 'remember this', display: 'note!' });
     expect(agent.history).toEqual([{ role: 'user', content: wrapCustomMessage('note', 'remember this') }]);
     expect(events.at(-1)).toEqual({ type: 'custom-message', customType: 'note', content: 'remember this', display: 'note!' });
     expect(unwrapCustomMessage(wrapCustomMessage('note', 'a\nb'))).toEqual({ customType: 'note', content: 'a\nb' });
     expect(unwrapCustomMessage('plain')).toBeUndefined();
 
-    await agent.sendMessage('cmd', 'run it', { triggerTurn: true });
+    await agent.sendMessage({ customType: 'cmd', content: 'run it' }, { triggerTurn: true });
     const start = events.find((e) => e.type === 'turn-start');
     expect(start).toMatchObject({ userText: wrapCustomMessage('cmd', 'run it'), display: 'run it' });
     expect(calls[0]!.messages).toEqual([wrapCustomMessage('note', 'remember this'), wrapCustomMessage('cmd', 'run it')]);
 
     onStream = async (n) => {
-      if (n === 2) await agent.sendMessage('steer', 'mid-turn');
+      if (n === 2) await agent.sendMessage({ customType: 'steer', content: 'mid-turn' });
     };
     await agent.run('second');
     // 运行中:作为引导注入,续跑的流看到套了引导信封的自定义消息。
@@ -843,7 +843,7 @@ describe('Agent × Pi 对齐的钩子', () => {
     const { agent } = makeAgent({});
     await agent.run('one');
     const compacting = agent.compact();
-    const sending = agent.sendMessage('note', 'survive me');
+    const sending = agent.sendMessage({ customType: 'note', content: 'survive me' });
     release();
     await compacting;
     await sending;
@@ -869,5 +869,199 @@ describe('Agent × Pi 对齐的钩子', () => {
     const { agent } = makeAgent({ hooks });
     await agent.run('go');
     expect(seen).toEqual({ hasUI: false, idle: true });
+  });
+});
+
+describe('Pi 的钩子载荷与返回形状', () => {
+  // 旧字段名(callId / output …)已弃用但迁移期内仍要填着:这一条专门考两套都在。
+  it('工具这一族钩子同时带 Pi 的字段名:toolCallId / args / result / content / details', async () => {
+    const hooks = new HookRegistry();
+    const seen: Record<string, unknown> = {};
+    hooks.on('tool_call', (e) => void (seen.call = { toolCallId: e.toolCallId, callId: e.callId, hasArgs: 'args' in e }));
+    hooks.on('tool_execution_start', (e) => void (seen.start = { args: e.args, input: e.input, callId: e.callId }));
+    hooks.on('tool_execution_end', (e) => void (seen.end = { result: e.result, output: e.output, input: e.input }));
+    hooks.on('tool_result', (e) => void (seen.result = { callId: e.callId, content: e.content, details: e.details }));
+    hooks.on('before_agent_start', (e) => void (seen.bas = { prompt: e.prompt, userText: e.userText }));
+    scripts = [{ toolCalls: [{ name: 'read', input: { path: 'a.ts' } }] }];
+    const { agent } = makeAgent({ tools: { read: { execute: async () => 'text' } }, hooks });
+    await agent.run('go');
+    // 旧叫法由注册表在派发时补(DEPRECATED_ALIASES);tool_call 用的是 input,不串进 args。
+    expect(seen.call).toEqual({ toolCallId: 'call-1-0', callId: 'call-1-0', hasArgs: false });
+    expect(seen.start).toEqual({ args: { path: 'a.ts' }, input: { path: 'a.ts' }, callId: 'call-1-0' });
+    expect(seen.end).toEqual({ result: 'text', output: 'text', input: { path: 'a.ts' } });
+    expect(seen.result).toEqual({ callId: 'call-1-0', content: [{ type: 'text', text: 'text' }], details: undefined });
+    expect(seen.bas).toEqual({ prompt: 'go', userText: 'go' });
+  });
+
+  it('tool_result 的 Pi 返回:content 换掉模型看到的内容;Pi 形状工具的 details 留给画法', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('tool_result', ({ toolName }) =>
+      toolName === 'plain'
+        ? { content: [{ type: 'text', text: 'rewritten' }] }
+        : { content: [{ type: 'text', text: 'pi rewritten' }], details: { n: 2 } },
+    );
+    scripts = [{ toolCalls: [{ name: 'plain', input: {} }, { name: 'pi', input: {} }] }];
+    const { agent, events } = makeAgent({
+      tools: {
+        plain: { execute: async () => ({ some: 'object' }) },
+        pi: { execute: async () => ({ content: [{ type: 'text', text: 'orig' }], details: { n: 1 } }) },
+      },
+      hooks,
+    });
+    await agent.run('go');
+    const ends = events.filter((e) => e.type === 'tool-end');
+    expect(ends[0]).toMatchObject({ toolName: 'plain', isError: false, output: 'rewritten' });
+    expect(ends[1]).toMatchObject({
+      toolName: 'pi',
+      output: { content: [{ type: 'text', text: 'pi rewritten' }], details: { n: 2 } },
+    });
+  });
+
+  it('Pi 形状工具被改判成错误:模型拿到 content 的文字,不是连 details 一起的 JSON', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('tool_result', () => ({ isError: true }));
+    scripts = [{ toolCalls: [{ name: 'pi', input: {} }] }];
+    const { agent, events } = makeAgent({
+      tools: { pi: { execute: async () => ({ content: [{ type: 'text', text: 'visible' }], details: { secret: 1 } }) } },
+      hooks,
+    });
+    await agent.run('go');
+    expect(events.find((e) => e.type === 'tool-end')).toMatchObject({ isError: true, output: 'visible' });
+  });
+
+  it('tool_result 的 content / details 按需算:只读 output 的处理器不触发整份输出的 JSON 化', async () => {
+    const hooks = new HookRegistry();
+    const big = { toJSON: vi.fn(() => ({ n: 1 })) };
+    hooks.on('tool_result', ({ output }) => void output);
+    await hooks.toolResult({
+      toolCallId: '1',
+      toolName: 'x',
+      input: {},
+      output: big,
+      isError: false,
+      subagent: false,
+    });
+    expect(big.toJSON).not.toHaveBeenCalled();
+    hooks.on('tool_result', ({ content }) => void content);
+    await hooks.toolResult({
+      toolCallId: '1',
+      toolName: 'x',
+      input: {},
+      output: big,
+      isError: false,
+      subagent: false,
+    });
+    expect(big.toJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it('tool_result 的 isError:成功改判成错误、错误改判成成功', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('tool_result', ({ toolName }) =>
+      toolName === 'ok' ? { isError: true, content: [{ type: 'text', text: 'rejected' }] } : { isError: false },
+    );
+    scripts = [{ toolCalls: [{ name: 'ok', input: {} }, { name: 'bad', input: {} }] }];
+    const { agent, events } = makeAgent({
+      tools: {
+        ok: { execute: async () => 'fine' },
+        bad: {
+          execute: async () => {
+            throw new Error('boom');
+          },
+        },
+      },
+      hooks,
+    });
+    await agent.run('go');
+    const ends = events.filter((e) => e.type === 'tool-end');
+    expect(ends[0]).toMatchObject({ toolName: 'ok', isError: true, output: 'rejected' });
+    expect(ends[1]).toMatchObject({ toolName: 'bad', isError: false, output: 'boom' });
+  });
+
+  it('before_agent_start 的 message 可以是 Pi 的自定义消息:以信封进历史,上时间线;display: false 不上', async () => {
+    const hooks = new HookRegistry();
+    hooks.on('before_agent_start', ({ prompt }) => ({
+      message: { customType: 'ctx', content: [{ type: 'text', text: `for ${prompt}` }], details: { k: 1 } },
+    }));
+    hooks.on('before_agent_start', () => ({ message: { customType: 'quiet', content: 'hidden', display: false } }));
+    const { agent, events } = makeAgent({ hooks });
+    await agent.run('hi');
+    expect(calls[0]!.messages).toEqual([
+      'hi',
+      wrapCustomMessage('ctx', 'for hi'),
+      // 藏起来的那条:标记写进信封,/resume 回放也认得出它(见 replay.test)。
+      wrapCustomMessage('quiet', 'hidden', true),
+    ]);
+    const custom = events.filter((e) => e.type === 'custom-message');
+    expect(custom).toEqual([{ type: 'custom-message', customType: 'ctx', content: 'for hi', details: { k: 1 } }]);
+  });
+
+  it('sendMessage 的 deliverAs:nextTurn 等下一次用户提问、紧跟在它之后进历史;扩展的续跑不取走它,斜杠技能取走', async () => {
+    const { agent, events } = makeAgent({});
+    await agent.sendMessage({ customType: 'memo', content: 'remember', details: { d: 1 } }, { deliverAs: 'nextTurn' });
+    expect(agent.history).toEqual([]);
+    expect(events.filter((e) => e.type === 'custom-message')).toEqual([]);
+    // 扩展发起的一轮不是「用户提问」,不取走。
+    await agent.run('from extension', { source: 'extension' });
+    expect(calls[0]!.messages).toEqual(['from extension']);
+    await agent.run('user asks');
+    // 写进历史的那一刻才取走,紧跟在用户消息之后(时间线同序)。
+    expect(calls[1]!.messages.slice(-2)).toEqual(['user asks', wrapCustomMessage('memo', 'remember')]);
+    const custom = events.filter((e) => e.type === 'custom-message');
+    expect(custom).toEqual([{ type: 'custom-message', customType: 'memo', content: 'remember', details: { d: 1 } }]);
+    // 只送一次。
+    await agent.run('again');
+    expect(calls[2]!.messages.filter((m) => m === wrapCustomMessage('memo', 'remember'))).toHaveLength(1);
+    // 用户敲的斜杠技能也是用户提问。
+    await agent.sendMessage({ customType: 'memo2', content: 'for skill' }, { deliverAs: 'nextTurn' });
+    await agent.run('skill body', { source: 'skill' });
+    expect(calls[3]!.messages.at(-1)).toBe(wrapCustomMessage('memo2', 'for skill'));
+  });
+
+  it('sendMessage 的 steer 输给「轮恰好收尾」的竞态(inject 返回 false):按空闲处理,不丢', async () => {
+    const { agent, events } = makeAgent({});
+    Object.defineProperty(agent, 'isRunning', { configurable: true, get: () => true });
+    const inject = vi.spyOn(agent, 'inject').mockResolvedValue(false);
+    await agent.sendMessage({ customType: 'late', content: 'still here' }, { deliverAs: 'steer' });
+    expect(inject).toHaveBeenCalled();
+    expect(agent.history.at(-1)).toEqual({ role: 'user', content: wrapCustomMessage('late', 'still here') });
+    expect(events.filter((e) => e.type === 'custom-message')).toHaveLength(1);
+  });
+
+  it('sendMessage 的 deliverAs:运行中 steer 是轮内引导,followUp 是链条之后的新一轮;空闲时 triggerTurn 才开轮', async () => {
+    const { agent, events } = makeAgent({});
+    onStream = async (n) => {
+      if (n === 1) {
+        await agent.sendMessage({ customType: 's', content: 'steer me' }, { deliverAs: 'steer', triggerTurn: true });
+        await agent.sendMessage({ customType: 'f', content: 'follow me' }, { deliverAs: 'followUp' });
+      }
+    };
+    await agent.run('go');
+    // steer:同一轮里续跑的流看到它(引导信封);followUp:之后的新一轮以它开头。
+    expect(calls[1]!.messages.at(-1)).toBe(wrapGuidance(wrapCustomMessage('s', 'steer me')));
+    const starts = events.filter((e) => e.type === 'turn-start');
+    expect(starts.map((e) => (e as { userText: string }).userText)).toEqual(['go', wrapCustomMessage('f', 'follow me')]);
+    // 空闲 + steer 不带 triggerTurn:只并入历史,不开轮。
+    const before = calls.length;
+    await agent.sendMessage({ customType: 'idle', content: 'quiet' }, { deliverAs: 'steer' });
+    expect(calls.length).toBe(before);
+    expect(agent.history.at(-1)).toEqual({ role: 'user', content: wrapCustomMessage('idle', 'quiet') });
+  });
+
+  it('sendMessage 的 hidden(Pi 的 display: false):进对话,不上时间线;开轮的那条路同样不上', async () => {
+    const { agent, events } = makeAgent({});
+    await agent.sendMessage({ customType: 'h', content: 'secret', hidden: true });
+    expect(agent.history.at(-1)).toEqual({ role: 'user', content: wrapCustomMessage('h', 'secret', true) });
+    expect(events.filter((e) => e.type === 'custom-message')).toEqual([]);
+    await agent.sendMessage({ customType: 'h2', content: 'turn', hidden: true, details: { x: 1 } }, { triggerTurn: true });
+    // 开轮那条路:藏不藏在信封里(时间线与回放都从信封认)。
+    expect(events.find((e) => e.type === 'turn-start')).toMatchObject({
+      userText: wrapCustomMessage('h2', 'turn', true),
+      details: { x: 1 },
+    });
+    expect(unwrapCustomMessage(wrapCustomMessage('h2', 'turn', true))).toEqual({
+      customType: 'h2',
+      content: 'turn',
+      hidden: true,
+    });
   });
 });

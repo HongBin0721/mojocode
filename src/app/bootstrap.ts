@@ -14,6 +14,9 @@ import {
   type ExtensionFlagOptions,
   type ExtensionStatusEntry,
   type CompactOptions,
+  type SendMessageInput,
+  type SendMessageOptions,
+  type SendUserMessageOptions,
   type ExtensionContextUsage,
   type ExtensionUIDialogOptions,
   type CustomComponentOptions,
@@ -31,6 +34,9 @@ import {
 } from '../core/extension.js';
 import {
   extensionTheme,
+  fromPiMessage,
+  piContentText,
+  type PiContentPart,
   type ComponentHost,
   type ExtensionComponent,
   type UiCustomRequest,
@@ -40,6 +46,7 @@ import {
   type WidgetPlacement,
 } from '../core/extension-types.js';
 import type { NoticeLevel } from '../core/events.js';
+import type { ImageAttachment } from './attachments.js';
 import { applyPalette, claimPaletteWrite, type ThemeColors } from '../core/palette.js';
 import { BUILTIN_THEME_NAME, listAllThemes, resolveTheme, themeLocations } from './theme-files.js';
 import { normalizeShortcut, RESERVED_SHORTCUTS } from '../core/extension-types.js';
@@ -56,7 +63,9 @@ import type { Config, ReasoningEffort } from '../config/schema.js';
 import { runDoctor, type DoctorReport } from './doctor.js';
 import { EventBus } from '../core/events.js';
 import { errorMessage, toError } from '../core/errors.js';
-import { HookRegistry } from '../core/hooks.js';
+import {
+  type HookMap,
+  type SessionShutdownHookInput, HookRegistry } from '../core/hooks.js';
 import {
   createModel,
   eligibleProviderIds,
@@ -526,6 +535,41 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    *
    * 成员按引用晚绑定:agent / provider / 会话操作在下方才就绪。
    */
+  /**
+   * 扩展放一条自定义消息 / 以用户身份发一条消息(Pi 的 sendMessage /
+   * sendUserMessage)。与扩展是谁无关,所以是会话级的一份,api 与 ctx 共用
+   * ——Pi 的 withSession 回调里是 `ctx.sendUserMessage(...)`,照抄的扩展在
+   * 这里也能用。
+   */
+  const sendCustomMessage = (message: SendMessageInput, opts?: SendMessageOptions): Promise<void> =>
+    agent.sendMessage(fromPiMessage(message), opts);
+  const sendUserMessage = async (
+    content: string | PiContentPart[],
+    opts?: SendUserMessageOptions,
+  ): Promise<void> => {
+    const text = piContentText(content);
+    const images: ImageAttachment[] =
+      typeof content === 'string'
+        ? []
+        : content
+            .filter((part): part is Extract<PiContentPart, { type: 'image' }> => part.type === 'image')
+            .map((part) => ({ mediaType: part.mimeType, data: part.data }));
+    const run = { source: 'extension' as const, ...(images.length > 0 ? { images } : {}) };
+    // 与 Pi 一致:跑着的时候不说清楚就不猜——轮内引导与新的一轮对模型是两回事。
+    if (agent.isRunning && opts?.deliverAs === undefined) {
+      throw new Error('sendUserMessage: the agent is running; pass { deliverAs: "steer" | "followUp" }.');
+    }
+    // steer 注入不进去(空闲,或轮恰好在降级写盘期间收尾,见 inject)就开新的
+    // 一轮;followUp 自己分得清空闲与运行中。都不等那一轮跑完(处理器里不该
+    // await 一整轮)。
+    if (opts?.deliverAs === 'steer' && (await agent.inject(text, run.images, 'extension'))) return;
+    agent.followUp(text, run);
+  };
+  // ctx.reload() 只在扩展全部装好之后可用:装载期间(setup、启动时的
+  // session_start)它会重载还没装完的那一批;重载期间(见 doReload)它会
+  // 等一个正在等它的重载——死锁。两种时候都直接报错。
+  let extensionsReady = false;
+
   const createExtensionContext = (
     owner: string,
     undoOnce: (key: string, undo: () => void) => void,
@@ -692,7 +736,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 三个会话操作:`withSession` 收到的就是这个 ctx——它按引用读当前会话
       // (store / agent 都是可变绑定),切完自然指向新的那一段。
       newSession: async (opts) => {
-        await newSessionImpl();
+        const created = await unlessCancelled(newSessionImpl);
+        if (created === undefined) return { cancelled: true };
         await opts?.withSession?.(ctx);
         return { cancelled: false };
       },
@@ -713,8 +758,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 装了什么、哪个失败了不交回扩展:Pi 的签名就是 `reload(): Promise<void>`,
       // 失败照旧经 notice 呈现(与 `/reload` 同一条路)。
       reload: async () => {
+        if (!extensionsReady) throw new Error('ctx.reload() is not available while extensions are loading or reloading.');
         await reloadExtensions();
       },
+      sendMessage: sendCustomMessage,
+      sendUserMessage,
       model: (modelId) => createModel(modelId ? { ...provider, model: modelId } : provider),
       config,
       // 两个只读视图:store 与 provider 都是可变绑定(/new、/models 换掉),闭包现读。
@@ -1041,9 +1089,26 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   // 失败只静默——统计缺一轮远好过打断一次会话。
 
   // 工具的流式增量 → tool_execution_update 钩子(只有主 agent 的经主总线)。
+  // 增量事件本身只带 callId;工具名与参数(Pi 的 toolName / args)从同一次
+  // 调用的 tool-start 记下来,tool-end / 一次 run 收尾时清掉。
+  const runningTools = new Map<string, { toolName: string; input: unknown }>();
   bus.on((event) => {
-    if (event.type !== 'tool-output-delta' || !hooks.has('tool_execution_update')) return;
-    void hooks.notify('tool_execution_update', { callId: event.callId, chunk: event.chunk, subagent: false });
+    if (event.type === 'tool-start') {
+      runningTools.set(event.callId, { toolName: event.toolName, input: event.input });
+    } else if (event.type === 'tool-end') {
+      runningTools.delete(event.callId);
+    } else if (event.type === 'run-end') {
+      runningTools.clear();
+    } else if (event.type === 'tool-output-delta' && hooks.has('tool_execution_update')) {
+      const call = runningTools.get(event.callId);
+      void hooks.notify('tool_execution_update', {
+        toolCallId: event.callId,
+        toolName: call?.toolName ?? '',
+        args: call?.input,
+        partialResult: event.chunk,
+        subagent: false,
+      });
+    }
   });
 
   bus.on((event) => {
@@ -1192,7 +1257,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    */
   interface Registrations {
     undo: Array<() => void>;
-    shutdown: Array<() => void | Promise<void>>;
+    shutdown: Array<(input: SessionShutdownHookInput) => void | Promise<void>>;
   }
   const registrations = new Map<string, Registrations>();
   const unloadExtension = async (id: string): Promise<void> => {
@@ -1201,7 +1266,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     registrations.delete(id);
     for (const fn of reg.shutdown) {
       try {
-        await fn();
+        await fn({ reason: 'reload' });
       } catch {
         /* 卸载路上的错误不打扰:扩展马上就被换掉了 */
       }
@@ -1260,7 +1325,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 每条注册自带自己的 ctx(见 HookRegistry.on):不必包一层匿名函数换
       // ctx——那既废掉注册表按处理器身份的去重,也在扩展的调用栈里塞一帧。
       on: (name, handler) => {
-        if (name === 'session_shutdown') reg.shutdown.push(handler as () => void | Promise<void>);
+        if (name === 'session_shutdown') {
+          const onShutdown = handler as HookMap['session_shutdown'];
+          reg.shutdown.push((input) => onShutdown(input, extCtx));
+        }
         return track(hooks.on(name, handler, extCtx));
       },
       onEvent: (handler) => track(bus.on(handler)),
@@ -1337,11 +1405,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
           if (extensionRuntime.get(key) === get) extensionRuntime.delete(key);
         });
       },
-      sendMessage: (message, opts) =>
-        agent.sendMessage(message.customType, message.content, {
-          ...(message.display !== undefined ? { display: message.display } : {}),
-          ...(opts?.triggerTurn ? { triggerTurn: true } : {}),
-        }),
+      sendMessage: sendCustomMessage,
+      sendUserMessage,
       registerMessageRenderer: (customType, renderer) => {
         messageRenderers = setRenderer(messageRenderers, customType, renderer);
         reg.undo.push(() => {
@@ -1421,10 +1486,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
         setReasoningEffort(level);
       },
       exec: async (command, args, opts) => {
+        const timeout = opts?.timeoutMs ?? opts?.timeout;
         const result = await execa(command, [...args], {
           cwd: opts?.cwd ?? root,
           reject: false,
-          ...(opts?.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+          ...(timeout !== undefined ? { timeout } : {}),
           ...(opts?.signal ? { cancelSignal: opts.signal } : {}),
           ...(opts?.env ? { env: opts.env } : {}),
         });
@@ -1503,38 +1569,58 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
    */
   let reloadInFlight: Promise<{ loaded: string[]; failed: string[] }> | undefined;
   const reloadExtensions = (): Promise<{ loaded: string[]; failed: string[] }> => {
-    // 并发调用共享同一次(与 compactionInFlight 同款)。`/reload` 命令是串行
-    // 派发的,但 `ctx.reload()` 谁都能调:两个扩展在同一个 session_start 里
-    // 各调一次的话,后进来的会看到已经被前一次清空的 diskExtensionIds——什么
-    // 都不卸、却又 bump 一次代数再并发装一遍,于是一半扩展以 id 撞车失败、
-    // 另一半挂在过期代数的 jiti 实例上。
+    // 并发调用共享同一次(与 compactionInFlight 同款):重载还在跑时又来一次
+    // `/reload`,后进来的会看到已经被清空的 diskExtensionIds——什么都不卸、却
+    // 又 bump 一次代数再并发装一遍,于是一半扩展以 id 撞车失败、另一半挂在
+    // 过期代数的 jiti 实例上。(扩展的 ctx.reload() 在重载期间直接报错,碰不到这里。)
     reloadInFlight ??= doReload().finally(() => {
       reloadInFlight = undefined;
     });
     return reloadInFlight;
   };
   const doReload = async (): Promise<{ loaded: string[]; failed: string[] }> => {
-    for (const id of [...diskExtensionIds]) {
-      await unloadExtension(id);
-      loadedIds.delete(id);
-      diskExtensionIds.delete(id);
+    // 必须是第一句:卸载时的 session_shutdown 在第一个 await 之前就同步跑了,
+    // 那时 reloadInFlight 还没赋上,靠它挡不住处理器里的 ctx.reload()。
+    extensionsReady = false;
+    try {
+      for (const id of [...diskExtensionIds]) {
+        await unloadExtension(id);
+        loadedIds.delete(id);
+        diskExtensionIds.delete(id);
+      }
+      extensionGeneration += 1;
+      // 卸完、装之前拍一份:之后只通知**新装上的**扩展。一方扩展没被重载,再发
+      // 一次 session_start 会让它们把状态恢复第二遍。
+      const startedBefore = hooks.snapshot('session_start');
+      const result = await loadDiskExtensions((level, message) => bus.emit({ type: 'notice', level, message }));
+      // 重新装上的扩展没赶上启动时那一次:资源目录要重收(被删掉的扩展贡献的
+      // 目录一并撤掉),状态要从会话记录补恢复(Pi 的 `reason: 'reload'`)——
+      // 否则 /reload 之后它们手里是空的。
+      await discoverResources('reload');
+      await hooks.notify('session_start', { reason: 'reload' }, startedBefore);
+      return result;
+    } finally {
+      extensionsReady = true;
     }
-    extensionGeneration += 1;
-    return loadDiskExtensions((level, message) => bus.emit({ type: 'notice', level, message }));
   };
 
-  // 扩展贡献的资源目录(resources_discover):技能与提示词模板追加后重扫一次,
-  // skill 工具随之重建;主题目录记下来给 TUI 起来前查。
-  {
-    const { skillPaths, promptPaths, themePaths } = await hooks.resourcesDiscover();
-    skillManager.addDirs(skillPaths.map((p) => path.resolve(root, p)));
-    skillManager.addPromptDirs(promptPaths.map((p) => path.resolve(root, p)));
-    themeDirs.push(...themePaths.map((p) => path.resolve(root, p)));
-    if (skillPaths.length > 0 || promptPaths.length > 0) {
+  /**
+   * 扩展贡献的资源目录(resources_discover):技能、提示词模板与主题目录。
+   * 启动与每次 `/reload` 都问全部扩展、**整体替换**上一次的结果——追加的话
+   * 同一个目录每重载一次多扫一遍,被删掉的扩展贡献的目录也撤不掉。目录变了
+   * 才重扫技能、重建 skill 工具。
+   */
+  const baseThemeDirs = [...themeDirs];
+  const discoverResources = async (reason: 'startup' | 'reload'): Promise<void> => {
+    const found = await hooks.resourcesDiscover({ cwd: root, reason });
+    const resolveDirs = (paths: string[]): string[] => paths.map((p) => path.resolve(root, p));
+    themeDirs.splice(0, Infinity, ...new Set([...baseThemeDirs, ...resolveDirs(found.themePaths)]));
+    if (skillManager.setExtensionDirs(resolveDirs(found.skillPaths), resolveDirs(found.promptPaths))) {
       await skillManager.list().catch(() => {});
       syncSkillTool();
     }
-  }
+  };
+  await discoverResources('startup');
 
   const runCommand = async (name: string, args: string): Promise<void> => {
     const entry = extensionCommands.get(name);
@@ -1547,22 +1633,40 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
   }
   // 扩展从会话记录恢复自己的状态(如 /goal 的条件)。在历史与状态换好之后。
   await hooks.notify('session_start', { reason: 'startup' });
+  extensionsReady = true;
 
   // ---- 会话切换(/new、/resume、/fork 与扩展的 ctx.newSession / switchSession / fork 共用) ----
   const newSessionImpl = async (): Promise<SessionStore> => {
+    // 与 Pi 一样,开新会话也问 session_before_switch(reason: new):扩展可以
+    // 拦下「会丢掉当前对话」的操作。取消以错误呈现,调用方按失败提示。
+    if ((await hooks.cancelable('session_before_switch', { reason: 'new' })).cancel) {
+      throw new SessionOperationCancelled('New session cancelled by an extension.');
+    }
+    const previousSessionFile = store.file;
     store = await SessionStore.create({ root, provider: provider.id, model: provider.model });
     agent.clear();
     resetSkillActivation();
-    await hooks.notify('session_start', { reason: 'new' });
+    await hooks.notify('session_start', { reason: 'new', previousSessionFile });
     bus.emit({ type: 'session-changed', reason: 'new', id: store.id });
     return store;
   };
   const resumeSessionImpl = async (idOrPrefix: string): Promise<SessionStore> => {
+    // 先解析前缀再问扩展:session_before_switch 给的是确定的目标(id 与会话
+    // 文件路径),不是用户敲的半截前缀;会话不存在的错误也就先于钩子报出。
+    const id = await SessionStore.resolveId(idOrPrefix, { root });
     // 扩展可取消(session_before_switch);取消以错误呈现,调用方按失败提示。
-    if ((await hooks.cancelable('session_before_switch', { id: idOrPrefix })).cancel) {
+    if (
+      (
+        await hooks.cancelable('session_before_switch', {
+          reason: 'resume',
+          id,
+          targetSessionFile: SessionStore.fileOf(id),
+        })
+      ).cancel
+    ) {
       throw new SessionOperationCancelled('Session switch cancelled by an extension.');
     }
-    const id = await SessionStore.resolveId(idOrPrefix, { root });
+    const previousSessionFile = store.file;
     const opened = await SessionStore.open(id);
     store = opened;
     // 上一段对话点名的技能不能漂进另一段对话。
@@ -1573,7 +1677,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 沿用当前正在用的那一个。反过来把 meta 更新成当前模型,列表里那一行
     // 才不会继续宣称一个这段对话往后都不会再用的模型。
     opened.setModel(provider.id, provider.model);
-    await hooks.notify('session_start', { reason: 'resume' });
+    await hooks.notify('session_start', { reason: 'resume', previousSessionFile });
     await hooks.notify('session_switch', { id: opened.id });
     bus.emit({ type: 'session-changed', reason: 'resume', id: opened.id });
     return opened;
@@ -1584,8 +1688,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     }
     // 与 --fork-session 同一条路:eager 拷贝进新文件,源会话从此不再被写。
     // 内存里的历史一概不动——分叉的意义就是"一切照旧,换个 id"。
+    const previousSessionFile = store.file;
     store = await store.fork({ provider: provider.id, model: provider.model });
-    await hooks.notify('session_start', { reason: 'fork' });
+    await hooks.notify('session_start', { reason: 'fork', previousSessionFile });
     await hooks.notify('session_fork', { id: store.id });
     bus.emit({ type: 'session-changed', reason: 'fork', id: store.id });
     return store;
@@ -1636,7 +1741,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 自己再写一遍会让产品里出现两种"输出被截断"的说法。
     const body = truncate(output.replace(/\s+$/, ''), USER_BASH_OUTPUT_LIMIT) || '(no output)';
     const content = `$ ${resolved.command}\n${body}\n(exit code ${exitCode})`;
-    await agent.sendMessage('user_bash', content, { display: content });
+    await agent.sendMessage({ customType: 'user_bash', content, display: content });
   };
 
   const switchProvider = (change: {
@@ -1659,6 +1764,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       // 必须回退到该 provider 的默认模型,而不是沿用旧的模型 id。
       model: change.model ?? (change.provider ? undefined : config.model),
     });
+    const previous = provider;
     config.provider = next.id;
     config.model = next.model;
     provider = next;
@@ -1670,7 +1776,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // 模型"),不跟着切就会一直停在创建时的值。
     store.setModel(next.id, next.model);
     // 通知型钩子,不等它:切换本身是同步语义,扩展的反应在后台跑。
-    void hooks.notify('model_select', { provider: next.id, model: next.model });
+    void hooks.notify('model_select', {
+      provider: next.id,
+      model: next.model,
+      previousProvider: previous.id,
+      previousModel: previous.model,
+      source: 'set',
+    });
     return next;
   };
 
@@ -1678,12 +1790,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     // provider 与 agent 持有同一个 ResolvedProvider 对象,改字段即可让下一次
     // streamText 生效;同时写回内存配置,使 /models、/provider 重新 resolve
     // 时不丢失本次选择。(从 App.tsx 的 /think 分支原样收编。)
+    const previousLevel = provider.reasoningEffort;
     provider.reasoningEffort = level;
     config.providers[provider.id] = {
       ...(config.providers[provider.id] ?? {}),
       reasoningEffort: level,
     };
-    void hooks.notify('thinking_level_select', { level });
+    void hooks.notify('thinking_level_select', { level, previousLevel });
   };
 
   /**
@@ -1899,7 +2012,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
     dispose: async () => {
       for (const id of [...uiPending.keys()]) answerUi(id, undefined);
       for (const id of [...uiCustoms.keys()]) resolveCustom(id, undefined);
-      await hooks.notify('session_shutdown', undefined);
+      await hooks.notify('session_shutdown', { reason: 'quit' });
     },
   };
 }

@@ -125,6 +125,42 @@ export interface PiToolResult {
   details?: unknown;
 }
 
+/**
+ * Pi 的内容部件(TextContent / ImageContent):工具结果、`sendUserMessage`、
+ * `sendMessage` 的 content 数组都是这个形状。图片是 base64 + mimeType。
+ */
+export type PiContentPart = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string };
+
+/**
+ * Pi 的 content(字符串或部件数组)里的文字部分,按行拼起来;图片部件不在其中。
+ * 部件按不可信处理(扩展的工具结果没过类型检查):不是文字部件的一律跳过。
+ */
+export function piContentText(content: string | ReadonlyArray<{ type?: string; text?: string }>): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n');
+}
+
+/**
+ * 扩展消息的投递方式(Pi 的 `deliverAs`):`steer` 运行中作为轮内引导(模型
+ * 下一步就看到),`followUp` 等当前链条收尾后作为新的一轮,`nextTurn` 不打断
+ * 也不开轮、等下一次用户提问时一并送进去。
+ */
+export type DeliverAs = 'steer' | 'followUp' | 'nextTurn';
+
+/** 工具输出 → Pi 的内容部件:Pi 形状的原样取 content,其余转成一段文本。 */
+export function toPiContent(output: unknown): PiContentPart[] {
+  if (isPiToolResult(output)) {
+    return output.content.map((part) =>
+      part.type === 'image' ? (part as PiContentPart) : { type: 'text', text: part.text ?? '' },
+    );
+  }
+  const text = output === undefined ? '' : typeof output === 'string' ? output : JSON.stringify(output);
+  return [{ type: 'text', text }];
+}
+
 export function isPiToolResult(value: unknown): value is PiToolResult {
   return (
     typeof value === 'object' &&
@@ -135,11 +171,7 @@ export function isPiToolResult(value: unknown): value is PiToolResult {
 
 /** Pi 的 AgentToolResult → 喂给模型的文本;不是那个形状原样返回。零依赖,时间线与适配器共用。 */
 export function flattenPiResult(result: unknown): unknown {
-  if (!isPiToolResult(result)) return result;
-  return result.content
-    .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
-    .map((part) => part.text)
-    .join('\n');
+  return isPiToolResult(result) ? piContentText(result.content) : result;
 }
 
 /**
@@ -426,8 +458,39 @@ export interface UiHost {
 export interface CustomMessageInfo {
   customType: string;
   content: string;
+  /** Pi 的 `details`:只给画法用,不进持久历史(`/resume` 回放时没有)。 */
+  details?: unknown;
   /** 时间线展示用的替代文本;缺省画 content。 */
   display?: string;
+}
+
+/**
+ * `sendMessage` 的入参(Pi 的 CustomMessage 去掉宿主填的字段),before_agent_start
+ * 返回的 `message` 也是它:`content` 可以是 Pi 的部件数组(只取文字部分);
+ * `display` 为 false 时进对话但不上时间线,为字符串时是时间线上的替代文本;
+ * `details` 交给 registerMessageRenderer。
+ */
+export interface SendMessageInput {
+  customType: string;
+  content: string | PiContentPart[];
+  display?: boolean | string;
+  details?: unknown;
+}
+
+/** 宿主内部的自定义消息:content 已拍成文字,Pi 的 `display: false` 换成 `hidden`。 */
+export interface CustomMessage extends CustomMessageInfo {
+  hidden?: boolean;
+}
+
+/** Pi 形状 → 宿主形状。sendMessage 与 before_agent_start 的 message 共用这一处翻译。 */
+export function fromPiMessage(message: SendMessageInput): CustomMessage {
+  return {
+    customType: message.customType,
+    content: piContentText(message.content),
+    ...(typeof message.display === 'string' ? { display: message.display } : {}),
+    ...(message.display === false ? { hidden: true } : {}),
+    ...(message.details !== undefined ? { details: message.details } : {}),
+  };
 }
 
 /** 自定义消息在时间线里的画法(Pi 的 registerMessageRenderer,只认字符串行)。 */

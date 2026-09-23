@@ -26,6 +26,7 @@ import {
   type CompactionResult,
 } from './compact.js';
 import { errorMessage, toError } from '../core/errors.js';
+import { fromPiMessage, type CustomMessage, type DeliverAs } from '../core/extension-types.js';
 import { t } from '../i18n/index.js';
 
 export interface AgentOptions {
@@ -88,26 +89,34 @@ export function unwrapGuidance(text: string): string | undefined {
 }
 
 const CUSTOM_MESSAGE_PREFIX = '[extension message';
+/** 不上时间线的那种(Pi 的 `display: false`)。标记必须**跟着历史走**:只在
+ * 内存里记的话,`/resume` 回放认不出它,扩展特意藏起来的上下文会整段画出来。 */
+const HIDDEN_MARK = ' (hidden)';
 
 /**
  * 扩展经 sendMessage 放进对话的消息的信封(Pi 的 customType 消息):模型看到
  * 类型名与正文,回放与时间线据此认出它、按扩展注册的画法画。与 wrapGuidance
- * 同款的字面量信封——历史里只有文本,没有别处可以挂元数据。
+ * 同款的字面量信封,「藏不藏」也写在这里。(user 消息的 providerOptions 也能
+ * 挂元数据并随历史落盘,但造 user 消息的每条路都得一起带上;信封再多一个
+ * 属性时就该换过去——每多一个属性,前缀的组合就翻一倍。)
  */
-export function wrapCustomMessage(customType: string, content: string): string {
-  return `${CUSTOM_MESSAGE_PREFIX}: ${customType}]\n${content}`;
+export function wrapCustomMessage(customType: string, content: string, hidden = false): string {
+  return `${CUSTOM_MESSAGE_PREFIX}${hidden ? HIDDEN_MARK : ''}: ${customType}]\n${content}`;
 }
 
 /** wrapCustomMessage 的逆操作;不是自定义消息返回 undefined。 */
 export function unwrapCustomMessage(
   text: string,
-): { customType: string; content: string } | undefined {
-  if (!text.startsWith(`${CUSTOM_MESSAGE_PREFIX}: `)) return undefined;
-  const close = text.indexOf(']\n');
+): { customType: string; content: string; hidden?: true } | undefined {
+  const hidden = text.startsWith(`${CUSTOM_MESSAGE_PREFIX}${HIDDEN_MARK}: `);
+  if (!hidden && !text.startsWith(`${CUSTOM_MESSAGE_PREFIX}: `)) return undefined;
+  const start = CUSTOM_MESSAGE_PREFIX.length + (hidden ? HIDDEN_MARK.length : 0) + 2;
+  const close = text.indexOf(']\n', start);
   if (close === -1) return undefined;
   return {
-    customType: text.slice(CUSTOM_MESSAGE_PREFIX.length + 2, close),
+    customType: text.slice(start, close),
     content: text.slice(close + 2),
+    ...(hidden ? { hidden: true as const } : {}),
   };
 }
 
@@ -152,13 +161,17 @@ interface TurnFinish {
   finishReason: string;
 }
 
-/** 排队的轮后消息(followUp):一条完整的新一轮,有 turn-start、进时间线,不是引导。 */
-interface FollowUpEntry {
-  text: string;
+/** run / followUp 共用的选项。 */
+export interface RunOptions {
   display?: string;
   images?: ImageAttachment[];
   source?: MessageSource;
+  /** 扩展自定义消息开的轮:给画法的 details(见 turn-start 事件)。 */
+  details?: unknown;
 }
+
+/** 排队的轮后消息(followUp):一条完整的新一轮,有 turn-start、进时间线,不是引导。 */
+type FollowUpEntry = RunOptions & { text: string };
 
 /**
  * 「只跑引导」的一轮:两轮之间(turn_end 钩子期间)注入的引导没有轮后消息
@@ -220,6 +233,12 @@ export class Agent {
   /** 经 followUp 排队、等当前这一轮收尾后开跑的消息。 */
   private followUps: FollowUpEntry[] = [];
   /**
+   * `deliverAs: 'nextTurn'` 的消息:不打断、不开轮,等**下一次用户提问**开轮时
+   * 先于那条用户消息进历史。换会话(clear / setHistory)时丢掉——它们属于
+   * 被换掉的那段对话。
+   */
+  private nextTurnMessages: CustomMessage[] = [];
+  /**
    * 一次 run() 的整个链条(首轮 + 全部续跑)进行中。两轮之间 controller
    * 为空,靠它撑住 isRunning——否则那段窗口里提交的消息会并发起第二个链条。
    */
@@ -274,6 +293,7 @@ export class Agent {
     this.estimatedTokens = estimated;
     this.historyNeedsCompact = estimated > provider.contextWindow * config.compactThreshold;
     if (options?.resetSpend) this.cumulativeTokens = 0;
+    this.nextTurnMessages = [];
     this.historyGeneration++;
   }
 
@@ -295,6 +315,7 @@ export class Agent {
     // 累计用量属于被丢弃的那次会话:不清零的话 footer 与 /cost 会把旧账
     // 算到新会话头上(UI 乐观置 0,下一个 step-end 又跳回清空前的数字)。
     this.cumulativeTokens = 0;
+    this.nextTurnMessages = [];
     // 进行中的压缩完成后不得把这段已被丢弃的历史写回来。
     this.historyGeneration++;
   }
@@ -410,17 +431,9 @@ export class Agent {
    * 停下,agent 绝不能自己接着跑——这是 `/goal` 一直坚持的边界,搬到这里
    * 成为所有扩展的边界。
    */
-  followUp(
-    text: string,
-    options?: { display?: string; images?: ImageAttachment[]; source?: MessageSource },
-  ): void {
+  followUp(text: string, options?: RunOptions): void {
     if (this.isRunning) {
-      this.followUps.push({
-        text,
-        display: options?.display,
-        images: options?.images,
-        source: options?.source,
-      });
+      this.followUps.push({ text, ...options });
       return;
     }
     void this.run(text, options);
@@ -435,33 +448,71 @@ export class Agent {
    * 信封,渲染层自己拆。
    */
   async sendMessage(
-    customType: string,
-    content: string,
-    options?: { display?: string; triggerTurn?: boolean },
+    message: CustomMessage,
+    options?: { triggerTurn?: boolean; deliverAs?: DeliverAs },
   ): Promise<void> {
-    const wrapped = wrapCustomMessage(customType, content);
-    const display = options?.display;
-    if (options?.triggerTurn) {
-      // 空闲:与 run 同语义,等整条链跑完;运行中:排在链条之后,立即返回。
-      if (this.isRunning) this.followUp(wrapped, { display: display ?? content, source: 'extension' });
-      else await this.run(wrapped, { display: display ?? content, source: 'extension' });
+    const { triggerTurn, deliverAs } = options ?? {};
+    const wrapped = wrapCustomMessage(message.customType, message.content, message.hidden);
+    if (deliverAs === 'nextTurn') {
+      // 不打断、不开轮;下一次用户提问开轮时紧跟在那条消息之后进历史(见 runTurn)。
+      this.nextTurnMessages.push(message);
       return;
     }
+    const turn: RunOptions = {
+      display: message.display ?? message.content,
+      source: 'extension',
+      details: message.details,
+    };
+    // 运行中怎么投:没给 deliverAs 保持原有语义(triggerTurn 排在链条之后开
+    // 新一轮,否则作为轮内引导);给了就照 Pi——steer 是轮内引导,followUp
+    // 是链条之后的新一轮,triggerTurn 只管空闲时开不开轮。
     if (this.isRunning) {
+      const asFollowUp = deliverAs === undefined ? triggerTurn === true : deliverAs === 'followUp';
+      if (asFollowUp) {
+        this.followUp(wrapped, turn);
+        return;
+      }
       // 引导信封里再套一层自定义信封:模型两层都看得到,无害。
-      await this.inject(wrapped, undefined, 'extension');
-    } else {
-      // 压缩进行中时先等它:它完成时会整体替换 this.messages,先 push 的消息
-      // 会被无声覆盖掉(runTurn 在开轮前 await 同一个 promise,同一条理由)。
-      if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
-      this.messages.push({ role: 'user', content: wrapped });
-      this.options.onHistoryChange?.(this.messages);
+      if (await this.inject(wrapped, undefined, 'extension')) {
+        if (!message.hidden) this.emitCustomMessage(message);
+        return;
+      }
+      // inject 输给了「轮恰好收尾」的竞态(降级写盘期间轮结束,见 inject):
+      // 此刻已经空闲,落到下面空闲的路上——不能丢,扩展连个错误都拿不到。
     }
+    if (triggerTurn) {
+      // 空闲开轮:与 run 同语义,等整条链跑完。
+      await this.run(wrapped, turn);
+      return;
+    }
+    // 压缩进行中时先等它:它完成时会整体替换 this.messages,先 push 的消息
+    // 会被无声覆盖掉(runTurn 在开轮前 await 同一个 promise,同一条理由)。
+    if (this.compactionInFlight) await this.compactionInFlight.catch(() => undefined);
+    this.appendCustomMessage(message);
+    this.options.onHistoryChange?.(this.messages);
+  }
+
+  /**
+   * 一条自定义消息以信封进历史、不藏的话同时上时间线(不开轮的三条路:空闲
+   * 的 sendMessage、nextTurn 随用户提问、before_agent_start 的 message)。
+   * 落盘由调用方负责。
+   */
+  private appendCustomMessage(message: CustomMessage): void {
+    this.messages.push({
+      role: 'user',
+      content: wrapCustomMessage(message.customType, message.content, message.hidden),
+    });
+    if (!message.hidden) this.emitCustomMessage(message);
+  }
+
+  /** 时间线画一条自定义消息。 */
+  private emitCustomMessage(message: CustomMessage): void {
     this.options.bus.emit({
       type: 'custom-message',
-      customType,
-      content,
-      ...(display !== undefined ? { display } : {}),
+      customType: message.customType,
+      content: message.content,
+      ...(message.display !== undefined ? { display: message.display } : {}),
+      ...(message.details !== undefined ? { details: message.details } : {}),
     });
   }
 
@@ -629,10 +680,7 @@ export class Agent {
    * finally 还没跑、controller 还在,处理器里的 run() 会被重入兜底转成
    * inject,混进上一轮的历史。这里 turn_end 钩子在 runTurn 完全返回之后才跑。
    */
-  async run(
-    userText: string,
-    options?: { display?: string; images?: ImageAttachment[]; source?: MessageSource },
-  ): Promise<void> {
+  async run(userText: string, options?: RunOptions): Promise<void> {
     const source = options?.source ?? 'user';
     const { hooks } = this.options;
     const subagent = this.subagent;
@@ -675,8 +723,8 @@ export class Agent {
     try {
       await hooks?.notify('agent_start', { userText, subagent });
       let next: FollowUpEntry | typeof GUIDANCE_ONLY | undefined = {
+        ...options,
         text: userText,
-        display: options?.display,
         images,
         source,
       };
@@ -722,6 +770,7 @@ export class Agent {
         userText: entry.text,
         display: entry.display,
         ...(entry.images?.length ? { imageCount: entry.images.length } : {}),
+        ...(entry.details !== undefined ? { details: entry.details } : {}),
       });
     }
 
@@ -749,6 +798,14 @@ export class Agent {
       if (!guidanceOnly) {
         const prepared = await this.prepareUserMessage(entry.text, entry.images);
         this.messages.push({ role: 'user', content: buildUserContent(prepared.text, prepared.images) });
+        // 排着等「下一次用户提问」的自定义消息(deliverAs: 'nextTurn'):用户自己
+        // 开的轮(直接提问或斜杠技能)才取走,扩展排的续跑不是用户提问。**写进
+        // 历史的这一刻才取**,紧跟在用户消息之后:在这之前(turn_start 钩子、
+        // 等压缩)轮被中断或出错的话,它们还在队列里等下一次,而不是已经画上
+        // 时间线、却没进历史。时间线与历史同序(都在用户消息之后)。
+        if (entry.source !== 'extension') {
+          for (const message of this.nextTurnMessages.splice(0)) this.appendCustomMessage(message);
+        }
         this.emitImageNotices(prepared, entry.images?.length ?? 0);
         finish = await this.stream();
       }
@@ -857,11 +914,15 @@ export class Agent {
     if (!hooks?.has('before_agent_start')) return base;
     const result = await hooks.beforeAgentStart({
       systemPrompt: base,
-      userText: this.turnUserText,
+      prompt: this.turnUserText,
       subagent: this.subagent,
     });
     if (inject) {
-      for (const text of result.messages) this.messages.push({ role: 'user', content: text });
+      for (const message of result.messages) {
+        // 纯文本原样进历史;Pi 的自定义消息形状以 customType 的信封进历史并上时间线。
+        if (typeof message === 'string') this.messages.push({ role: 'user', content: message });
+        else this.appendCustomMessage(fromPiMessage(message));
+      }
     }
     return result.systemPrompt;
   }

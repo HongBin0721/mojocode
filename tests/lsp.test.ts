@@ -303,8 +303,8 @@ describe('write/edit 经扩展回喂诊断', () => {
       config: { lsp: fakeConfig() } as never,
     });
     lspExtension.setup(api);
-    const output = await hooks.toolResult({
-      callId: 'c1',
+    const { output } = await hooks.toolResult({
+      toolCallId: 'c1',
       toolName: 'read',
       input: {},
       output: { path: 'a.zz', content: 'x' },

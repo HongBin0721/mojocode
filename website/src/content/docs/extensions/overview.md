@@ -3,7 +3,7 @@ title: 扩展
 description: 一个 TypeScript 文件就是一个扩展:钩子、命令、工具、状态行。
 ---
 
-mojocode 的扩展与 [pi](https://github.com/badlogic/pi-mono) 同一套形状:一个 TypeScript / JavaScript 模块,默认导出一个函数,拿到 `api` 后注册钩子、命令、工具。钩子表、API 成员表与渲染层都刻意与 Pi **同名同义**——学过 Pi 就会写这里的扩展;剩下的差异见文末的对照。扩展与 TUI 跑在同一个进程里(Pi 的形态):命令表与状态行直接进菜单与输入框上方,用户可见的提示走时间线 notice,向用户提问、挂自己的界面走 `ctx.ui`。
+mojocode 的扩展与 [pi](https://github.com/badlogic/pi-mono) 同一套形状:一个 TypeScript / JavaScript 模块,默认导出一个函数,拿到 `api` 后注册钩子、命令、工具。钩子名、API 成员名、钩子载荷的字段名与渲染层都刻意与 Pi **同名**——学过 Pi 就会写这里的扩展;字段与语义仍不一样的地方见文末的[对照](#与-pi-的差异)。扩展与 TUI 跑在同一个进程里(Pi 的形态):命令表与状态行直接进菜单与输入框上方,用户可见的提示走时间线 notice,向用户提问、挂自己的界面走 `ctx.ui`。
 
 ```ts
 // ~/.mojocode/extensions/no-rm.ts
@@ -55,36 +55,38 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 
 | 钩子 | 时机 | 返回值 | 失败策略 |
 |---|---|---|---|
-| `session_start` | 会话就位之后(`reason`:`startup` / `new` / `resume` / `fork`),历史与状态已换好 | 无 | 只上报 |
-| `session_shutdown` | 会话关闭 | 无 | 只上报 |
+| `session_start` | 会话就位之后(`reason`:`startup` / `new` / `resume` / `fork` / `reload`),历史与状态已换好;换会话时带 `previousSessionFile`(上一个会话文件的绝对路径)。`reload` 只发给 `/reload` 重新装上的扩展,它们在这里从会话记录恢复自己的状态 | 无 | 只上报 |
+| `session_shutdown` | `{ reason: 'quit' \| 'reload' }`:进程退出,或 `/reload` 卸载这个扩展。换会话**不**发(扩展的运行时跨会话活着) | 无 | 只上报 |
 | `input` | 用户输入进入对话之前,`{ text, images, source: 'turn' \| 'guidance' }`;扩展与技能发起的消息不经它 | `{ action: 'transform', text }` 改写;`{ action: 'handled' }` 吞掉(这一轮不开) | 保留原值 |
 | `agent_start` | 一次 run 的链条开始,`{ userText }` | 无 | 只上报 |
-| `before_agent_start` | 每次开流前,`{ systemPrompt, userText }` | `{ systemPrompt }` 改写发出去的系统提示词;`{ message }` 以一条 user 消息进本轮上下文(只在本轮首个流注入) | 保留原值 |
+| `before_agent_start` | 每次开流前,`{ systemPrompt, prompt }` | `{ systemPrompt }` 改写发出去的系统提示词;`{ message }` 进本轮上下文(只在本轮首个流注入):字符串是一条 user 消息,Pi 的 `{ customType, content, display?, details? }` 以自定义消息进历史并上时间线(`display: false` 不上) | 保留原值 |
 | `context` | 每次调模型之前,`{ messages }` 是这次要发出去的副本 | `{ messages }` 改写这一次请求,持久历史不动 | 保留原值 |
 | `before_provider_request` | 发给 provider 之前(AI SDK 中间件),`{ params, type }`——prompt / tools / providerOptions / headers 全在 `params` 里 | `{ params }` 替换 | 保留原值 |
-| `tool_call` | 工具执行前,`{ callId, toolName, input }` | `{ block: true, reason }` 否决 | **失败即否决** |
-| `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | 工具真正开始 / 流式增量(`chunk`)/ 执行完毕(原始 `output`、`durationMs`) | 无 | 只上报 |
-| `tool_result` | 工具执行后、结果喂回模型前,`{ output, isError }` | `{ output }` 改写 | 保留原值 |
+| `tool_call` | 工具执行前,`{ toolCallId, toolName, input }` | `{ block: true, reason }` 否决 | **失败即否决** |
+| `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | 工具真正开始(`args`)/ 流式增量(`partialResult`)/ 执行完毕(原始 `result`、`durationMs`)。都带 `toolCallId` 与 `toolName` | 无 | 只上报 |
+| `tool_result` | 工具执行后、结果喂回模型前,`{ toolCallId, output, content, details, isError }`(`content` 是模型看到的内容部件,`details` 是 Pi 形状工具给画法的数据) | `{ output }` 整个换掉;或 Pi 的 `{ content, details, isError }`:`content` 换掉模型看到的内容,`details` 换掉给画法的数据,`isError` 把成功改判成错误或反过来 | 保留原值 |
 | `message_start` / `message_update` | 一条 assistant 消息开始流出(每个 step 一条)/ 每份流式增量,`{ message }` 是累积到此刻的部分消息,`message_update` 另带 `{ delta: { type: 'text' \| 'reasoning', id, text } }`。没人监听时不组装,零开销 | 无 | 只上报 |
 | `message_end` | 每条定稿的 assistant / tool 消息并入历史之前,`{ message }` | `{ message }` 替换 | 保留原值 |
 | `user_bash` | 用户在输入框敲 `!<command>`,执行之前,`{ command, cwd }` | `{ command }` 改写要跑的命令;`{ run({ command, cwd, signal }) }` 接管执行(在容器里跑、走远程主机),返回 `{ exitCode, output }`。输出以 `user_bash` 类型的自定义消息并入历史,不开轮 | 当没说话 |
 | `session_before_compact` | 压缩之前,`{ reason: 'manual' \| 'auto' \| 'in-turn', messages }` | `{ cancel: true }` 跳过这次 | 视同不取消 |
 | `session_compact` | 压缩完成,`{ reason, removedMessages, summaryChars }` | 无 | 只上报 |
-| `model_select` / `thinking_level_select` | 模型 / 思考档位切换 | 无 | 只上报 |
+| `model_select` / `thinking_level_select` | 模型 / 思考档位切换:`{ provider, model, previousProvider, previousModel, source: 'set' }` / `{ level, previousLevel }` | 无 | 只上报 |
 | `turn_start` | 一轮开始,`{ userText }` | 无 | 只上报 |
 | `turn_end` | 一轮完全收尾(历史已落盘),`{ outcome, usage, error }` | 无;在这里 `followUp` 排下一轮 | 只上报 |
 | `agent_end` | 一次 run 的整个链条结束,`{ aborted, followUpsDropped }` | 无 | 只上报 |
 | `agent_settled` | `agent_end` 之后确认空闲(没有扩展在 `agent_end` 里又开了链条) | 无 | 只上报 |
 | `after_provider_response` | provider 应答之后(AI SDK 中间件),`{ type, params, response }` | 无 | 只上报 |
-| `session_before_switch` / `session_before_fork` | 即将 `/resume` / `/fork`(含扩展的 `switchSession` / `fork`),`{ id }` / 无 | `{ cancel: true }` 取消,调用方收到错误 | 视同不取消 |
+| `session_before_switch` / `session_before_fork` | 即将 `/new` 或 `/resume` / `/fork`(含扩展的 `newSession` / `switchSession` / `fork`):`{ reason: 'new' \| 'resume', id?, targetSessionFile? }`(resume 时 id 已解析好前缀)/ 无 | `{ cancel: true }` 取消:命令路径提示失败,扩展的 ctx 路径拿到 `{ cancelled: true }` | 视同不取消 |
 | `session_switch` / `session_fork` | 已切到 / 已分叉出新会话(`session_start` 之后),`{ id }` 是新会话 id | 无 | 只上报 |
-| `resources_discover` | 启动时(扩展装完之后)收集资源目录 | `{ skillPaths, promptPaths, themePaths }`,相对工作区根:技能目录、提示词模板目录(每个 `*.md` 一条 `/name`)、主题目录(`<name>.json`) | 跳过 |
+| `resources_discover` | 收集资源目录,`{ cwd, reason: 'startup' \| 'reload' }`:启动时问全部扩展,每次 `/reload` 之后再问一遍全部,结果整体替换上一次的(被删掉的扩展贡献的目录随之撤掉) | `{ skillPaths, promptPaths, themePaths }`,相对工作区根:技能目录、提示词模板目录(每个 `*.md` 一条 `/name`)、主题目录(`<name>.json`) | 跳过 |
+
+字段名以 Pi 的为准。这里早先的几个同义叫法——`callId`(即 `toolCallId`)、工具执行钩子里的 `input` / `output` / `chunk`(即 `args` / `result` / `partialResult`)、`before_agent_start` 的 `userText`(即 `prompt`)——**已弃用**:迁移期内仍然填着值、类型上带 `@deprecated` 删除线,之后的版本会删掉。`tool_call` / `tool_result` 的 `input` 与 `tool_result` 的 `output` 不在此列:前者 Pi 自己就这么叫,后者是工具的原始结构化返回,Pi 没有对应。
 
 `tool_call` 失败即否决是刻意的:没有权限系统之后它是拦截扩展唯一的卡口,一个抛错的处理器若被当成放行,等于扩展一有 bug 工具就全部裸跑。所有钩子失败都变成时间线上的一条提示,绝不冒泡进 agent 循环。
 
 ## ctx:处理器的第二个参数
 
-钩子与命令处理器都收 `ctx`(`api.ctx` 也是它),与 Pi 的 `ctx` 同形:`cwd`、`hasUI`、`mode`(`'tui' | 'print'`)、`isIdle()`、`abort()`、`signal`(正在流的这一轮的 AbortSignal,没有流在跑时 `undefined`——两轮之间也是)、`hasPendingMessages()`、`shutdown()`(优雅退出:中断当前轮,TUI 走与双 ctrl+c 同一条退出路径,`-p` 下由 CLI 正常收尾、还没开跑的那一轮不再开)、`getSystemPrompt()`(核心组装的原文;`before_agent_start` 的改写只在开流那一刻存在)、`getContextUsage()`、`compact({ customInstructions?, onComplete?, onError? })`(指令拼在缺省摘要指令之后;给了 `onError` 就不再 reject)、`waitForIdle()`、`newSession(options?)`、`fork(options?)`、`switchSession(id, options?)`、`reload()`(与 `/reload` 同一条路;在自己的处理器里调它会把自己卸掉,处理器余下的代码跑在旧闭包里)、`model(id?)`、`config`、`sessionManager`、`modelRegistry`,以及与界面打交道的 `ui`。三个会话操作返回 `{ cancelled }`(`fork` 成功时另带 `id`):`session_before_switch` / `session_before_fork` 的否决是回执不是异常,会话不存在之类的真错误照常抛;`options.withSession(ctx)` 在新会话就位后被调,收到的仍是这个 `ctx`——它按引用读当前会话,切完就指向新的那一段。`sessionManager` 是当前会话的**只读**视图(`getSessionId` / `getSessionName` / `getEntries(type?)` / `getHistory` / `getDisplayHistory` / `listSessions`),写入走 API 上的同名成员;`modelRegistry` 是模型表(`getCurrent` / `getProviders` / `getModels(providerId?)` / `find` 同步读配置与预设里已知的模型,`capabilities(provider, model)` 查 models.dev 目录,`probe()` 在线探测,与 `/models` 同一条路)。`isIdle()` 与 `waitForIdle()` 是同一个判据:链条与压缩都不在跑才算空闲——压缩期间往历史里塞消息会被整体替换的历史吞掉。**`ctx` 是每个扩展自己的一份**,`ctx.ui.setWidget` 之类记在这个扩展名下,`/reload` 才撤得干净:
+钩子与命令处理器都收 `ctx`(`api.ctx` 也是它),与 Pi 的 `ctx` 同形:`cwd`、`hasUI`、`mode`(`'tui' | 'print'`)、`isIdle()`、`abort()`、`signal`(正在流的这一轮的 AbortSignal,没有流在跑时 `undefined`——两轮之间也是)、`hasPendingMessages()`、`shutdown()`(优雅退出:中断当前轮,TUI 走与双 ctrl+c 同一条退出路径,`-p` 下由 CLI 正常收尾、还没开跑的那一轮不再开)、`getSystemPrompt()`(核心组装的原文;`before_agent_start` 的改写只在开流那一刻存在)、`getContextUsage()`、`compact({ customInstructions?, onComplete?, onError? })`(指令拼在缺省摘要指令之后;给了 `onError` 就不再 reject)、`waitForIdle()`、`newSession(options?)`、`fork(options?)`、`switchSession(id, options?)`、`reload()`(与 `/reload` 同一条路;在自己的处理器里调它会把自己卸掉,处理器余下的代码跑在旧闭包里。扩展装载与重载进行期间调用直接报错——那时调它等于等一个正在等自己的重载)、`model(id?)`、`config`、`sessionManager`、`modelRegistry`,以及与界面打交道的 `ui`。三个会话操作返回 `{ cancelled }`(`fork` 成功时另带 `id`):`session_before_switch` / `session_before_fork` 的否决是回执不是异常,会话不存在之类的真错误照常抛;`options.withSession(ctx)` 在新会话就位后被调,收到的仍是这个 `ctx`——它按引用读当前会话,切完就指向新的那一段。`sessionManager` 是当前会话的**只读**视图(`getSessionId` / `getSessionName` / `getEntries(type?)` / `getHistory` / `getDisplayHistory` / `listSessions`),写入走 API 上的同名成员;`modelRegistry` 是模型表(`getCurrent` / `getProviders` / `getModels(providerId?)` / `find` 同步读配置与预设里已知的模型,`capabilities(provider, model)` 查 models.dev 目录,`probe()` 在线探测,与 `/models` 同一条路)。`isIdle()` 与 `waitForIdle()` 是同一个判据:链条与压缩都不在跑才算空闲——压缩期间往历史里塞消息会被整体替换的历史吞掉。**`ctx` 是每个扩展自己的一份**,`ctx.ui.setWidget` 之类记在这个扩展名下,`/reload` 才撤得干净:
 
 | 成员 | 说明 |
 |---|---|
@@ -128,7 +130,8 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `ctx` / `ui` / `hasUI` | 处理器收到的那个 ctx(见上节);`ui` 与 `hasUI` 是它的两个成员 |
 | `registerCommand(name, { description, argumentHint?, selectorTitle?, options?, handler })` / `getCommands()` | 斜杠命令。`options(path)` 给了就先进选择器,支持多级(`expands`)与预填(`prefill`);`handler(args, ctx)` **不要在里面 await 一整轮** |
 | `registerShortcut(key, { description, handler })` | 全局快捷键,`key` 形如 `ctrl+g` / `meta+shift+k`,必须带 ctrl 或 meta;TUI 自己占着的 ctrl+c / ctrl+t / ctrl+o / ctrl+r **注册即报错**;覆盖层打开时不派发。返回注销函数 |
-| `sendMessage({ customType, content, display? }, { triggerTurn? })` | 放一条带类型的消息进对话(Pi 的 sendMessage):`triggerTurn` 作为新一轮开跑;否则运行中注入为引导、空闲时并入历史不开轮。历史里是 `[extension message: <type>]` 信封,回放认得 |
+| `sendMessage({ customType, content, display?, details? }, { triggerTurn?, deliverAs? })` | 放一条带类型的消息进对话(Pi 的 sendMessage)。`deliverAs`:`steer` 运行中作为轮内引导,`followUp` 等当前链条收尾后作为新的一轮,`nextTurn` 不打断也不开轮、等下一次**用户**提问(含斜杠技能)时紧跟在那条消息之后进历史;`triggerTurn` 管空闲时开不开轮。不给 `deliverAs` 保持原有语义(运行中 `triggerTurn` 排在链条之后,否则作为引导)。`content` 可以是 Pi 的部件数组(只取文字);`display: false` 进对话但不上时间线(标记写在历史的信封里,`/resume` 回放同样不画),字符串是替代文本;`details` 交给 `registerMessageRenderer`。替代文本与 `details` 都只在本次会话的时间线里,不进持久历史(`/resume` 回放拿不到)。运行中的 `steer` 若恰好碰上这一轮收尾,按空闲处理(`triggerTurn` 就开轮,否则并入历史),不会丢。历史里是 `[extension message: <type>]` 信封,回放认得 |
+| `sendUserMessage(content, { deliverAs? })` | 以用户身份发一条消息(Pi 的 sendUserMessage):空闲时开新的一轮(不等它跑完);运行中必须给 `deliverAs: 'steer' \| 'followUp'`,否则抛错。`content` 的图片部件作为图片附件。不经 `input` 钩子。`ctx` 上也有这两个成员(Pi 的 `withSession` 回调里用的就是它们) |
 | `registerMessageRenderer(customType, (message, theme) => lines)` | 自定义消息在时间线里的画法;没注册就画 `[type]` 标签加正文 |
 | `mode` / `waitForIdle()` / `newSession(options?)` / `fork(options?)` / `switchSession(id, options?)` | 同 ctx 的同名成员;其余控制面(`signal` / `shutdown` / `reload` / `getSystemPrompt` / `hasPendingMessages`)只在 `ctx` 上,与 Pi 一致 |
 | `registerTool(name, (scope) => Tool \| undefined, { promptSnippet?, promptGuidelines?, renderCall?, renderResult? }?)` / `unregisterTool(name)` | 模型可调用的工具。传工厂而不是工具本身,按 `scope.subagent` / `scope.mode`(`general` / `explore`)自己决定给不给。内置工具名不可覆盖。带自述的工具由宿主汇成系统提示词的「Extension tools」一节,与实际注册的工具永远一致 |
@@ -150,7 +153,7 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `model(modelId?)` | 当前服务商的模型;传 id 换同一服务商的另一个模型(评估器、便宜模型) |
 | `getModel()` / `setModel({ provider?, model? })` | 当前 provider 与模型 id;切换(与 `/models` 同一条路,触发 `model_select`) |
 | `getThinkingLevel()` / `setThinkingLevel(level)` | 思考档位(与 `/think` 同一条路,触发 `thinking_level_select`) |
-| `exec(command, args, { cwd?, timeoutMs?, signal?, env? })` | 跑一个外部命令,不经 shell,非零退出码不抛(看 `exitCode`) |
+| `exec(command, args, { cwd?, timeoutMs?, timeout?, signal?, env? })` | 跑一个外部命令,不经 shell,非零退出码不抛(看 `exitCode`)。`timeout` 是 Pi 的叫法,同 `timeoutMs` |
 
 三个「对外说话」的成员分工别混:`setStatus` 是一行给人看的文字,`setState` 是数据,`publishRuntime` 只给 `/doctor`。
 
@@ -178,5 +181,27 @@ TypeScript 直接放就行:单二进制(Bun)原生认 `.ts`,npm 安装的 Node �
 | `ctx.sessionManager` 的写口、`newSession({ setup(sessionManager) })` 里的可写 `SessionManager` | 只读视图;写入走 `appendEntry` / `setSessionName`,新会话就位后的初始化放进 `withSession(ctx)` |
 
 Pi 0.73 自己已经删掉的 `registerEntryRenderer` / `registerMarkdownTransformer` / `project_trust` 不在此列——两边都没有。
+
+### 钩子载荷与 API 形状对照
+
+名字对上之后,还有一批**同名但字段或语义不同**的地方。照 Pi 写的扩展碰到它们时读到的是 `undefined` 而不是报错,移植时逐条看一眼:
+
+| 位置 | Pi | 这里 |
+|---|---|---|
+| 「轮」的粒度:`turn_start` / `turn_end` / `agent_start` / `agent_end` | turn 是**一次模型调用 + 它的工具调用**(`turnIndex`、`timestamp`、`message`、`toolResults`);agent 是一次提问 | turn 是**一次用户提问的整轮**(可含多步),载荷是 `userText` / `outcome` / `usage` / `aborted` / `followUpsDropped`;多步之间的单次调用没有对应的钩子 |
+| `input` | `source: 'interactive' \| 'rpc' \| 'extension'`,`sendUserMessage` 也经过它 | `source: 'turn' \| 'guidance'`;扩展发起的消息不经过它 |
+| `context` / `message_start` / `message_update` / `message_end` | Pi 自己的 `AgentMessage`;`message_update` 带 `assistantMessageEvent` | AI SDK 的 `ModelMessage`;`message_update` 带 `delta: { type, id, text }` |
+| `session_before_compact` / `session_compact` | 带 `preparation` / `branchEntries` / `signal`,可以返回自己算好的 `compaction`;`compactionEntry` | 只有 `reason` / `messages`,只能 `{ cancel }`;`{ reason, removedMessages, summaryChars }` |
+| `before_provider_request` / `after_provider_response` | `{ payload }` 返回新的 payload;`{ status, headers }` | `{ params, type }` 返回 `{ params }`(AI SDK 中间件的参数);`{ type, params, response }` |
+| `model_select` | `model` / `previousModel` 是模型对象 | 是 id 字符串(另有 `provider` / `previousProvider`) |
+| `user_bash` | 返回 `{ operations }` / `{ result }`;`!!` 的 `excludeFromContext` | 返回 `{ command }` 改写或 `{ run }` 接管;没有 `!!` |
+| `session_shutdown` | 每次换会话都发(Pi 重建整个运行时) | 只在退出与 `/reload` 时发 |
+| `ctx.model` | 属性,`Model \| undefined` | 方法 `model(id?)`,返回 AI SDK 的模型 |
+| `getContextUsage()` | `{ tokens, contextWindow, percent }`(可为 null) | `{ used, window, percent }` |
+| `getAllTools()` / `getCommands()` | 对象数组 | 名字数组 |
+| `setModel` | 收模型对象,返回 `Promise<boolean>` | 收 `{ provider?, model? }` |
+| 工具的 `renderCall` / `renderResult` | 返回组件,带渲染上下文(`isPartial`、`expanded`、`state`、`invalidate()`) | 返回字符串行,只收 `theme`(`renderResult` 另收 `{ isError, expanded, input }`) |
+| 工具定义 | `prepareArguments`、`executionMode`、`renderShell` | 没有 |
+| 命令的补全 | `getArgumentCompletions(prefix)` | `options(path)` 多级选择器 |
 
 Pi 生态的扩展**不能**原样拿来跑:它们从 `@mariozechner/pi-coding-agent` 导入类型、用 pi-tui 的类拼界面。形状一致,改 import、把 pi-tui 的组件换成自己拼行即可。

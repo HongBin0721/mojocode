@@ -147,7 +147,7 @@ describe('MCP 扩展', () => {
 
     // 断言的是**子进程被关掉**。工具表不必注销:dispose 只在进程收尾时跑,
     // 那张表马上就跟着进程一起没了。
-    await host.hooks.notify('session_shutdown', undefined);
+    await host.hooks.notify('session_shutdown', { reason: 'quit' });
     expect(a.close).toHaveBeenCalledTimes(1);
   });
 
@@ -159,7 +159,7 @@ describe('MCP 扩展', () => {
     const host = makeHost();
     const late = fakeConnection('late');
 
-    const shutdown = host.hooks.notify('session_shutdown', undefined);
+    const shutdown = host.hooks.notify('session_shutdown', { reason: 'quit' });
     settle({ connections: [late.connection] });
     await shutdown;
 

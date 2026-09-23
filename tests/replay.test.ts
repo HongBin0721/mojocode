@@ -32,6 +32,15 @@ describe('replayTimeline', () => {
     ]);
   });
 
+  it('扩展藏起来的自定义消息(Pi 的 display: false)回放同样不画', () => {
+    const items = replayTimeline([
+      { role: 'user', content: wrapCustomMessage('ctx', 'big injected context', true) },
+      { role: 'user', content: wrapGuidance(wrapCustomMessage('quiet', 'mid', true)) },
+      { role: 'user', content: wrapCustomMessage('note', 'shown') },
+    ] as ModelMessage[]);
+    expect(items).toEqual([{ kind: 'custom', customType: 'note', content: 'shown' }]);
+  });
+
   it('assistant 的 text/reasoning/tool-call 按序展开,tool-result 关联回调用', () => {
     const items = replayTimeline([
       { role: 'user', content: '读个文件' },

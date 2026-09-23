@@ -38,6 +38,7 @@ import type {
   ComponentFactory,
   ComponentHost,
   CustomMessageInfo,
+  DeliverAs,
   EditorComponentFactory,
   ExtensionCommandInfo,
   ExtensionCommandOption,
@@ -52,7 +53,9 @@ import type {
   MessageRenderer,
   OverlayHandle,
   OverlayOptions,
+  PiContentPart,
   PiToolResult,
+  SendMessageInput,
   TerminalInputHandler,
   ToolRenderers,
   ToolScope,
@@ -70,6 +73,7 @@ export type {
   ComponentFactory,
   ComponentHost,
   CustomMessageInfo,
+  DeliverAs,
   EditorComponentFactory,
   ExtensionCommandInfo,
   ExtensionCommandOption,
@@ -84,7 +88,9 @@ export type {
   MessageRenderer,
   OverlayHandle,
   OverlayOptions,
+  PiContentPart,
   PiToolResult,
+  SendMessageInput,
   TerminalInputHandler,
   ToolRenderers,
   ToolScope,
@@ -114,6 +120,21 @@ export interface ExtensionRunOptions {
  * 跟着有,而三处手写的结构字面量不会有任何类型错误提醒作者。
  */
 export type ExtensionContextUsage = ContextUsage & { percent: number };
+
+export interface SendMessageOptions {
+  /** 空闲时作为新的一轮开跑;不给就只并入历史。 */
+  triggerTurn?: boolean;
+  /**
+   * 投递方式(Pi 同名)。不给时保持这里原有的语义:运行中 `triggerTurn` 排在
+   * 链条之后开新一轮,否则作为轮内引导。
+   */
+  deliverAs?: DeliverAs;
+}
+
+/** `sendUserMessage` 的选项:运行中**必须**说清投递方式,否则抛错(与 Pi 同)。 */
+export interface SendUserMessageOptions {
+  deliverAs?: Exclude<DeliverAs, 'nextTurn'>;
+}
 
 /** `ctx.compact` / `api.compact` 的选项(Pi 的 CompactOptions)。 */
 export interface CompactOptions {
@@ -315,8 +336,8 @@ export interface ExtensionContext {
   /**
    * 丢弃当前对话,开一个全新会话(与 `/new` 同一条路)。`withSession` 在新
    * 会话就位后被调,收到的仍是这个 ctx——它按引用读当前会话,切完就指向
-   * 新的那一段。开新会话没有可取消的钩子,`cancelled` 恒为 false,形状与另
-   * 两个会话操作保持一致。
+   * 新的那一段。`session_before_switch`(reason: new)否决时返回
+   * `{ cancelled: true }` 而不抛。
    */
   newSession(options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
   /**
@@ -332,6 +353,10 @@ export interface ExtensionContext {
   switchSession(idOrPrefix: string, options?: SessionSwitchOptions): Promise<{ cancelled: boolean }>;
   /** 重载磁盘扩展(与 `/reload` 同一条路)。在自己的处理器里调它会把自己卸掉,处理器余下的代码跑在旧闭包里。 */
   reload(): Promise<void>;
+  /** 同 api.sendMessage(Pi 的 withSession 回调拿到的 ctx 上就有它)。 */
+  sendMessage(message: SendMessageInput, options?: SendMessageOptions): Promise<void>;
+  /** 同 api.sendUserMessage。 */
+  sendUserMessage(content: string | PiContentPart[], options?: SendUserMessageOptions): Promise<void>;
   model(modelId?: string): LanguageModel;
   readonly config: Config;
   /** 当前会话的只读视图(Pi 的 ctx.sessionManager,收窄到读口)。 */
@@ -552,7 +577,14 @@ export interface ExtensionAPI {
    * 一轮开跑;否则运行中注入为引导、空闲时直接并入历史不开轮。时间线按
    * `registerMessageRenderer(customType)` 的画法画,没注册就画 display / content。
    */
-  sendMessage(message: CustomMessageInfo, options?: { triggerTurn?: boolean }): Promise<void>;
+  sendMessage(message: SendMessageInput, options?: SendMessageOptions): Promise<void>;
+  /**
+   * 以用户的身份发一条消息(Pi 的 sendUserMessage):空闲时开新的一轮;运行中
+   * 按 `deliverAs` 作为轮内引导(steer)或链条之后的新一轮(followUp),不给就
+   * 抛错。`content` 的图片部件作为图片附件发出。与用户在输入框里打的不同,
+   * 它**不经** `input` 钩子(扩展发起的消息不给别的扩展改写)。
+   */
+  sendUserMessage(content: string | PiContentPart[], options?: SendUserMessageOptions): Promise<void>;
   /** 自定义消息的画法(Pi 的 registerMessageRenderer);返回 undefined 用缺省。 */
   registerMessageRenderer(customType: string, renderer: MessageRenderer): void;
   /** 发起一整轮(链条),与 Agent.run 同语义:运行中退化为轮内引导。 */
@@ -593,7 +625,14 @@ export interface ExtensionAPI {
   exec(
     command: string,
     args: readonly string[],
-    options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal; env?: Record<string, string> },
+    options?: {
+      cwd?: string;
+      timeoutMs?: number;
+      /** 同 timeoutMs(Pi 的 ExecOptions 叫 timeout);两个都给以 timeoutMs 为准。 */
+      timeout?: number;
+      signal?: AbortSignal;
+      env?: Record<string, string>;
+    },
   ): Promise<ExecResult>;
 }
 

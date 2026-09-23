@@ -21,6 +21,7 @@
 import type { ToolSet } from 'ai';
 import { errorMessage } from '../core/errors.js';
 import type { HookAgentInfo, HookRegistry } from '../core/hooks.js';
+import { piContentText, toPiContent } from '../core/extension-types.js';
 
 type AnyTool = ToolSet[string];
 type Execute = NonNullable<AnyTool['execute']>;
@@ -38,13 +39,16 @@ function hookTool(name: string, tool: AnyTool, hooks: HookRegistry, info: HookAg
   if (!original) return tool;
 
   const execute: Execute = async (input, options) => {
-    const callId = options.toolCallId;
+    const toolCallId = options.toolCallId;
+    // 字段名照 Pi:tool_call / tool_result 叫 input,工具执行的三个钩子叫 args。
+    const call = { toolCallId, toolName: name, input, ...info };
+    const execution = { toolCallId, toolName: name, args: input, ...info };
     if (hooks.has('tool_call')) {
-      const veto = await hooks.toolCall({ callId, toolName: name, input, ...info });
+      const veto = await hooks.toolCall(call);
       if (veto) throw new Error(veto.reason);
     }
     if (hooks.has('tool_execution_start')) {
-      await hooks.notify('tool_execution_start', { callId, toolName: name, input, ...info });
+      await hooks.notify('tool_execution_start', execution);
     }
 
     const startedAt = Date.now();
@@ -59,13 +63,10 @@ function hookTool(name: string, tool: AnyTool, hooks: HookRegistry, info: HookAg
     // 原始结果(tool_result 改写之前)的通知;错误给消息文本,与 tool_result 同款。
     if (hooks.has('tool_execution_end')) {
       await hooks.notify('tool_execution_end', {
-        callId,
-        toolName: name,
-        input,
-        output: isError ? errorMessage(output) : output,
+        ...execution,
+        result: isError ? errorMessage(output) : output,
         isError,
         durationMs: Date.now() - startedAt,
-        ...info,
       });
     }
 
@@ -75,21 +76,18 @@ function hookTool(name: string, tool: AnyTool, hooks: HookRegistry, info: HookAg
     }
 
     const originalText = isError ? errorMessage(output) : undefined;
-    const rewritten = await hooks.toolResult({
-      callId,
-      toolName: name,
-      input,
-      output: isError ? originalText : output,
-      isError,
-      ...info,
-    });
-    if (isError) {
-      // 改写了错误消息才换一个 Error;没改就原样抛,保住工具自己的 Error
-      // 子类型(调用方可能 instanceof 它)。
-      if (rewritten !== originalText) throw new Error(String(rewritten));
-      throw output;
+    const initial = isError ? originalText : output;
+    const final = await hooks.toolResult({ ...call, output: initial, isError });
+    if (final.isError) {
+      // 原本就是错误、错误消息也没改:原样抛,保住工具自己的 Error 子类型
+      // (调用方可能 instanceof 它)。其余情形——改了消息,或成功被改判成
+      // 错误(Pi 的 isError: true)——换一个 Error。
+      if (isError && final.output === originalText) throw output;
+      // 错误消息取模型该看到的那段文字:Pi 形状的结果只取 content 的文字,
+      // 整个对象 JSON 化会把只给画法的 details 也塞给模型。
+      throw new Error(typeof final.output === 'string' ? final.output : piContentText(toPiContent(final.output)));
     }
-    return rewritten;
+    return final.output;
   };
 
   return { ...tool, execute } as AnyTool;

@@ -72,7 +72,8 @@ export function replayTimeline(
       // 扩展的自定义消息(可能套在引导信封里):按 customType 还原成 custom 条目。
       const custom = unwrapCustomMessage(unwrapGuidance(text) ?? text);
       if (custom) {
-        items.push({ kind: 'custom', ...custom });
+        // 扩展藏起来的(Pi 的 display: false):回放同样不画。
+        if (!custom.hidden) items.push({ kind: 'custom', customType: custom.customType, content: custom.content });
         continue;
       }
       // 运行中插入的引导消息持久化的是包装后的版本;@ 引用展开的消息同理。

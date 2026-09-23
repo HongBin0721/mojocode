@@ -38,7 +38,14 @@ import { toError } from './errors.js';
 import type { UsageSnapshot } from './events.js';
 import type { ImageAttachment } from '../app/attachments.js';
 import type { ExtensionContext } from './extension.js';
-import { extensionTheme } from './extension-types.js';
+import {
+  extensionTheme,
+  isPiToolResult,
+  piContentText,
+  toPiContent,
+  type PiContentPart,
+  type SendMessageInput,
+} from './extension-types.js';
 
 /** 每个钩子输入都带的调用方信息。 */
 export interface HookAgentInfo {
@@ -49,7 +56,22 @@ export interface HookAgentInfo {
   subagent: boolean;
 }
 
+/**
+ * 字段名以 **Pi 的为准**:`toolCallId` / `args` / `result` / `partialResult` /
+ * `prompt`。这里原有的同义字段(`callId`、工具执行钩子里的 `input` / `output`、
+ * `chunk`、before_agent_start 的 `userText`)只是改了名的旧叫法,标了
+ * `@deprecated`、仍然填着值,给已有的扩展一段迁移期,之后删掉——同一个值
+ * 长期挂两个名字,作者只会困惑该用哪个。旧叫法**只由注册表在派发时补**
+ * (`DEPRECATED_ALIASES`),生产方只填 Pi 的名字;移除时删那张表与这些字段。
+ *
+ * **不是同义词的不在此列**:`tool_call` / `tool_result` 的 `input` 与 Pi 同名
+ * (Pi 自己在这两个钩子里就叫 `input`,到 tool_execution_* 才叫 `args`);
+ * `tool_result` 的 `output` 是工具的原始结构化返回,Pi 没有对应(它只有
+ * `content` / `details`),LSP 扩展正是读它。
+ */
 export interface ToolCallHookInput extends HookAgentInfo {
+  toolCallId: string;
+  /** @deprecated 用 `toolCallId`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   callId: string;
   toolName: string;
   input: unknown;
@@ -59,46 +81,88 @@ export interface ToolCallHookInput extends HookAgentInfo {
 export type ToolCallHookResult = { block: true; reason: string } | undefined | void;
 
 export interface ToolResultHookInput extends HookAgentInfo {
+  toolCallId: string;
+  /** @deprecated 用 `toolCallId`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   callId: string;
   toolName: string;
   input: unknown;
   /** 工具的返回值;isError 时是错误消息字符串。多个处理器串行时看到的是前一个改写后的值。 */
   output: unknown;
+  /** 同一个结果的 Pi 视图:模型看到的内容部件(非 Pi 形状的输出转成一段文本)。 */
+  content: PiContentPart[];
+  /** Pi 形状工具结果的 `details`(只给画法);其余工具为 undefined。 */
+  details: unknown;
   isError: boolean;
 }
 
-/** 返回 output 即改写(isError 时改写的是错误消息)。 */
-export type ToolResultHookResult = { output: unknown } | undefined | void;
+/**
+ * 两种改写写法,任选其一:
+ * - `{ output }`:整个换掉工具的返回值(isError 时换的是错误消息);
+ * - Pi 的 `{ content, details, isError }`:`content` 换掉模型看到的内容,
+ *   `details` 换掉给画法的数据(只对 Pi 形状的工具有意义),`isError` 把成功
+ *   改判成错误或反过来。
+ * 同时给了 `output` 就以它为准。
+ */
+export type ToolResultHookResult =
+  | { output?: unknown; content?: PiContentPart[]; details?: unknown; isError?: boolean }
+  | undefined
+  | void;
 
 /** 工具真正开始执行(tool_call 没否决之后)。 */
 export interface ToolExecutionStartHookInput extends HookAgentInfo {
-  callId: string;
+  toolCallId: string;
   toolName: string;
+  args: unknown;
+  /** @deprecated 用 `toolCallId`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
+  callId: string;
+  /** @deprecated 用 `args`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   input: unknown;
 }
 
 /** 工具执行中的增量输出(目前只有 bash 发;子 agent 的不经主总线,收不到)。 */
 export interface ToolExecutionUpdateHookInput extends HookAgentInfo {
+  toolCallId: string;
+  toolName: string;
+  args: unknown;
+  partialResult: string;
+  /** @deprecated 用 `toolCallId`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   callId: string;
+  /** @deprecated 用 `partialResult`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   chunk: string;
 }
 
 /** 工具执行完毕(tool_result 改写**之前**的原始结果)。 */
 export interface ToolExecutionEndHookInput extends HookAgentInfo {
-  callId: string;
+  toolCallId: string;
   toolName: string;
-  input: unknown;
-  output: unknown;
+  args: unknown;
+  /** 原始结果(tool_result 改写之前);错误时是错误消息。 */
+  result: unknown;
   isError: boolean;
   durationMs: number;
+  /** @deprecated 用 `toolCallId`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
+  callId: string;
+  /** @deprecated 用 `args`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
+  input: unknown;
+  /** @deprecated 用 `result`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
+  output: unknown;
 }
 
 export interface BeforeAgentStartHookInput extends HookAgentInfo {
   /** 核心组装好的系统提示词;多个处理器串行,各自看到前一个的产物。 */
   systemPrompt: string;
   /** 本轮的用户文本(引导续跑的流没有,为 undefined)。 */
+  prompt?: string;
+  /** @deprecated 用 `prompt`(Pi 的字段名)。0.x 期间还带着,将在后续版本移除。 */
   userText?: string;
 }
+
+/**
+ * before_agent_start 注入的一条消息:纯文本,或 Pi 的自定义消息形状(以
+ * `customType` 的信封进历史,时间线按 registerMessageRenderer 画;`display:
+ * false` 不上时间线)。
+ */
+export type BeforeAgentStartMessage = string | SendMessageInput;
 
 /**
  * `systemPrompt` 改写发出去的系统提示词;`message` 以一条 user 消息进入本轮
@@ -106,7 +170,7 @@ export interface BeforeAgentStartHookInput extends HookAgentInfo {
  * 不重复注入),它会进持久历史。
  */
 export type BeforeAgentStartHookResult =
-  | { systemPrompt?: string; message?: string }
+  | { systemPrompt?: string; message?: BeforeAgentStartMessage }
   | undefined
   | void;
 
@@ -233,11 +297,17 @@ export interface SessionCompactHookInput extends HookAgentInfo {
 export interface ModelSelectHookInput {
   provider: string;
   model: string;
+  /** 切换前的 provider 与模型 id(Pi 的 `previousModel`;这里是 id 字符串,不是模型对象)。 */
+  previousProvider: string;
+  previousModel: string;
+  /** 与 Pi 同名;这里的模型切换都是显式设置,恒为 `set`(恢复会话不换模型)。 */
+  source: 'set';
 }
 
 /** 思考档位变了(`/think`、扩展的 setThinkingLevel)。 */
 export interface ThinkingLevelSelectHookInput {
   level: string;
+  previousLevel: string;
 }
 
 export interface TurnStartHookInput extends HookAgentInfo {
@@ -267,10 +337,16 @@ export interface AgentEndHookInput extends HookAgentInfo {
   followUpsDropped: number;
 }
 
-/** 即将切到另一个会话(`/resume`、扩展的 switchSession)。 */
+/**
+ * 即将换会话(Pi 的 `session_before_switch`):`new` 是 `/new` 与扩展的
+ * newSession,`resume` 是 `/resume` 与扩展的 switchSession。
+ */
 export interface SessionBeforeSwitchHookInput {
-  /** 目标会话 id(或前缀)。 */
-  id: string;
+  reason: 'new' | 'resume';
+  /** 目标会话 id(resume 时,已解析过前缀);new 时没有。 */
+  id?: string;
+  /** 目标会话文件的绝对路径(Pi 的字段名);new 时没有。 */
+  targetSessionFile?: string;
 }
 
 /** 返回 cancel 即取消切换 / 分叉(调用方收到一个错误)。 */
@@ -299,7 +375,14 @@ export interface SessionForkHookInput {
 /**
  * 扩展贡献资源目录(Pi 的 resources_discover):技能目录、提示词模板目录
  * (`*.md`,每个文件一条 `/name` 命令)、主题目录(`*.json`)。相对工作区根。
+ * 启动时问一遍全部扩展,每次 `/reload` 之后再问一遍全部(`reason: 'reload'`,
+ * 结果整体替换上一次的)——它是纯查询,没被重载的扩展再答一次无害。
  */
+export interface ResourcesDiscoverHookInput {
+  cwd: string;
+  reason: 'startup' | 'reload';
+}
+
 export type ResourcesDiscoverHookResult =
   | { skillPaths?: string[]; promptPaths?: string[]; themePaths?: string[] }
   | undefined
@@ -307,13 +390,27 @@ export type ResourcesDiscoverHookResult =
 
 /**
  * 会话就位的原因。扩展在这里从会话记录恢复自己的状态(`entries(type)` 读的
- * 已经是新会话的记录):startup 是进程启动(含 `-c`/`-r` 恢复),其余三个
- * 是 TUI 内的 `/new`、`/resume`、`/fork`。
+ * 已经是新会话的记录):startup 是进程启动(含 `-c`/`-r` 恢复),`new` /
+ * `resume` / `fork` 是 TUI 内的 `/new`、`/resume`、`/fork`,`reload` 只发给
+ * `/reload` 重新装上的扩展——它们没赶上启动那一次,不在这里补一次就恢复不了
+ * 自己的状态。
  */
-export type SessionStartReason = 'startup' | 'new' | 'resume' | 'fork';
+export type SessionStartReason = 'startup' | 'new' | 'resume' | 'fork' | 'reload';
 
 export interface SessionStartHookInput {
   reason: SessionStartReason;
+  /** 换会话之前那个会话文件的绝对路径(Pi 的字段名);startup / reload 没有。 */
+  previousSessionFile?: string;
+}
+
+/**
+ * 会话关闭(Pi 的 `session_shutdown`)。这里只有两种:`quit` 是进程退出,
+ * `reload` 是 `/reload` 卸载这个扩展。换会话(`/new`、`/resume`、`/fork`)
+ * **不**发——扩展的运行时跨会话活着(MCP 连接、LSP 进程不随会话重建),
+ * 与 Pi 每换一次会话重建整个运行时不同。
+ */
+export interface SessionShutdownHookInput {
+  reason: 'quit' | 'reload';
 }
 
 /** 处理器统一的形状:输入 + 上下文。 */
@@ -322,8 +419,8 @@ type Hook<I, R = void> = (input: I, ctx: ExtensionContext) => R | Promise<R>;
 export interface HookMap {
   /** 会话就位(启动、/new、/resume、/fork 之后,历史与状态已换好)。 */
   session_start: Hook<SessionStartHookInput>;
-  /** 会话关闭(dispose)。 */
-  session_shutdown: Hook<undefined>;
+  /** 会话关闭(进程退出,或 /reload 卸载这个扩展)。 */
+  session_shutdown: Hook<SessionShutdownHookInput>;
   /** 用户输入进入对话之前:改写或吞掉。 */
   input: Hook<InputHookInput, InputHookResult>;
   /** 一次 run() 的链条开始。 */
@@ -383,7 +480,7 @@ export interface HookMap {
   /** 已分叉出新会话(`session_start` reason=fork 之后)。 */
   session_fork: Hook<SessionForkHookInput>;
   /** 启动时收集扩展贡献的资源目录(技能)。 */
-  resources_discover: Hook<undefined, ResourcesDiscoverHookResult>;
+  resources_discover: Hook<ResourcesDiscoverHookInput, ResourcesDiscoverHookResult>;
 }
 
 export type HookName = keyof HookMap;
@@ -394,6 +491,33 @@ export interface HookFailure {
 }
 
 type Handler<K extends HookName> = HookMap[K];
+
+/**
+ * 迁移期的旧叫法 → Pi 的字段名(见 ToolCallHookInput 上方的说明)。注册表在
+ * 派发时照这张表补上旧字段,生产方与类型检查都只认 Pi 的名字。
+ */
+const DEPRECATED_ALIASES = {
+  tool_call: { callId: 'toolCallId' },
+  tool_result: { callId: 'toolCallId' },
+  tool_execution_start: { callId: 'toolCallId', input: 'args' },
+  tool_execution_update: { callId: 'toolCallId', chunk: 'partialResult' },
+  tool_execution_end: { callId: 'toolCallId', input: 'args', output: 'result' },
+  before_agent_start: { userText: 'prompt' },
+} as const satisfies Partial<Record<HookName, Record<string, string>>>;
+type Aliased = typeof DEPRECATED_ALIASES;
+
+/** 生产方交给注册表的输入:不含旧叫法(那些由注册表补)。 */
+export type HookInput<K extends HookName> = K extends keyof Aliased
+  ? Omit<Parameters<Handler<K>>[0], keyof Aliased[K]>
+  : Parameters<Handler<K>>[0];
+
+function withAliases<K extends HookName>(name: K, input: HookInput<K>): Parameters<Handler<K>>[0] {
+  const aliases = (DEPRECATED_ALIASES as Partial<Record<HookName, Record<string, string>>>)[name];
+  if (!aliases) return input as Parameters<Handler<K>>[0];
+  const out: Record<string, unknown> = { ...input };
+  for (const [old, current] of Object.entries(aliases)) out[old] = out[current];
+  return out as unknown as Parameters<Handler<K>>[0];
+}
 
 /** 通知型钩子(无返回值)。 */
 type NotifyHook = {
@@ -429,6 +553,8 @@ export function noopExtensionContext(): ExtensionContext {
     fork: async () => ({ cancelled: false, id: '' }),
     switchSession: async () => ({ cancelled: false }),
     reload: async () => {},
+    sendMessage: async () => {},
+    sendUserMessage: async () => {},
     model: () => ({}) as never,
     config: {} as never,
     sessionManager: {
@@ -513,6 +639,15 @@ export class HookRegistry {
     };
   }
 
+  /**
+   * 此刻注册在 name 上的处理器(按身份)。`/reload` 在重新装载前拍一份,装完
+   * 用 `notify(…, except)` 只通知新装上的扩展——一方扩展没被重载,再发一次
+   * `session_start` 会让它们把状态恢复第二遍。
+   */
+  snapshot(name: HookName): ReadonlySet<unknown> {
+    return new Set(this.handlers.get(name)?.keys() ?? []);
+  }
+
   /** 有没有人在听。loop 用它走零开销路径:没有工具钩子就不包装工具。 */
   has(name: HookName): boolean {
     return (this.handlers.get(name)?.size ?? 0) > 0;
@@ -565,12 +700,19 @@ export class HookRegistry {
    * 十几个「一行转发一次」的具名包装只是噪音,调用方直接写钩子名即可
    * (`NotifyHook` 保证只有真的没有返回值的钩子能走这条路)。
    */
-  async notify<K extends NotifyHook>(name: K, input: Parameters<Handler<K>>[0]): Promise<void> {
+  async notify<K extends NotifyHook>(
+    name: K,
+    input: HookInput<K>,
+    /** 跳过这些处理器(`/reload` 只通知重新装上的扩展,见 snapshot)。 */
+    except?: ReadonlySet<unknown>,
+  ): Promise<void> {
     if (!this.has(name)) return;
+    const payload = withAliases(name, input);
     for (const [handler, ctx] of this.list(name)) {
+      if (except?.has(handler)) continue;
       try {
         await (handler as (i: Parameters<Handler<K>>[0], c: ExtensionContext) => void | Promise<void>)(
-          input,
+          payload,
           ctx,
         );
       } catch (err) {
@@ -601,10 +743,11 @@ export class HookRegistry {
   }
 
   /** 第一个否决即返回;处理器抛错视同否决(见文件头的失败策略)。 */
-  async toolCall(input: ToolCallHookInput): Promise<{ block: true; reason: string } | undefined> {
+  async toolCall(input: HookInput<'tool_call'>): Promise<{ block: true; reason: string } | undefined> {
+    const payload = withAliases('tool_call', input);
     for (const [handler, ctx] of this.list('tool_call')) {
       try {
-        const result = await handler(input, ctx);
+        const result = await handler(payload, ctx);
         if (result?.block) return result;
       } catch (err) {
         const error = this.report('tool_call', err);
@@ -614,9 +757,55 @@ export class HookRegistry {
     return undefined;
   }
 
-  /** 串行改写,返回最终的 output;处理器抛错保留当前值。 */
-  toolResult(input: ToolResultHookInput): Promise<unknown> {
-    return this.reduceField('tool_result', input, 'output', input.output);
+  /**
+   * 串行改写,返回最终的结果与错误判定;处理器抛错保留当前值。每个处理器看到
+   * 的 `content` / `details` 都按**当前**值现算(两套字段指向同一份结果)。
+   *
+   * Pi 形状的返回(`content` / `details` / `isError`)落到这里的输出上:Pi 形状
+   * 工具的结果就地换掉那两个字段(details 还要留给画法);其余工具的输出本来
+   * 就是一个值,换 `content` 等于把模型看到的内容换成那段文本。
+   */
+  async toolResult(
+    input: Omit<HookInput<'tool_result'>, 'content' | 'details'>,
+  ): Promise<{ output: unknown; isError: boolean }> {
+    const base = withAliases('tool_result', input as HookInput<'tool_result'>);
+    let output = input.output;
+    let isError = input.isError;
+    for (const [handler, ctx] of this.list('tool_result')) {
+      try {
+        // content / details 是**按需**算的:toPiContent 要把非 Pi 形状的输出整个
+        // JSON 化(工具输出能到 20k 字),而常见的处理器(LSP)只读 output——每次
+        // 工具调用、每个处理器都白算一遍不值。getter 不会被展开钉死:view 直接
+        // 交给处理器,处理器解构到哪个字段才算哪个。
+        const current = output;
+        const view = Object.defineProperties(
+          { ...base, output: current, isError } as ToolResultHookInput,
+          {
+            content: { enumerable: true, get: () => toPiContent(current) },
+            details: { enumerable: true, get: () => (isPiToolResult(current) ? current.details : undefined) },
+          },
+        );
+        const result = await handler(view, ctx);
+        if (!result) continue;
+        if (result.output !== undefined) {
+          output = result.output;
+        } else if (result.content !== undefined || result.details !== undefined) {
+          if (isPiToolResult(output)) {
+            output = {
+              ...output,
+              ...(result.content !== undefined ? { content: result.content } : {}),
+              ...(result.details !== undefined ? { details: result.details } : {}),
+            };
+          } else if (result.content !== undefined) {
+            output = piContentText(result.content);
+          }
+        }
+        if (result.isError !== undefined) isError = result.isError;
+      } catch (err) {
+        this.report('tool_result', err);
+      }
+    }
+    return { output, isError };
   }
 
   /** 串行改写这次要发出去的消息。 */
@@ -639,13 +828,14 @@ export class HookRegistry {
    * 抛错保留当前值。两个产物,不走 reduceField。
    */
   async beforeAgentStart(
-    input: BeforeAgentStartHookInput,
-  ): Promise<{ systemPrompt: string; messages: string[] }> {
+    input: HookInput<'before_agent_start'>,
+  ): Promise<{ systemPrompt: string; messages: BeforeAgentStartMessage[] }> {
+    const base = withAliases('before_agent_start', input);
     let systemPrompt = input.systemPrompt;
-    const messages: string[] = [];
+    const messages: BeforeAgentStartMessage[] = [];
     for (const [handler, ctx] of this.list('before_agent_start')) {
       try {
-        const result = await handler({ ...input, systemPrompt }, ctx);
+        const result = await handler({ ...base, systemPrompt }, ctx);
         if (result?.systemPrompt !== undefined) systemPrompt = result.systemPrompt;
         if (result?.message) messages.push(result.message);
       } catch (err) {
@@ -678,13 +868,15 @@ export class HookRegistry {
   }
 
   /** 收集全部处理器贡献的资源目录(技能 / 提示词模板 / 主题);抛错的跳过。 */
-  async resourcesDiscover(): Promise<{ skillPaths: string[]; promptPaths: string[]; themePaths: string[] }> {
+  async resourcesDiscover(
+    input: ResourcesDiscoverHookInput,
+  ): Promise<{ skillPaths: string[]; promptPaths: string[]; themePaths: string[] }> {
     const skillPaths: string[] = [];
     const promptPaths: string[] = [];
     const themePaths: string[] = [];
     for (const [handler, ctx] of this.list('resources_discover')) {
       try {
-        const result = await handler(undefined, ctx);
+        const result = await handler(input, ctx);
         if (result?.skillPaths) skillPaths.push(...result.skillPaths);
         if (result?.promptPaths) promptPaths.push(...result.promptPaths);
         if (result?.themePaths) themePaths.push(...result.themePaths);

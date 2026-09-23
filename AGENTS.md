@@ -154,5 +154,17 @@ extension: a `tool_call` hook returning `{ block: true, reason }` vetoes; to ask
   reload, `ui.setTheme`) share `claimPaletteWrite()` in `core/palette.ts` so the latest
   *issued* write wins. StatusLine memoizes the indicator and timer interval — reading
   `props.indicator` directly rebuilt the timer on every streaming delta and froze the spinner.
+- Hook payload field names follow Pi (`toolCallId`/`args`/`result`/`partialResult`/`content`/
+  `details`, `prompt`, `previousSessionFile`, `previous*`); the old synonyms (`callId`, exec-hook
+  `input`/`output`/`chunk`, `userText`) are `@deprecated`, still filled - only by `HookRegistry`
+  at dispatch from its `DEPRECATED_ALIASES` table (producers pass `HookInput<K>`, Pi names only) -
+  and will be removed; first-party code must not read them; `tool_result`
+  also accepts Pi's `{ content, details, isError }` return. `sendMessage` takes Pi's `deliverAs`
+  (unset keeps the old semantics; `nextTurn` waits for the next *user* turn) and `display: false` /
+  `details`; `sendUserMessage` exists on api and ctx. `/reload` re-sends `session_start`
+  (`reason: 'reload'`) only to the reloaded extensions via `hooks.snapshot()`, and re-asks
+  `resources_discover` of every extension, replacing the previous directories wholesale.
+  `ctx.reload()` throws while extensions load or reload (`extensionsReady`, declared before
+  `createExtensionContext` so startup setup gets the message, not a TDZ ReferenceError).
 - Core tests live in `tests/*.test.ts` mirroring the module under test on the Node lane;
   UI tests live in `tests/ui/` on the Bun lane with the `tests/support/otui.tsx` harness.

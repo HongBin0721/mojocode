@@ -41,7 +41,18 @@ export type NoticeLevel = 'info' | 'warn' | 'error';
 
 export type AgentEvent =
   // display:时间线展示用的替代文本(如 `/init`);userText 才是喂给模型的内容。
-  | { type: 'turn-start'; userText: string; display?: string; imageCount?: number }
+  | {
+      type: 'turn-start';
+      userText: string;
+      display?: string;
+      imageCount?: number;
+      /**
+       * 扩展 sendMessage(triggerTurn)开的轮:`details` 交给消息画法(Pi 的
+       * `CustomMessage.details`)。藏不藏(Pi 的 `display: false`)在 userText 的
+       * 信封里,见 unwrapCustomMessage。
+       */
+      details?: unknown;
+    }
   | { type: 'text-start'; id: string }
   | { type: 'text-delta'; id: string; text: string }
   | { type: 'text-end'; id: string }
@@ -121,7 +132,7 @@ export type AgentEvent =
    * 条路;开轮的那条路由 turn-start 的 userText 带着自定义信封)。渲染层按
    * customType 找扩展注册的画法。
    */
-  | { type: 'custom-message'; customType: string; content: string; display?: string };
+  | { type: 'custom-message'; customType: string; content: string; display?: string; details?: unknown };
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 

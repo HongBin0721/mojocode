@@ -30,12 +30,18 @@ export const nextKey = () => `item-${itemCounter++}`;
  * 以及 `sendMessage(triggerTurn)` 那一轮 turn-start 里的信封),字段与
  * "display 与正文相同就不带"这条规则因此写了两遍。
  */
-function customItem(customType: string, content: string, display?: string): NewTimelineItem {
+function customItem(
+  customType: string,
+  content: string,
+  display?: string,
+  details?: unknown,
+): NewTimelineItem {
   return {
     kind: 'custom',
     customType,
     content,
     ...(display !== undefined && display !== content ? { display } : {}),
+    ...(details !== undefined ? { details } : {}),
   };
 }
 
@@ -221,7 +227,7 @@ export function createTimelineController(
             break;
 
           case 'custom-message':
-            push(customItem(event.customType, event.content, event.display));
+            push(customItem(event.customType, event.content, event.display, event.details));
             break;
 
           case 'turn-start': {
@@ -229,7 +235,8 @@ export function createTimelineController(
             // 按 customType 画,而不是当普通用户消息。
             const custom = unwrapCustomMessage(event.userText);
             if (custom) {
-              push(customItem(custom.customType, custom.content, event.display));
+              // Pi 的 `display: false`(信封里的 hidden):这一轮照开,只是不上时间线。
+              if (!custom.hidden) push(customItem(custom.customType, custom.content, event.display, event.details));
             } else {
               push({ kind: 'user', text: event.display ?? event.userText });
             }

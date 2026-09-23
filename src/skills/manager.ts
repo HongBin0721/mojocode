@@ -25,7 +25,10 @@ function notifyKeyOf(index: SkillIndex): string {
 
 export class SkillManager {
   private readonly root: string;
-  /** 扩展包带来的技能目录(优先级最低),见 discovery.ts;扩展经 resources_discover 还能再加。 */
+  /** 包自带的技能 / 提示词模板目录(构造时给定,不变)。 */
+  private readonly baseDirs: readonly string[];
+  private readonly basePromptDirs: readonly string[];
+  /** 生效的技能目录(优先级最低,见 discovery.ts):包自带的 + 扩展经 resources_discover 贡献的。 */
   private packageDirs: readonly string[];
   /** 包与扩展贡献的提示词模板目录(项目 / 全局的两个约定目录不在这里,discovery 自己知道)。 */
   private promptDirs: readonly string[];
@@ -44,23 +47,29 @@ export class SkillManager {
     ttlMs?: number;
   }) {
     this.root = options.root;
-    this.packageDirs = options.packageDirs ?? [];
-    this.promptDirs = options.promptDirs ?? [];
+    this.baseDirs = options.packageDirs ?? [];
+    this.basePromptDirs = options.promptDirs ?? [];
+    this.packageDirs = this.baseDirs;
+    this.promptDirs = this.basePromptDirs;
     this.ttlMs = options.ttlMs ?? 15_000;
   }
 
-  /** 追加技能目录(扩展的 resources_discover);作废缓存,下一次 list 重扫。 */
-  addDirs(dirs: readonly string[]): void {
-    if (dirs.length === 0) return;
-    this.packageDirs = [...this.packageDirs, ...dirs];
+  /**
+   * 扩展经 resources_discover 贡献的技能 / 提示词模板目录。**整体替换**而不是
+   * 追加:`/reload` 每次都会再收一遍,追加的话同一个目录每重载一次就多扫一遍
+   * (还可能冒出重复的条目),被删掉的扩展贡献的目录也永远撤不掉。去重。
+   * 有变化才作废缓存并返回 true(调用方据此决定要不要重扫、重建 skill 工具)。
+   */
+  setExtensionDirs(skills: readonly string[], prompts: readonly string[]): boolean {
+    const nextSkills = [...new Set([...this.baseDirs, ...skills])];
+    const nextPrompts = [...new Set([...this.basePromptDirs, ...prompts])];
+    const same = (a: readonly string[], b: readonly string[]) =>
+      a.length === b.length && a.every((dir, i) => dir === b[i]);
+    if (same(nextSkills, this.packageDirs) && same(nextPrompts, this.promptDirs)) return false;
+    this.packageDirs = nextSkills;
+    this.promptDirs = nextPrompts;
     this.cached = undefined;
-  }
-
-  /** 追加提示词模板目录(同上)。 */
-  addPromptDirs(dirs: readonly string[]): void {
-    if (dirs.length === 0) return;
-    this.promptDirs = [...this.promptDirs, ...dirs];
-    this.cached = undefined;
+    return true;
   }
 
   /** TTL 内复用同一个 promise;扫描失败不缓存,下次重试(同 createFileLister)。 */

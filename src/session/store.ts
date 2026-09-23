@@ -323,8 +323,9 @@ export class SessionStore {
     return this.state_;
   }
 
-  private get file(): string {
-    return path.join(this.dir, `${this.meta_.id}.jsonl`);
+  /** 会话文件的绝对路径(Pi 钩子里 `previousSessionFile` / `targetSessionFile` 给的就是它)。 */
+  get file(): string {
+    return SessionStore.fileOf(this.meta_.id, this.dir);
   }
 
   private get sidecar(): string {
@@ -361,10 +362,15 @@ export class SessionStore {
     return store;
   }
 
+  /** 某个会话文件的绝对路径(不必先打开它;Pi 钩子的 `targetSessionFile`)。 */
+  static fileOf(id: string, dir?: string): string {
+    return path.join(dir ?? sessionsDir(), `${id}.jsonl`);
+  }
+
   /** 精确 id 打开。前缀匹配请先走 `resolveId()`。 */
   static async open(id: string, dir?: string): Promise<SessionStore> {
     const dir_ = dir ?? sessionsDir();
-    const file = path.join(dir_, `${id}.jsonl`);
+    const file = SessionStore.fileOf(id, dir_);
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf8');
@@ -488,7 +494,7 @@ export class SessionStore {
     let removed = 0;
     for (const id of ids) {
       if (keep.has(id)) continue;
-      const file = path.join(dir, `${id}.jsonl`);
+      const file = SessionStore.fileOf(id, dir);
       try {
         const stat = await fs.stat(file);
         if (stat.mtimeMs >= cutoff) continue;
@@ -523,7 +529,7 @@ export class SessionStore {
     mutate: (meta: SessionMeta) => void,
   ): Promise<SessionMeta> {
     const dir_ = dir ?? sessionsDir();
-    const file = path.join(dir_, `${id}.jsonl`);
+    const file = SessionStore.fileOf(id, dir_);
     // 快路径读旁车拿当前 meta;损坏/缺失时慢路径解析 JSONL。
     let meta: SessionMeta | undefined;
     try {
@@ -565,7 +571,7 @@ export class SessionStore {
   /** 真删磁盘文件(JSONL + 旁车)。幂等:文件不存在也算成功。 */
   static async remove(id: string, dir?: string): Promise<void> {
     const dir_ = dir ?? sessionsDir();
-    await fs.rm(path.join(dir_, `${id}.jsonl`), { force: true });
+    await fs.rm(SessionStore.fileOf(id, dir_), { force: true });
     await fs.rm(path.join(dir_, `${id}.meta.json`), { force: true });
   }
 
@@ -746,7 +752,7 @@ export class SessionStore {
     dir: string | undefined,
     pick: (record: Record_) => T | undefined,
   ): Promise<T[]> {
-    const file = path.join(dir ?? sessionsDir(), `${id}.jsonl`);
+    const file = SessionStore.fileOf(id, dir);
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf8');

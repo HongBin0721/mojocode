@@ -231,7 +231,7 @@ describe('discoverSkills(临时 HOME)', () => {
     const later = path.join(root, 'later-prompts');
     await fs.mkdir(later, { recursive: true });
     await fs.writeFile(path.join(later, 'late.md'), 'Late one.\n');
-    manager.addPromptDirs([later]);
+    manager.setExtensionDirs([], [later]);
     expect((await manager.list()).skills.map((s) => s.name)).toContain('late');
   });
 
