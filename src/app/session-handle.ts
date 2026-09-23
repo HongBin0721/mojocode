@@ -24,6 +24,7 @@ import type {
   UiRequest,
 } from '../core/extension.js';
 import type {
+  LoadedExtensionInfo,
   UiCustomRequest,
   UiHost,
   UiSurfaces,
@@ -100,6 +101,8 @@ export interface SessionHandle {
    * 可选字段:UI 测试的假 session 不必造。
    */
   readonly startupNotices?: ReadonlyArray<{ level: NoticeLevel; message: string }>;
+  /** 已装上的扩展(一方在前,按装载顺序),同步读取;`/reload` 后反映新的一批。 */
+  readonly loadedExtensions: LoadedExtensionInfo[];
   /** 扩展注册的斜杠命令投影(命令菜单用),同步读取。 */
   readonly extensionCommands: ExtensionCommandInfo[];
   /** 扩展贴在输入框上方的状态行,同步读取。 */

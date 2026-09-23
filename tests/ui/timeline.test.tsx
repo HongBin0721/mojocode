@@ -163,12 +163,17 @@ describe('TimelineEntry 在 OpenTUI 下渲染', () => {
           providerLabel: 'Kimi',
           model: 'kimi-k3',
           root: '/tmp/x',
+          extensions: [
+            { id: 'goal', builtin: true },
+            { id: 'my-ext', builtin: false },
+          ],
         },
       ]),
       { width: 60, height: 16 },
     );
     expect(ui.frame()).toContain(renderPixelLogo(APP_NAME)[0]!.join(''));
     expect(ui.frame()).toContain('kimi-k3');
+    expect(ui.frame()).toContain('goal · my-ext');
     await ui.destroy();
   });
 });

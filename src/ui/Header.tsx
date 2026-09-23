@@ -5,11 +5,14 @@ import { logoGradient, pixelLogoWidth, renderPixelLogo } from './logo.js';
 import { APP_NAME } from '../config/paths.js';
 import { packageVersion } from '../config/version.js';
 import { t } from '../i18n/index.js';
+import type { LoadedExtensionInfo } from '../core/extension-types.js';
 
 interface Props {
   providerLabel: string;
   model: string;
   root: string;
+  /** 已装上的扩展;空表(全被禁用)时整行不画。缺省同空表(叶子组件单测不必造)。 */
+  extensions?: LoadedExtensionInfo[];
   /** 终端列宽。放不下像素字时退回纯文字标题(见 fitsLogo)。 */
   columns?: number;
 }
@@ -77,6 +80,25 @@ export function Header(props: Props): JSX.Element {
       <Box>
         <Text color={theme.dim}>{shortenHome(props.root)}</Text>
       </Box>
+      <Show when={(props.extensions?.length ?? 0) > 0}>
+        {/* 与上面的单行信息行不同,这一行可以折行:扩展多了照样列全,
+            磁盘扩展(用户自己装的)用强调色,一眼分得出哪些是自带的。 */}
+        <Box>
+          <Text wrap="wrap">
+            <Text color={theme.dim}>{t('header.extensions')} </Text>
+            <For each={props.extensions}>
+              {(ext, i) => (
+                <>
+                  <Show when={i() > 0}>
+                    <Text color={theme.dim}> · </Text>
+                  </Show>
+                  <Text color={ext.builtin ? theme.dim : theme.accent}>{ext.id}</Text>
+                </>
+              )}
+            </For>
+          </Text>
+        </Box>
+      </Show>
       <Box marginTop={1}>
         <Text color={theme.dim}>{t('header.hints')}</Text>
       </Box>

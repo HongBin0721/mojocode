@@ -106,6 +106,15 @@ describe('磁盘扩展装载', () => {
     expect(names).toEqual(expect.arrayContaining(['goal', 'review']));
   });
 
+  it('loadedExtensions:一方在前、磁盘扩展标 builtin: false,装不上的不在表里', () => {
+    const list = session.loadedExtensions;
+    const firstDisk = list.findIndex((e) => !e.builtin);
+    expect(firstDisk).toBeGreaterThan(0);
+    expect(list.slice(firstDisk).every((e) => !e.builtin)).toBe(true);
+    expect(list.find((e) => e.id === 'goal')?.builtin).toBe(true);
+    expect(list.some((e) => e.id.includes('broken'))).toBe(false);
+  });
+
   it('装不上的扩展变成 startup notice,不拖垮会话', () => {
     const messages = session.startupNotices.map((n) => n.message);
     expect(messages.some((m) => m.includes('broken') && m.includes('boom at setup'))).toBe(true);

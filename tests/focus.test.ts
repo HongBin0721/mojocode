@@ -38,7 +38,7 @@ const notice = (level: NoticeLevel): TimelineItem => ({
 });
 const error = (): TimelineItem => ({ key: key(), kind: 'error', message: 'boom' });
 const banner = (): TimelineItem =>
-  ({ key: key(), kind: 'banner', providerLabel: 'p', model: 'm', root: '/', mode: 'ask' }) as TimelineItem;
+  ({ key: key(), kind: 'banner', providerLabel: 'p', model: 'm', root: '/', extensions: [] }) as TimelineItem;
 
 const kinds = (items: TimelineItem[]) => items.map((i) => i.kind);
 

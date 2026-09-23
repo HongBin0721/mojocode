@@ -71,6 +71,15 @@ export interface ExtensionStatusEntry {
 }
 
 /**
+ * 本会话已装上的一个扩展(启动横幅列出来)。`builtin` 区分一方扩展与磁盘
+ * 扩展——被 `disabledExtensions`/`--no-mcp` 跳过的、装载失败的都不在表里。
+ */
+export interface LoadedExtensionInfo {
+  id: string;
+  builtin: boolean;
+}
+
+/**
  * 要工具集的是哪一类 agent。扩展注册的是**工厂**而不是工具本身,就为了让它
  * 按作用域自己决定给不给、怎么给——explore 子 agent 只拿只读工具就是这么实现的
  * (MCP 工具不透明、可能有副作用,它的工厂在 explore 下直接返回 undefined)。

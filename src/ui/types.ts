@@ -5,6 +5,7 @@
  */
 
 import type { NoticeLevel } from '../core/events.js';
+import type { LoadedExtensionInfo } from '../core/extension-types.js';
 export interface TimelineImage {
   mediaType: string;
   data: string;
@@ -70,6 +71,8 @@ export type TimelineItem =
       providerLabel: string;
       model: string;
       root: string;
+      /** 已装上的扩展(同样是快照;/reload 之后重建时间线才更新)。 */
+      extensions: LoadedExtensionInfo[];
     };
 
 /** 普通 `Omit` 会把联合类型折叠成公共键;这个写法保留每个变体。 */

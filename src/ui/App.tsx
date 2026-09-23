@@ -479,6 +479,7 @@ export function App(props: Props): JSX.Element {
     providerLabel: providerLabel(),
     model: model(),
     root: session.root,
+    extensions: session.loadedExtensions,
   });
 
   // 重放时间线:/resume 与 esc-esc 回退共用。全屏渲染下这只是一次普通的

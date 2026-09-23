@@ -56,6 +56,7 @@ export function sessionBanner(session: SessionHandle): TimelineItem {
     providerLabel: session.provider.label,
     model: session.provider.model,
     root: session.root,
+    extensions: session.loadedExtensions,
   };
 }
 

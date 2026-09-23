@@ -10,6 +10,7 @@
  */
 export function stubExtensions() {
   return {
+    loadedExtensions: [],
     extensionCommands: [],
     extensionStatus: [],
     extensionState: {},

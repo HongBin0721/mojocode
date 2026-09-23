@@ -166,6 +166,7 @@ export function TimelineEntry(props: {
           providerLabel={item.providerLabel}
           model={item.model}
           root={item.root}
+          extensions={item.extensions}
           columns={props.columns}
         />
       );

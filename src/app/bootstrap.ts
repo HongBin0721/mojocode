@@ -39,6 +39,7 @@ import {
   type PiContentPart,
   type ComponentHost,
   type ExtensionComponent,
+  type LoadedExtensionInfo,
   type UiCustomRequest,
   type TerminalInputHandler,
   type UiHost,
@@ -179,6 +180,8 @@ export interface Session {
    * 原文,进时间线;缺省按 name/args 重组。
    */
   runSkill: (name: string, args: string, options?: { display?: string }) => Promise<void>;
+  /** 已装上的扩展(一方在前,按装载顺序);启动横幅列出来。 */
+  readonly loadedExtensions: LoadedExtensionInfo[];
   /** 扩展注册的斜杠命令投影(菜单用),同步读取。 */
   readonly extensionCommands: ExtensionCommandInfo[];
   /** 扩展贴在输入框上方的状态行,同步读取。 */
@@ -1934,6 +1937,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<Session> {
       return skillManager.commandInfos();
     },
     runSkill,
+    get loadedExtensions() {
+      // loadedIds 按装载顺序插入:一方扩展永远先装,/reload 只卸装磁盘那批,顺序因此天然是「一方在前」。
+      return [...loadedIds].map((id) => ({ id, builtin: !diskExtensionIds.has(id) }));
+    },
     get extensionCommands() {
       return [...extensionCommands.values()].map((entry) => entry.info);
     },

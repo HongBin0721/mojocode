@@ -7,6 +7,7 @@
  * 降低工具调用的表现。
  */
 export const en = {
+  'header.extensions': 'Extensions',
   'header.hints':
     '/ for commands · shift+enter for newline · ctrl+r for details · esc to interrupt · ctrl+c twice to exit',
 

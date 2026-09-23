@@ -106,6 +106,13 @@ describe('bootstrap × 一方扩展(真实装配)', () => {
       expect(names).not.toContain('mcp');
       // 没被禁的照常在。
       expect(names).toEqual(expect.arrayContaining(['goal']));
+      // 启动横幅列的是真正装上的那批:被禁的不在表里。
+      expect(bare.loadedExtensions).toEqual([
+        { id: 'goal', builtin: true },
+        { id: 'lsp', builtin: true },
+        { id: 'todo', builtin: true },
+        { id: 'web', builtin: true },
+      ]);
     } finally {
       await bare.dispose?.();
     }

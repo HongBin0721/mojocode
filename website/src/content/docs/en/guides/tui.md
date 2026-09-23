@@ -9,6 +9,8 @@ mojocode
 
 The TUI runs on the alternate screen (full screen, like vim): the wheel, `PageUp` and `PageDown` scroll back through the timeline, scrolling up pauses follow mode automatically and returning to the bottom resumes it; on exit the whole session is written back to the terminal as plain text, still scrollable and copyable.
 
+The startup panel at the top shows the current provider and model, the working directory, and the extensions **actually loaded** in this session: bundled first-party extensions are dimmed, disk extensions (packages from `mojocode install`, `~/.mojocode/extensions/`, the project's `.mojocode/extensions/`, the `extensions` config key, `-e`) use the accent color. Extensions disabled by `--no-mcp` and the like, or that failed to load, are not listed (the failure reason appears as a notice below the panel). The panel is a snapshot: a batch swapped in by `/reload` shows up only once something rebuilds the timeline, such as `/new` or `/resume`.
+
 ## Copying text
 
 Just drag to select; releasing the button copies to the system clipboard (tmux copy-on-select style, with `copied N characters` echoed in the footer; over SSH it arrives through OSC 52, and iTerm2 needs "Applications may access clipboard" enabled in its settings). You can also hold `shift` (`option` on macOS) to drag-select with the terminal's native copying.

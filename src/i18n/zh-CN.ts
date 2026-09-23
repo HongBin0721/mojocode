@@ -1,6 +1,7 @@
 import type { en } from './en.js';
 
 export const zhCN: Record<keyof typeof en, string> = {
+  'header.extensions': '扩展',
   'header.hints':
     '/ 查看命令 · shift+enter 换行 · ctrl+r 展开详情 · esc 中断 · 连按两次 ctrl+c 退出',
 
