@@ -12,6 +12,7 @@ npm run dev                # 本地预览 http://127.0.0.1:4321/mojocode/(带 ba
 npm run build              # 唯一的门禁:astro build → dist/,53 页约 2s,含 Pagefind 搜索索引
 npm run preview            # 预览 dist/
 node scripts/gen-logo.mjs  # 重新生成像素字 logo 与 favicon(改过 src/ui/logo.ts 之后)
+cd promo && npm ci && npm run make   # 重录首页宣传片(真实调用模型,见下方「结构」)
 ```
 
 `npm run check`(`astro check`)**当前不可用**:`@astrojs/check` 与 `typescript` 没装,运行时会弹交互式安装提示;它不是门禁,CI 也不跑。判断改动是否正确就跑 `npm run build`——Starlight 会在构建时校验 frontmatter schema、侧栏 slug 是否存在与组件导入。**改了 `astro.config.mjs` 里的插件(主题、expressive-code 配置)要重启 dev 服务器**:热更新只跟内容与样式,插件注入的样式表不重载,曾表现为代码块整块无样式。
@@ -23,7 +24,8 @@ node scripts/gen-logo.mjs  # 重新生成像素字 logo 与 favicon(改过 src/u
 - `src/content.config.ts`:唯一的内容集合 `docs`,用 Starlight 的 `docsLoader()` + `docsSchema()`,没有自定义字段。
 - `src/content/docs/**/*.md(x)`:页面。**slug 由文件路径决定**(`guides/tui.md` → `/guides/tui/`),但侧栏不是自动生成的——`astro.config.mjs` 里的 `sidebar` 手写了每一条 `{ slug }`,新页面必须同时加进去,否则只能靠搜索到达;写错的 slug 会让 build 失败。侧栏分组标签用 `translations: { en: … }` 给英文。
 - 语言:`defaultLocale: 'root'`(中文在根路径,`lang: zh-CN`),英文在 `en/` 下**同 slug 镜像**(`src/content/docs/en/guides/quickstart.md`)。英文缺页时 Starlight 自动用中文内容渲染并加一条「not available in your language yet」提示,所以英文是逐页补的,不需要一次翻完;`hreflang` 与语言切换器都是 Starlight 自动生成。
-- `src/components/`:首页专用组件——`Hero.astro`(像素字 + 一句话 + 安装命令 + 两个入口)、`Terminal.astro`(深色终端窗口,正文经 `set:html` 传入)、`Feature.astro`(左文右图的一整行,`flip` 反过来并交换列宽)、`Wordmark.astro`(内联 SVG)。`demos.ts` 是终端窗口里的会话文本(中英各一份)。
+- `src/components/`:首页专用组件——`Hero.astro`(像素字 + 一句话 + 安装命令 + 两个入口)、`Terminal.astro`(深色终端窗口,正文经 `set:html` 传入)、`Feature.astro`(左文右图的一整行,`flip` 反过来并交换列宽)、`Wordmark.astro`(内联 SVG)、`Promo.astro`(Hero 下方的 15 秒静音循环宣传片,按语言取 `public/promo/promo-<lang>.{webm,mp4}` 与 `poster-<lang>.jpg`,系统「减少动态效果」时不自动播、改给控件)。`demos.ts` 是特性段终端窗口里的会话文本(中英各一份)。
+- `promo/`:宣传片的生成工具,**又一个独立包**(自带 package.json / lockfile,只依赖 `puppeteer-core`;tsconfig 里 exclude 掉,构建不碰它)。`npm run make` 一条命令走完:在临时 HOME 里放示例项目 `promo/shop/`(横幅因此显示 `~/shop`,会话不落进你的 `~/.mojocode`)、只拷配置里的 `providers`(`language` 必须留空,否则 `MOJOCODE_LANG` 压不过它)→ VHS 真跑仓库根的 `dist/cli.js` → 帧哈希自动找剪辑点(开打前 16 帧到定稿后 1 秒,超出 9.5 秒预算就整体加速、角标如实写倍速)→ 无头 Chrome 逐帧调 `comp.html` 的 `render(t)` 截图 → ffmpeg 出 mp4/webm/poster。文案(标语、三条字幕、片尾)在 `comp.html` 的 `COPY` 里;只改文案或动效用 `--skip-record` 复用 `.work/` 里上一次的录屏(gitignore,约 250MB),`--still 1.8,6.5` 只出静帧。三个坑:vhs 0.12 配 ffmpeg 9 直接出视频会**静默**失败(退出码 0、没有文件),所以输出帧目录再自己合;macOS 的 tmpdir 是软链,临时 HOME 不 `realpath` 的话 TUI 显示不成 `~`;录的是 `dist/`,改完 TUI 先在仓库根 `npm run build`。每次录制是真实的模型调用(缺省 deepseek,`--provider`/`--model` 可换),模型的回答每次不一样,出片后看一眼 poster 再提交。
 - `src/assets/wordmark.svg` 与 `public/favicon.svg` 是**生成物**:`scripts/gen-logo.mjs` 用正则从根目录 `src/ui/logo.ts` 抠出点阵字模与渐变端点(`FROM`/`TO`),逐字渐变画成 SVG。不要手改这两个文件。
 - `plugins/remark-base-links.mjs`:正文链接补 base,见下。
 - `src/styles/custom.css`:站点级微调(首页容器加宽、隐藏首页的主题标题区与页脚、顶栏 logo 尺寸、表格里 code 不换行)。**它是普通 CSS,不能写 `:global()`**——那是 Astro scoped style 的语法,普通样式表里整条规则会被浏览器静默丢弃,曾让顶栏 logo 卡在主题的 32px 上限。

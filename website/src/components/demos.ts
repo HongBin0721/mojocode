@@ -1,83 +1,10 @@
 /**
- * 首页终端窗口里的会话文本。写成 HTML 字符串而不是 .astro 模板,因为正文里有
- * 大量 `{ }`(代码 diff),在 Astro/MDX 模板里每一个都要转义。
+ * 首页特性段终端窗口里的会话文本(首屏是 Promo.astro 的真实录屏,不在这里)。
+ * 写成 HTML 字符串而不是 .astro 模板,因为正文里有大量 `{ }`,在 Astro/MDX
+ * 模板里每一个都要转义。
  * 行首符号与摘要措辞照抄 TUI(src/ui/theme.ts 的 glyphs、i18n 的 sum.* 文案):
  * 这是产品真实的样子,不是示意图。
  */
-
-const e = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-export const session = {
-  'zh-CN': `<span class="u">›</span> <span class="b">把 src/api/ 里三处重复的 fetch 重试逻辑抽成一个函数,然后跑一遍测试</span>
-
-<span class="d">✻ 已思考 4.1s</span>
-
-<span class="t">⏺</span> <span class="b">Grep</span><span class="d">(retry|for \\(let i = 0 · src/api/**)</span>
-  <span class="d">⎿  3 处匹配(ripgrep)</span>
-
-<span class="t">⏺</span> <span class="b">Read</span><span class="d">(src/api/orders.ts)</span>
-  <span class="d">⎿  读取 84,共 84 行</span>
-
-<span class="t">⏺</span> <span class="b">Read</span><span class="d">(src/api/users.ts)</span>
-  <span class="d">⎿  读取 61,共 61 行</span>
-
-<span class="t">⏺</span> <span class="b">Write</span><span class="d">(src/api/retry.ts)</span>
-  <span class="d">⎿  已创建,23 行</span>
-
-<span class="t">⏺</span> <span class="b">Edit</span><span class="d">(src/api/orders.ts)</span>
-  <span class="d">⎿  1 处替换</span>
-     <span class="del">${e('-  for (let i = 0; i < 3; i++) {')}</span>
-     <span class="del">${e('-    try { return await fetch(url, init); } catch (err) { last = err; }')}</span>
-     <span class="del">${e('-  }')}</span>
-     <span class="add">${e('+  return fetchWithRetry(url, init, { attempts: 3 });')}</span>
-
-<span class="t">⏺</span> <span class="b">Bash</span><span class="d">(npm test)</span>
-  <span class="d">⎿  退出码 0 · 耗时 3.8s</span>
-
-三处重试逻辑收进了 <span class="b">src/api/retry.ts</span> 的 fetchWithRetry,
-orders / users / cart 各自改为调用它。42 项测试全部通过。
-改动未提交,你可以先看 diff。
-
-<span class="d">▣ kimi-k2.6 · 38s · 12.4k tokens · 缓存命中 9.1k/11.2k (81%)</span>
-
-<span class="d">──────────────────────────────────────────────────────────</span>
-<span class="u">›</span> <span class="cur"></span>`,
-
-  en: `<span class="u">›</span> <span class="b">Extract the three copies of the fetch retry loop in src/api/ into one function, then run the tests</span>
-
-<span class="d">✻ Thought for 4.1s</span>
-
-<span class="t">⏺</span> <span class="b">Grep</span><span class="d">(retry|for \\(let i = 0 · src/api/**)</span>
-  <span class="d">⎿  3 matches (ripgrep)</span>
-
-<span class="t">⏺</span> <span class="b">Read</span><span class="d">(src/api/orders.ts)</span>
-  <span class="d">⎿  Read 84 of 84 lines</span>
-
-<span class="t">⏺</span> <span class="b">Read</span><span class="d">(src/api/users.ts)</span>
-  <span class="d">⎿  Read 61 of 61 lines</span>
-
-<span class="t">⏺</span> <span class="b">Write</span><span class="d">(src/api/retry.ts)</span>
-  <span class="d">⎿  Created, 23 lines</span>
-
-<span class="t">⏺</span> <span class="b">Edit</span><span class="d">(src/api/orders.ts)</span>
-  <span class="d">⎿  1 replacement</span>
-     <span class="del">${e('-  for (let i = 0; i < 3; i++) {')}</span>
-     <span class="del">${e('-    try { return await fetch(url, init); } catch (err) { last = err; }')}</span>
-     <span class="del">${e('-  }')}</span>
-     <span class="add">${e('+  return fetchWithRetry(url, init, { attempts: 3 });')}</span>
-
-<span class="t">⏺</span> <span class="b">Bash</span><span class="d">(npm test)</span>
-  <span class="d">⎿  exit 0 · 3.8s</span>
-
-The three retry loops now live in <span class="b">src/api/retry.ts</span> as fetchWithRetry;
-orders / users / cart call it. All 42 tests pass.
-Nothing is committed yet, so you can review the diff first.
-
-<span class="d">▣ kimi-k2.6 · 38s · 12.4k tokens · cache 9.1k/11.2k (81%)</span>
-
-<span class="d">──────────────────────────────────────────────────────────</span>
-<span class="u">›</span> <span class="cur"></span>`,
-};
 
 export const models = {
   'zh-CN': `<span class="u">›</span> /models

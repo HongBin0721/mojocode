@@ -9,8 +9,9 @@ head:
 
 import Hero from '../../../components/Hero.astro';
 import Terminal from '../../../components/Terminal.astro';
+import Promo from '../../../components/Promo.astro';
 import Feature from '../../../components/Feature.astro';
-import { session, models, feedback, sessions, extension } from '../../../components/demos';
+import { models, feedback, sessions, extension } from '../../../components/demos';
 
 <Hero
   tagline="A general-purpose coding agent that lives in your terminal. Plug in any model; it reads code, edits files and runs commands. Sessions resume, context compacts itself, and interception policy is yours to write as an extension."
@@ -21,7 +22,7 @@ import { session, models, feedback, sessions, extension } from '../../../compone
   copiedLabel="Copied"
 />
 
-<Terminal title="mojocode — ~/dev/shop" html={session.en} />
+<Promo lang="en" label="mojocode promo: pixel wordmark, a real TUI session fixing a total() bug that ignored qty and running the tests, then the install command" />
 
 <Feature title="Any model, the same tools" href="/mojocode/en/config/providers/" linkText="Models and providers">
   <div slot="text">

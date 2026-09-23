@@ -9,8 +9,9 @@ head:
 
 import Hero from '../../components/Hero.astro';
 import Terminal from '../../components/Terminal.astro';
+import Promo from '../../components/Promo.astro';
 import Feature from '../../components/Feature.astro';
-import { session, models, feedback, sessions, extension } from '../../components/demos';
+import { models, feedback, sessions, extension } from '../../components/demos';
 
 <Hero
   tagline="运行在终端里的通用编程 agent。接任意大模型,读代码、改文件、跑命令;会话可恢复,上下文自动压缩,拦截策略由你用扩展写。"
@@ -21,7 +22,7 @@ import { session, models, feedback, sessions, extension } from '../../components
   copiedLabel="已复制"
 />
 
-<Terminal title="mojocode — ~/dev/shop" html={session['zh-CN']} />
+<Promo lang="zh-CN" label="mojocode 宣传片:像素字片头,一段真实的 TUI 会话——修复 total() 漏乘数量的 bug 并跑通测试,最后是安装命令" />
 
 <Feature title="任意模型,同一套工具" href="/mojocode/config/providers/" linkText="模型与服务商">
   <div slot="text">

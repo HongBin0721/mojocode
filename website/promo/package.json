@@ -1,0 +1,12 @@
+{
+  "name": "mojocode-promo",
+  "private": true,
+  "type": "module",
+  "description": "文档站首页宣传片的生成脚本(独立于文档站构建)",
+  "scripts": {
+    "make": "node make.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.11.0"
+  }
+}

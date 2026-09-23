@@ -1,0 +1,59 @@
+---
+/**
+ * 首页首屏的 15 秒循环宣传片:像素字片头 → 真实 TUI 录屏(原速) → 安装命令片尾。
+ * 文件在 public/promo/,按语言各一份(webm 优先,mp4 兜底;poster 取录屏定稿那一帧)。
+ * 静音自动循环;系统开了「减少动态效果」就不自动播,改为给播放控件。
+ * 片子是真实录屏,TUI 的行格式变了它就过时了——在 website/promo/ 里 npm run make 重录。
+ */
+interface Props {
+  lang: 'zh-CN' | 'en';
+  label: string;
+}
+const { lang, label } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const src = (file: string) => `${base}/promo/${file}`;
+---
+
+<figure class="promo">
+  <video
+    autoplay
+    loop
+    muted
+    playsinline
+    preload="auto"
+    poster={src(`poster-${lang}.jpg`)}
+    aria-label={label}
+    width="1920"
+    height="1080"
+  >
+    <source src={src(`promo-${lang}.webm`)} type="video/webm" />
+    <source src={src(`promo-${lang}.mp4`)} type="video/mp4" />
+  </video>
+</figure>
+
+<script>
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.querySelectorAll<HTMLVideoElement>('.promo video').forEach((v) => {
+      v.autoplay = false;
+      v.pause();
+      v.controls = true;
+    });
+  }
+</script>
+
+<style>
+  .promo {
+    margin: 0;
+    border: 1px solid #1f2933;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #07090d;
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.6);
+  }
+  .promo video {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+</style>

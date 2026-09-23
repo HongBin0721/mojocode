@@ -1,0 +1,208 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>mojocode promo</title>
+<!-- 合成页:由 make.mjs 用无头 Chrome 逐帧调用 render(t) 截图。文案在下方 COPY 里。 -->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #07090d; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    color: #eef2f6;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage { position: absolute; inset: 0; overflow: hidden;
+    background:
+      radial-gradient(900px 600px at 22% 18%, rgba(94,234,212,0.10), transparent 70%),
+      radial-gradient(900px 650px at 80% 85%, rgba(129,140,248,0.12), transparent 70%),
+      #07090d; }
+  #grid { position: absolute; inset: 0; opacity: .35;
+    background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 75%); }
+
+  .center { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; }
+  .mark { position: relative; }
+  .mark i { position: absolute; display: block; border-radius: 2px; }
+
+  #intro { top: 360px; }
+  #tagline { margin-top: 56px; font-size: 44px; font-weight: 500; letter-spacing: .01em; color: #d5dde6; }
+  #tagline b { font-weight: 600; background: linear-gradient(90deg, #5eead4, #818cf8); -webkit-background-clip: text; color: transparent; }
+
+  #win { position: absolute; left: 50%; top: 70px; width: 1310px; margin-left: -655px;
+    background: #0e131a; border: 1px solid #1f2933; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 50px 120px -30px rgba(0,0,0,.8), 0 0 0 1px rgba(94,234,212,.06); }
+  #bar { height: 46px; display: flex; align-items: center; padding: 0 18px; background: #131a22; border-bottom: 1px solid #1f2933;
+    font: 500 17px "SF Mono", Menlo, monospace; color: #7c8a99; position: relative; }
+  #bar .dots { display: flex; gap: 8px; }
+  #bar .dots i { width: 13px; height: 13px; border-radius: 50%; display: block; }
+  #bar .title { position: absolute; left: 0; right: 0; text-align: center; pointer-events: none; }
+  #bar .rec { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 15px; color: #9aa7b4;
+    border: 1px solid #2a3441; border-radius: 999px; padding: 4px 12px 4px 10px; background: #0e131a; position: relative; }
+  #bar .rec::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: #f28b9b; box-shadow: 0 0 8px #f28b9b; }
+  #term { display: block; width: 1310px; height: auto; padding: 14px 14px 10px; }
+  #term img { display: block; width: 100%; }
+
+  #caps { position: absolute; left: 0; right: 0; top: 942px; height: 70px; }
+  .cap { position: absolute; left: 0; right: 0; text-align: center; font-size: 36px; font-weight: 500; color: #d5dde6; white-space: nowrap; }
+  .cap .k { font-weight: 650; background: linear-gradient(90deg, #5eead4, #818cf8); -webkit-background-clip: text; color: transparent; }
+  .cap .d { color: #6b7887; }
+
+  #outro { top: 330px; }
+  #install { margin-top: 70px; display: flex; align-items: center; gap: 18px;
+    font: 500 38px "SF Mono", Menlo, monospace; color: #eef2f6;
+    padding: 20px 34px; border: 1px solid #26303b; border-radius: 14px; background: rgba(14,19,26,.9); }
+  #install .p { color: #5eead4; }
+  #url { margin-top: 34px; font: 400 28px "SF Mono", Menlo, monospace; color: #7c8a99; }
+  #sub { margin-top: 50px; font-size: 32px; color: #9aa7b4; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="grid"></div>
+
+  <div id="intro" class="center">
+    <div class="mark" id="mark1"></div>
+    <div id="tagline"></div>
+  </div>
+
+  <div id="win">
+    <div id="bar">
+      <div class="dots"><i style="background:#f2685f"></i><i style="background:#f5bd4f"></i><i style="background:#5fc454"></i></div>
+      <div class="title">~/shop — mojocode</div>
+      <div class="rec" id="rec"></div>
+    </div>
+    <div id="term"><img id="frame"></div>
+  </div>
+
+  <div id="caps"></div>
+
+  <div id="outro" class="center">
+    <div class="mark" id="mark2"></div>
+    <div id="sub"></div>
+    <div id="install"><span class="p">$</span><span>npm i -g mojocode</span></div>
+    <div id="url">hongbin0721.github.io/mojocode</div>
+  </div>
+</div>
+<script>
+const COPY = {
+  'zh-CN': {
+    tagline: '可接入<b>任意大模型</b>的终端编程 agent',
+    rec: (speed) => speed > 1 ? `实录 · ${speed}×` : '实录 · 原速',
+    sub: '你的模型，你的终端，你的规则',
+    caps: [
+      '<span class="k">接任意大模型</span>  <span class="d">·</span>  Kimi · DeepSeek · GLM · 任意 OpenAI 兼容端点',
+      '<span class="k">真的动手</span>  <span class="d">·</span>  读代码、改文件、跑命令，diff 当场可见',
+      '<span class="k">Pi 式扩展</span>  <span class="d">·</span>  会话可恢复 · 上下文自动压缩 · MCP · LSP',
+    ],
+  },
+  en: {
+    tagline: 'A terminal coding agent for <b>any LLM</b>',
+    rec: (speed) => `real session · ${speed}×`,
+    sub: 'Your model. Your terminal. Your rules.',
+    caps: [
+      '<span class="k">Any LLM</span>  <span class="d">·</span>  Kimi · DeepSeek · GLM · any OpenAI-compatible endpoint',
+      '<span class="k">Does the work</span>  <span class="d">·</span>  reads code, edits files, runs commands',
+      '<span class="k">Pi-style extensions</span>  <span class="d">·</span>  resumable sessions · auto-compaction · MCP · LSP',
+    ],
+  },
+};
+
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lin = (t, t0, t1) => clamp((t - t0) / (t1 - t0));
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeInOut = (x) => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const backOut = (x) => { const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+
+let PIX = [], CFG = null;
+
+function buildMark(el, px) {
+  const W = 47, H = 5;
+  el.style.width = W * px + 'px'; el.style.height = H * px + 'px';
+  return PIX.map(([x, y, c]) => {
+    const i = document.createElement('i');
+    i.style.cssText = `left:${x * px}px;top:${y * px}px;width:${px - 2}px;height:${px - 2}px;background:${c};box-shadow:0 0 18px ${c}55`;
+    el.appendChild(i);
+    return { el: i, x, y, seed: ((x * 73 + y * 151) % 97) / 97 };
+  });
+}
+
+// 像素按列从左到右依次弹入(带一点随机错位),退场时按列反向缩回。
+function animMark(pixels, t, tin, dur, tout, outDur) {
+  for (const p of pixels) {
+    const d = tin + (p.x / 47) * dur * 0.7 + p.seed * dur * 0.3;
+    let a = backOut(lin(t, d, d + 0.35));
+    if (tout != null) {
+      const o = tout + ((46 - p.x) / 47) * outDur * 0.7 + p.seed * outDur * 0.3;
+      a *= 1 - easeInOut(lin(t, o, o + 0.25));
+    }
+    const s = Math.max(0, a);
+    p.el.style.transform = `translateY(${(1 - clamp(a)) * -18}px) scale(${s})`;
+    p.el.style.opacity = clamp(a * 1.4);
+  }
+}
+
+function setup(cfg, pixels) {
+  CFG = cfg; PIX = pixels;
+  const c = COPY[cfg.lang];
+  document.getElementById('tagline').innerHTML = c.tagline;
+  document.getElementById('rec').textContent = c.rec(cfg.speed);
+  document.getElementById('sub').textContent = c.sub;
+  document.getElementById('caps').innerHTML = c.caps.map((h) => `<div class="cap">${h}</div>`).join('');
+  window.m1 = buildMark(document.getElementById('mark1'), 26);
+  window.m2 = buildMark(document.getElementById('mark2'), 22);
+}
+
+async function render(t) {
+  const { frameStart, frameEnd, termIn, speed } = CFG;
+
+  // ① 片头:像素字 + 标语
+  animMark(m1, t, 0.15, 1.0, null);
+  const tag = document.getElementById('tagline');
+  const ta = easeOut(lin(t, 0.95, 1.5));
+  tag.style.opacity = ta; tag.style.transform = `translateY(${(1 - ta) * 24}px)`;
+  const introOut = easeInOut(lin(t, 2.15, 2.75));
+  const intro = document.getElementById('intro');
+  intro.style.opacity = 1 - introOut;
+  intro.style.transform = `translateY(${-introOut * 90}px) scale(${1 - introOut * 0.06})`;
+
+  // ② 终端窗口:真实录屏(50fps)按 speed 倍速播放,放完停在最后一帧
+  const win = document.getElementById('win');
+  const wi = easeOut(lin(t, 2.35, 3.05));
+  const wo = easeInOut(lin(t, 12.25, 12.85));
+  win.style.opacity = wi * (1 - wo);
+  win.style.transform = `translateY(${(1 - wi) * 110 + wo * -40}px) scale(${(0.94 + wi * 0.06) * (1 - wo * 0.08)})`;
+  win.style.visibility = win.style.opacity > 0.001 ? 'visible' : 'hidden';
+  let fi = frameStart + Math.floor((t - termIn) * 50 * speed);
+  fi = Math.max(frameStart, Math.min(frameEnd, fi));
+  const img = document.getElementById('frame');
+  const src = `${CFG.dir}/${String(fi).padStart(5, '0')}.jpg`;
+  if (img.getAttribute('src') !== src) { img.setAttribute('src', src); await img.decode().catch(() => {}); }
+
+  // ③ 字幕:三个卖点依次切换
+  const slots = [[2.9, 5.6], [5.6, 9.2], [9.2, 12.3]];
+  document.querySelectorAll('.cap').forEach((el, i) => {
+    const [a, b] = slots[i];
+    const on = easeOut(lin(t, a, a + 0.4));
+    const off = i === 2 ? easeInOut(lin(t, 12.15, 12.6)) : easeInOut(lin(t, b - 0.3, b));
+    el.style.opacity = on * (1 - off);
+    el.style.transform = `translateY(${(1 - on) * 22 - off * 14}px)`;
+  });
+
+  // ④ 片尾:像素字 + 安装命令,最后整体退回空背景,循环接回片头
+  animMark(m2, t, 12.6, 0.7, 14.25, 0.55);
+  const out = document.getElementById('outro');
+  const oo = easeInOut(lin(t, 14.35, 14.85));
+  ['sub', 'install', 'url'].forEach((id, k) => {
+    const e = document.getElementById(id);
+    const a = easeOut(lin(t, 13.05 + k * 0.15, 13.55 + k * 0.15));
+    e.style.opacity = a * (1 - oo);
+    e.style.transform = `translateY(${(1 - a) * 22 + oo * 10}px)`;
+  });
+  out.style.visibility = t > 12.4 ? 'visible' : 'hidden';
+}
+</script>
+</body>
+</html>
