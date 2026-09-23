@@ -120,6 +120,9 @@ export interface TimelineController {
   setUsage: Setter<UsageMirror>;
 }
 
+/** 流式增量的合并窗口:一帧(渲染器上限 60fps)。 */
+const FRAME_MS = 16;
+
 export function createTimelineController(
   session: SessionHandle,
   opts: TimelineControllerOptions,
@@ -211,7 +214,68 @@ export function createTimelineController(
       setTaskProgress({});
     };
 
-    const off = session.bus.on((event: AgentEvent) =>
+    const applyText = (text: string) => {
+      const combined = activeText() + text;
+      // 段落级增量提交:已被空行收尾的段落立即定稿为不可变条目(<For>
+      // 按引用复用、markdown 走 LRU 缓存),正在生成的尾段作为活动条目
+      // 在时间线尾部原地生长(opencode 式)——可变区始终只有一小段,
+      // 每个 delta 的重渲染成本不随消息变长而膨胀。
+      const { committed, rest } = splitCommitted(combined);
+      if (committed) {
+        push({ kind: 'assistant', text: committed, continuation: textCommitted() });
+        setTextCommitted(true);
+        setActiveText(rest);
+      } else {
+        setActiveText(combined);
+      }
+      beginWork('responding');
+    };
+    const applyReasoning = (text: string) => {
+      setActiveReasoning((prev) => prev + text);
+      beginWork('thinking');
+    };
+
+    // 流式增量按帧合并:信号一变,活动区的派生计算(折行、markdown)就同步
+    // 重跑一遍,而渲染器最多 60fps——一次网络读常常带来一串 delta,逐个
+    // 应用只是在两帧之间白算好几遍,算的这段时间按键与渲染全排在后面。
+    // 相邻同类增量拼成一段;距上次应用不足一帧就等到满一帧,否则下一个
+    // 宏任务就应用(稀疏的流不因此多出延迟)。**任何别的事件都先把积压的
+    // 增量应用掉**:text-end / tool-start / aborted 等都依赖活动区是最新的。
+    const pending: Array<{ kind: 'text' | 'reasoning'; text: string }> = [];
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastFlushAt = 0;
+    const flushDeltas = () => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      if (pending.length === 0) return;
+      lastFlushAt = Date.now();
+      const deltas = pending.splice(0);
+      batch(() => {
+        for (const delta of deltas) {
+          if (delta.kind === 'text') applyText(delta.text);
+          else applyReasoning(delta.text);
+        }
+      });
+    };
+    const queueDelta = (kind: 'text' | 'reasoning', text: string) => {
+      const last = pending.at(-1);
+      if (last?.kind === kind) last.text += text;
+      else pending.push({ kind, text });
+      flushTimer ??= setTimeout(flushDeltas, Math.max(0, lastFlushAt + FRAME_MS - Date.now()));
+    };
+    onCleanup(() => clearTimeout(flushTimer));
+
+    const off = session.bus.on((event: AgentEvent) => {
+      if (event.type === 'text-delta') return queueDelta('text', event.text);
+      if (event.type === 'reasoning-delta') {
+        // 计时从第一个增量**到达**起,而不是订阅 reasoning-start:后者未必
+        // 所有 provider 都发,且首个增量到达前屏幕上本来也没有思考在显示。
+        reasoningStartedAt ??= Date.now();
+        return queueDelta('reasoning', event.text);
+      }
+      flushDeltas();
       // batch:一条事件往往连着改好几个信号,合并成一次渲染刷新。
       batch(() => {
         switch (event.type) {
@@ -248,34 +312,10 @@ export function createTimelineController(
             break;
           }
 
-          case 'text-delta': {
-            const combined = activeText() + event.text;
-            // 段落级增量提交:已被空行收尾的段落立即定稿为不可变条目(<For>
-            // 按引用复用、markdown 走 LRU 缓存),正在生成的尾段作为活动条目
-            // 在时间线尾部原地生长(opencode 式)——可变区始终只有一小段,
-            // 每个 delta 的重渲染成本不随消息变长而膨胀。
-            const { committed, rest } = splitCommitted(combined);
-            if (committed) {
-              push({ kind: 'assistant', text: committed, continuation: textCommitted() });
-              setTextCommitted(true);
-              setActiveText(rest);
-            } else {
-              setActiveText(combined);
-            }
-            beginWork('responding');
-            break;
-          }
           case 'text-end':
             flushText();
             break;
 
-          case 'reasoning-delta':
-            // 计时从第一个增量起,而不是订阅 reasoning-start:后者未必所有
-            // provider 都发,且首个增量到达前屏幕上本来也没有思考在显示。
-            reasoningStartedAt ??= Date.now();
-            setActiveReasoning((prev) => prev + event.text);
-            beginWork('thinking');
-            break;
           case 'reasoning-end':
             flushReasoning();
             break;
@@ -424,8 +464,8 @@ export function createTimelineController(
           default:
             break;
         }
-      }),
-    );
+      });
+    });
     onCleanup(off);
   }
 

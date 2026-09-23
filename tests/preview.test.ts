@@ -1,7 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
 import { splitCommitted, tailWithinRows } from '../src/ui/preview.js';
+
+// 记录 preview.ts 交给 wrap-ansi 的最长输入(原样转交真实实现)。「每次只折
+// 尾部」按折行量断言而不是按耗时:墙钟门槛在慢的 CI 机器上会随机变红。
+const wrapInputs = vi.hoisted(() => ({ longest: 0 }));
+vi.mock('wrap-ansi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('wrap-ansi')>();
+  return {
+    default: (text: string, columns: number, options?: Parameters<typeof actual.default>[2]) => {
+      wrapInputs.longest = Math.max(wrapInputs.longest, text.length);
+      return actual.default(text, columns, options);
+    },
+  };
+});
 
 /** 一行在 columns 宽终端里硬折行后的物理行数(与 preview.ts 同一套测量)。 */
 function renderedRows(line: string, columns: number): number {
@@ -133,6 +146,59 @@ describe('tailWithinRows', () => {
     const firstFull = heights.indexOf(5);
     expect(firstFull).toBeGreaterThan(0);
     for (const h of heights.slice(firstFull)) expect(h).toBe(5);
+  });
+
+  /** 窗口实际画出来的最后 `n` 行:预折的首行原样,完整行按宽度再折(渲染器也会折)。 */
+  const shownRows = (out: string, columns: number, n: number) =>
+    out
+      .split('\n')
+      .flatMap((line) => wrapAnsi(line, columns, { hard: true, trim: false }).split('\n'))
+      .slice(-n)
+      .join('\n');
+  /** 整行折行的最后 `n` 行(tailWithinRows 先 trimEnd,这里同样)。 */
+  const wholeWrapTail = (text: string, columns: number, n: number) =>
+    wrapAnsi(text.trimEnd(), columns, { hard: true, trim: false }).split('\n').slice(-n).join('\n');
+
+  // 每次调用仍要折窗口那几行(Bun 下每次约 3ms),几百次调用在 CI 的 ubuntu+Bun
+  // 上会超过默认的 5s——超时给宽,真正的门槛是下面按折行量的断言。
+  it('不换行的超长段落逐 delta 流式:折行量与段长无关,结果与整行折行一致(卡顿回归)', () => {
+    // 思考卡住的根因:当前行每个 delta 都整行重折,wrap-ansi 对中文逐字测宽,
+    // Bun 下几千字的一段每次几十上百毫秒。窗口只要尾部几行,折行量必须与段长
+    // 无关;锚点只落在行首上,所以窗口内容与整行折行的尾部完全相同,不会错动。
+    const sentence = '我们需要先分析这个问题的结构,然后考虑边界条件以及可能出现的异常情况。';
+    const full = sentence.repeat(Math.ceil(20_000 / sentence.length)).slice(0, 20_000);
+
+    let acc = '';
+    for (let i = 0; acc.length < 3000; i++) {
+      acc += full.slice(acc.length, acc.length + 5);
+      const out = tailWithinRows(acc, 5, 80, { markdown: false });
+      if (i % 59 === 0) expect(shownRows(out, 80, 5)).toBe(wholeWrapTail(acc, 80, 5));
+    }
+
+    wrapInputs.longest = 0;
+    while (acc.length < full.length) {
+      acc += full.slice(acc.length, acc.length + 100);
+      tailWithinRows(acc, 5, 80, { markdown: false });
+    }
+    // 整行重折时这里是 20000;只折尾部时是窗口加余量的几百字。
+    expect(wrapInputs.longest).toBeLessThan(1000);
+    expect(shownRows(tailWithinRows(acc, 5, 80, { markdown: false }), 80, 5)).toBe(
+      wholeWrapTail(acc, 80, 5),
+    );
+  }, 30_000);
+
+  it('第一次见到的超长行(换了列宽、缓存未命中)也与整行折行一致,之后照样一致', () => {
+    // 回归:未命中时曾从尾部随便取一个偏移起折,那不是行首——带空格的英文按词
+    // 折行,起点一错整段对齐就错,而且错的锚点被缓存下来一直沿用。
+    // 用一个别处没用过的列宽,保证第一次调用一定未命中。
+    const sentence = 'We need to first analyze the structure of this problem and then consider edge cases. ';
+    const line = sentence.repeat(40).slice(0, 3000);
+    for (let i = 0; i < 3; i++) {
+      const text = line + sentence.repeat(i);
+      expect(shownRows(tailWithinRows(text, 5, 73, { markdown: false }), 73, 5)).toBe(
+        wholeWrapTail(text, 73, 5),
+      );
+    }
   });
 
   it('markdown: false 不镜像 Markdown 变换:围栏行按普通行计,不补开栏', () => {

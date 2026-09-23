@@ -3,6 +3,66 @@ import wrapAnsi from 'wrap-ansi';
 const FENCE_RE = /^\s*```/;
 const HR_RE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
 
+const wrapLines = (s: string, w: number): string[] => wrapAnsi(s, w, { hard: true, trim: false }).split('\n');
+
+/**
+ * 超长行的折行锚点:上一次对同一行(或它的前缀)折行时,从哪个下标起折。
+ *
+ * 流式思考的一段不换行的中文,当前行每个 delta 都在变长,整行重折是 O(段长)
+ * ——wrap-ansi 对没有空格的文本逐字测宽,Bun 下约 10ms/千字,几千字的一段
+ * 就让每个 delta 同步卡住几十上百毫秒,按键与渲染全排在它后面。窗口只要最后
+ * 几行,所以只折锚点之后的尾部;锚点只落在**折行的行首**上,从行首起贪心折行
+ * 与整行折行的后续各行完全一致,流式期间窗口内容不会因为换了起点而跳动。
+ * 按内容前缀认行(append-only 的流式天然命中),按宽度分开;留几条是因为
+ * 思考与正文两个窗口各有一条正在生长的行。
+ */
+interface TailAnchor {
+  line: string;
+  width: number;
+  anchor: number;
+}
+const anchors: TailAnchor[] = [];
+const ANCHOR_SLOTS = 4;
+/** 锚点之后超出所需行数这么多行时,把锚点前移到所需的起点(每次折的量因此封顶)。 */
+const ANCHOR_SLACK_ROWS = 2;
+
+/**
+ * 一行折行后的**最后若干行**,至少 `need` 行;整行其实不足 `need` 行时返回
+ * undefined(交回调用方按整行处理)。调用方保证 `source.length > need * w`:
+ * 每个字符至少占一列,正常文本此时必然超过 need 行——零宽字符堆出来的病态
+ * 输入才会走到 undefined。
+ */
+function wrapTail(source: string, w: number, need: number): string[] | undefined {
+  const hitAt = anchors.findIndex((a) => a.width === w && source.startsWith(a.line));
+  // 没见过的行(刚开始变长、换了列宽、缓存被挤掉)从 0 起整行折一次:锚点必须是
+  // 整行折行的真实行首。随便取一个尾部偏移当起点,之后每一行都按那个错位的
+  // 起点对齐,与整行折行永远对不上——缓存还会让这个错位一直延续下去。整行折
+  // 的 O(段长) 只在未命中时付一次,之后锚点按行首前移,每次只折尾部。
+  let anchor = hitAt >= 0 ? anchors[hitAt]!.anchor : 0;
+  let rows = wrapLines(source.slice(anchor), w);
+  if (rows.length < need && anchor > 0) {
+    anchor = 0;
+    rows = wrapLines(source, w);
+  }
+  if (rows.length < need) return undefined;
+
+  if (rows.length > need + ANCHOR_SLACK_ROWS) {
+    const drop = rows.length - need;
+    const skipped = rows.slice(0, drop).join('');
+    // wrap-ansi 只插换行时,丢掉的行拼起来就是原文;带 ANSI 的行会被补上闭合/
+    // 重开序列,对不上就不前移(锚点必须是原文里的真实下标)。
+    if (source.startsWith(skipped, anchor)) {
+      anchor += skipped.length;
+      rows = rows.slice(drop);
+    }
+  }
+
+  if (hitAt >= 0) anchors.splice(hitAt, 1);
+  anchors.unshift({ line: source, width: w, anchor });
+  if (anchors.length > ANCHOR_SLOTS) anchors.length = ANCHOR_SLOTS;
+  return rows;
+}
+
 /**
  * 取文本末尾,使其在 `columns` 宽的终端里渲染后**恰好**占 `maxRows` 行
  * (内容不足时从头生长)。两个调用方:流式正文的活动条目(经 Markdown.tsx
@@ -33,7 +93,7 @@ export function tailWithinRows(
   const markdown = opts?.markdown !== false;
   const width = Math.max(20, columns);
   const lines = text.trimEnd().split('\n');
-  const wrapRows = (s: string, w: number) => wrapAnsi(s, w, { hard: true, trim: false }).split('\n').length;
+  const wrapRows = (s: string, w: number) => wrapLines(s, w).length;
 
   // 每一行渲染前的代码围栏状态(前向扫描;围栏行自身 before 为其闭合前状态)。
   // 纯文本渲染不认围栏,跳过整趟扫描——思考动辄几千行,每个 delta 都要过一遍。
@@ -63,21 +123,33 @@ export function tailWithinRows(
   // 截断按该行的**渲染形态**折行(与 renderedRows 同一套变换):分隔线截出
   // 的短行不再是 HR,按普通行渲染;代码行例外——截原始行、按 width-2 折,
   // 渲染时补上 2 列缩进后恰好不超宽(把缩进烤进截断结果会被再缩进一次)。
+  const sliceForm = (i: number): { source: string; w: number } => {
+    if (before?.[i]) return { source: lines[i]!, w: width - 2 };
+    if (before && HR_RE.test(lines[i]!)) return { source: '─'.repeat(30), w: width };
+    return { source: lines[i]!, w: width };
+  };
   const sliceTail = (i: number, keep: number): string => {
-    let source = lines[i]!;
-    let w = width;
-    if (before?.[i]) {
-      w = width - 2;
-    } else if (before && !before[i] && HR_RE.test(lines[i]!)) {
-      source = '─'.repeat(30);
-    }
-    return wrapAnsi(source, w, { hard: true, trim: false }).split('\n').slice(-keep).join('\n');
+    const { source, w } = sliceForm(i);
+    return wrapLines(source, w).slice(-keep).join('\n');
   };
 
   let start = lines.length; // 窗口里第一条**完整**行的下标
   let rows = 0;
   let prefix: string | undefined; // 被截断的首行(保留其尾部折行行)
   for (let i = lines.length - 1; i >= 0; i--) {
+    const remaining = maxRows - rows;
+    // 预算已满:除了按 0 行计的围栏行,哪一行都放不下,不必再为它折一遍行。
+    if (remaining === 0 && !(before && FENCE_RE.test(lines[i]!))) break;
+    // 超长行:显然放不下,只折它的尾部(见 wrapTail)。围栏行不渲染,不走这里。
+    const form = sliceForm(i);
+    if (form.source.length > (remaining + 1) * form.w && !(before && FENCE_RE.test(lines[i]!))) {
+      const tail = wrapTail(form.source, form.w, remaining + 1);
+      if (tail) {
+        prefix = tail.slice(-remaining).join('\n');
+        start = i + 1;
+        break;
+      }
+    }
     const n = renderedRows(i);
     if (rows + n <= maxRows) {
       rows += n;
